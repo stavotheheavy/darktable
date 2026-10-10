@@ -12,6 +12,7 @@ let package = Package(
     platforms: [.macOS(.v26)],
     products: [
         .library(name: "DarktableKit", targets: ["DarktableKit"]),
+        .library(name: "DarkroomUI", targets: ["DarkroomUI"]),
         .executable(name: "Darkroom", targets: ["Darkroom"]),
         .executable(name: "dtb-selftest", targets: ["DarkroomSelfTest"]),
     ],
@@ -19,6 +20,7 @@ let package = Package(
         // header-only view of src/swiftbridge/dtb.h (plain C types only)
         .systemLibrary(name: "CDtBridge", path: "Sources/CDtBridge"),
 
+        // the engine wrapper
         .target(
             name: "DarktableKit",
             dependencies: ["CDtBridge"],
@@ -27,16 +29,22 @@ let package = Package(
             ]
         ),
 
-        // headless check: start the engine, render, time it, write a PNG
+        // model + SwiftUI views, a library so the self-test can render them offscreen
+        .target(
+            name: "DarkroomUI",
+            dependencies: ["DarktableKit"]
+        ),
+
+        // headless check: start the engine, render, time it, write PNGs
         .executableTarget(
             name: "DarkroomSelfTest",
-            dependencies: ["DarktableKit"]
+            dependencies: ["DarktableKit", "DarkroomUI"]
         ),
 
         // the SwiftUI app
         .executableTarget(
             name: "Darkroom",
-            dependencies: ["DarktableKit"]
+            dependencies: ["DarkroomUI"]
         ),
     ]
 )
