@@ -204,6 +204,76 @@ int main(int argc, char **argv)
     printf("session vs one-shot, exposure +1.0: mean diff %.4f, max %d\n", mean, mx);
   }
 
+  // ---- module list: the inspector is built from this
+  {
+    char *mj = dtb_session_modules_json(s, &err);
+    if(!mj)
+    {
+      printf("modules json FAILED: %s\n", err ? err : "?");
+      dtb_string_free(err);
+      err = NULL;
+    }
+    else
+    {
+      int count = 0;
+      for(const char *q = mj; (q = strstr(q, "\"operation\"")); q++) count++;
+      printf("\nmodules: %d listed, %zu bytes of JSON\n", count, strlen(mj));
+      const char *ex = strstr(mj, "\"operation\":\"exposure\"");
+      if(ex)
+      {
+        const char *end = strstr(ex, "\"blend\"");
+        const int len = end ? (int)(end - ex) : 260;
+        printf("exposure entry: %.*s...\n", len > 360 ? 360 : len, ex);
+      }
+      const char *bl = ex ? strstr(ex, "\"blend\"") : NULL;
+      if(bl) printf("exposure blend: %.150s...\n", bl);
+      dtb_string_free(mj);
+    }
+  }
+
+  // ---- blend: 50% opacity of +1 EV must land between unedited and +1 EV
+  {
+    const char *half = "[{\"operation\":\"exposure\",\"params\":{\"exposure\":1.0},"
+                       "\"blend\":{\"mask_mode\":\"uniformly\",\"opacity\":50}}]";
+    dtb_frame hf = { 0 };
+    if(!_render(s, half, &hf, "exposure +1.0 at 50% opacity", &ms))
+    {
+      const double lb = _luma(&base), lh = _luma(&hf);
+      printf("blend check: unedited %.1f < half %.1f < full 141.3 : %s\n", lb, lh,
+             (lh > lb + 2 && lh < 140) ? "blend applied" : "NO BLEND EFFECT");
+      dtb_frame_free(&hf);
+    }
+  }
+
+  // ---- region render at 100%: what a zoomed view asks for
+  {
+    int pw = 0, ph = 0, ww = 0, wh = 0;
+    dtb_session_info(s, &pw, &ph, &ww, &wh);
+    printf("\nsession info: output %dx%d, working %dx%d\n", pw, ph, ww, wh);
+    dtb_frame rf = { 0 };
+    const int rw = 600, rh = 400;
+    t0 = _now_ms();
+    if(dtb_session_render_region(s, NULL, 1.0, pw / 2 - rw / 2, ph / 2 - rh / 2, rw, rh, &rf, &err))
+    {
+      printf("region render FAILED: %s\n", err ? err : "?");
+      dtb_string_free(err);
+      err = NULL;
+    }
+    else
+    {
+      printf("region 100%% (%dx%d at centre)      %7.0f ms   luma %.1f\n", rf.width, rf.height,
+             _now_ms() - t0, _luma(&rf));
+      dtb_frame_free(&rf);
+    }
+    // the same region again: the zoomed view's repaint while panning is a cache hit
+    t0 = _now_ms();
+    if(!dtb_session_render_region(s, NULL, 1.0, pw / 2 - rw / 2 + 40, ph / 2 - rh / 2, rw, rh, &rf, &err))
+    {
+      printf("region 100%% panned 40 px          %7.0f ms\n", _now_ms() - t0);
+      dtb_frame_free(&rf);
+    }
+  }
+
   printf("\nsummary (ms): early edit %.0f / %.0f, mid %.0f, late %.0f / %.0f   peak RSS %.0f MB\n",
          ms_exp, ms_exp2, ms_sh, ms_sharp, ms_sharp2, _rss_mb());
 

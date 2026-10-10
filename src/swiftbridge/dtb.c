@@ -239,6 +239,88 @@ int dtb_session_render(dtb_session *session, const char *stack_json, dtb_frame *
   return 0;
 }
 
+int dtb_session_render_region(dtb_session *session, const char *stack_json, double scale,
+                              int x, int y, int w, int h, dtb_frame *out, char **err)
+{
+  if(!out || !session)
+  {
+    _fail(err, "no session or output frame");
+    return 1;
+  }
+  memset(out, 0, sizeof(*out));
+
+  JsonParser *parser = NULL;
+  JsonArray *stack = NULL;
+  if(stack_json && *stack_json)
+  {
+    parser = json_parser_new();
+    GError *ge = NULL;
+    if(!json_parser_load_from_data(parser, stack_json, -1, &ge))
+    {
+      _fail(err, ge ? ge->message : "stack is not valid JSON");
+      if(ge) g_error_free(ge);
+      g_object_unref(parser);
+      return 1;
+    }
+    JsonNode *root = json_parser_get_root(parser);
+    if(root && JSON_NODE_HOLDS_ARRAY(root)) stack = json_node_get_array(root);
+  }
+
+  g_mutex_lock(&_lock);
+  uint8_t *buf = NULL;
+  int stride = 0;
+  char *gerr = NULL;
+  const gboolean ok = _up
+    && dt_bridge_session_render_region((dt_bridge_session_t *)session, stack, scale,
+                                       x, y, w, h, &buf, &stride, &gerr);
+  g_mutex_unlock(&_lock);
+  if(parser) g_object_unref(parser);
+
+  if(!ok)
+  {
+    if(err) *err = gerr ? gerr : g_strdup("render failed");
+    else g_free(gerr);
+    return 1;
+  }
+  g_free(gerr);
+  out->pixels = buf;
+  out->width = w;
+  out->height = h;
+  out->stride = stride;
+  return 0;
+}
+
+void dtb_session_info(dtb_session *session, int *processed_w, int *processed_h,
+                      int *work_w, int *work_h)
+{
+  if(!session) return;
+  g_mutex_lock(&_lock);
+  if(_up) dt_bridge_session_info((dt_bridge_session_t *)session, processed_w, processed_h,
+                                 work_w, work_h);
+  g_mutex_unlock(&_lock);
+}
+
+char *dtb_session_modules_json(dtb_session *session, char **err)
+{
+  if(!session)
+  {
+    _fail(err, "no session");
+    return NULL;
+  }
+  g_mutex_lock(&_lock);
+  char *gerr = NULL;
+  char *s = _up ? dt_bridge_session_modules_json((dt_bridge_session_t *)session, &gerr) : NULL;
+  g_mutex_unlock(&_lock);
+  if(!s)
+  {
+    if(err) *err = gerr ? gerr : g_strdup("could not list modules");
+    else g_free(gerr);
+  }
+  else
+    g_free(gerr);
+  return s;
+}
+
 void dtb_session_close(dtb_session *session)
 {
   if(!session) return;

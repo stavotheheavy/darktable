@@ -37,6 +37,7 @@
 #include "common/styles.h"
 #include "common/usermanual_url.h"
 #include "develop/develop.h"
+#include "develop/blend.h"
 #include "develop/imageop.h"
 #include "imageio/imageio_common.h"
 #include "imageio/imageio_module.h"
@@ -349,6 +350,11 @@ char *dt_bridge_module_schema_json(const char *op, char **err)
     json_builder_begin_object(b);
     json_builder_set_member_name(b, "name");
     json_builder_add_string_value(b, f->header.field_name);
+    if(f->header.description && *f->header.description)
+    {
+      json_builder_set_member_name(b, "description");
+      json_builder_add_string_value(b, f->header.description);
+    }
     json_builder_set_member_name(b, "type");
     json_builder_add_string_value(b, _type_name(f->header.type));
     json_builder_set_member_name(b, "offset");
@@ -1009,6 +1015,57 @@ static void _pristine_release(dt_mcp_pristine_t *pr)
   _xmp_unmute(&pr->mute);
 }
 
+// the mask modes by name, so a caller does not have to know the bit values
+static int _mask_mode_from_json(JsonNode *n, int fallback)
+{
+  if(JSON_NODE_HOLDS_VALUE(n) && json_node_get_value_type(n) == G_TYPE_STRING)
+  {
+    const char *s = json_node_get_string(n);
+    if(!g_strcmp0(s, "off")) return DEVELOP_MASK_DISABLED;
+    if(!g_strcmp0(s, "uniformly")) return DEVELOP_MASK_ENABLED;
+    if(!g_strcmp0(s, "drawn")) return DEVELOP_MASK_ENABLED | DEVELOP_MASK_MASK;
+    if(!g_strcmp0(s, "parametric")) return DEVELOP_MASK_ENABLED | DEVELOP_MASK_CONDITIONAL;
+    if(!g_strcmp0(s, "drawn_and_parametric")) return DEVELOP_MASK_ENABLED | DEVELOP_MASK_MASK_CONDITIONAL;
+    if(!g_strcmp0(s, "raster")) return DEVELOP_MASK_ENABLED | DEVELOP_MASK_RASTER;
+    return fallback;
+  }
+  if(JSON_NODE_HOLDS_VALUE(n)) return (int)json_node_get_int(n);
+  return fallback;
+}
+
+// blend parameters a stack entry may set. unknown members are ignored; ranges
+// are the ones the darkroom's own sliders use
+static void _apply_blend(dt_develop_blend_params_t *bp, JsonObject *o)
+{
+  if(json_object_has_member(o, "mask_mode"))
+    bp->mask_mode = (uint32_t)_mask_mode_from_json(json_object_get_member(o, "mask_mode"),
+                                                   (int)bp->mask_mode);
+  if(json_object_has_member(o, "blend_mode"))
+  {
+    const uint32_t reverse = bp->blend_mode & DEVELOP_BLEND_REVERSE;
+    bp->blend_mode = (uint32_t)json_object_get_int_member(o, "blend_mode") | reverse;
+  }
+  if(json_object_has_member(o, "reverse"))
+  {
+    if(json_object_get_boolean_member(o, "reverse")) bp->blend_mode |= DEVELOP_BLEND_REVERSE;
+    else bp->blend_mode &= ~DEVELOP_BLEND_REVERSE;
+  }
+  if(json_object_has_member(o, "opacity"))
+    bp->opacity = CLAMP((float)json_object_get_double_member(o, "opacity"), 0.0f, 100.0f);
+  if(json_object_has_member(o, "blend_parameter"))
+    bp->blend_parameter = (float)json_object_get_double_member(o, "blend_parameter");
+  if(json_object_has_member(o, "mask_combine"))
+    bp->mask_combine = (uint32_t)json_object_get_int_member(o, "mask_combine");
+  if(json_object_has_member(o, "feathering_radius"))
+    bp->feathering_radius = (float)json_object_get_double_member(o, "feathering_radius");
+  if(json_object_has_member(o, "blur_radius"))
+    bp->blur_radius = (float)json_object_get_double_member(o, "blur_radius");
+  if(json_object_has_member(o, "contrast"))
+    bp->contrast = (float)json_object_get_double_member(o, "contrast");
+  if(json_object_has_member(o, "brightness"))
+    bp->brightness = (float)json_object_get_double_member(o, "brightness");
+}
+
 // apply one stack entry to a module instance in dev and snapshot it to history
 static gboolean _apply_entry(dt_develop_t *dev, JsonObject *entry, char **err)
 {
@@ -1114,6 +1171,22 @@ static gboolean _apply_entry(dt_develop_t *dev, JsonObject *entry, char **err)
   }
   memcpy(mod->params, blob, size);
   g_free(blob);
+
+  // optional blending: "blend": { mask_mode, blend_mode, reverse, opacity, ... }
+  if(json_object_has_member(entry, "blend"))
+  {
+    JsonNode *bn = json_object_get_member(entry, "blend");
+    if(JSON_NODE_HOLDS_OBJECT(bn))
+    {
+      if(!(mod->flags() & IOP_FLAGS_SUPPORTS_BLENDING) || !mod->blend_params)
+      {
+        _seterr(err, "module '%s' does not support blending", op);
+        return FALSE;
+      }
+      _apply_blend(mod->blend_params, json_node_get_object(bn));
+    }
+  }
+
   mod->enabled = enabled;
   dt_dev_add_history_item_ext(dev, mod, enabled, TRUE);
   return TRUE;
@@ -1487,16 +1560,11 @@ dt_bridge_session_t *dt_bridge_session_open(const char *path, int imgid_in, int 
   return s;
 }
 
-gboolean dt_bridge_session_render(dt_bridge_session_t *s, void *stack_jsonarray,
-                                  uint8_t **buf_out, int *w_out, int *h_out,
-                                  int *stride_out, char **err)
+// go back to the imported state, apply exactly this stack, and resync the pipe
+static gboolean _session_apply(dt_bridge_session_t *s, JsonArray *stack, char **err)
 {
-  if(!s) { _seterr(err, "no session"); return FALSE; }
-  JsonArray *stack = (JsonArray *)stack_jsonarray;
-
-  // declarative: go back to the imported state and apply exactly this stack, so
-  // a slider put back to neutral is simply absent. modules whose params did not
-  // change keep the same hash and are served from the pipe cache
+  // declarative: a slider put back to neutral is simply absent, and modules
+  // whose params did not change keep the same hash and are served from cache
   dt_dev_pop_history_items_ext(&s->dev, s->base_end);
   const guint n = stack ? json_array_get_length(stack) : 0;
   for(guint i = 0; i < n; i++)
@@ -1513,6 +1581,42 @@ gboolean dt_bridge_session_render(dt_bridge_session_t *s, void *stack_jsonarray,
 
   s->pipe.changed |= DT_DEV_PIPE_SYNCH;
   dt_dev_pixelpipe_change(&s->pipe, &s->dev);
+  return TRUE;
+}
+
+// process one region at `scale` and hand back a copy of the 8-bit BGRx output
+static gboolean _session_process(dt_bridge_session_t *s, int x, int y, int w, int h,
+                                 double scale, uint8_t **buf_out, int *stride_out,
+                                 char **err)
+{
+  dt_dev_pixelpipe_process(&s->pipe, &s->dev, x, y, w, h, (float)scale, DT_DEVICE_NONE);
+
+  const uint8_t *src = s->pipe.backbuf;
+  if(!src)
+  {
+    _seterr(err, "no output buffer after processing");
+    return FALSE;
+  }
+  const int stride = w * 4;
+  const size_t bytes = (size_t)stride * h;
+  uint8_t *copy = g_try_malloc(bytes);
+  if(!copy)
+  {
+    _seterr(err, "could not copy the rendered frame");
+    return FALSE;
+  }
+  memcpy(copy, src, bytes);
+  *buf_out = copy;
+  *stride_out = stride;
+  return TRUE;
+}
+
+gboolean dt_bridge_session_render(dt_bridge_session_t *s, void *stack_jsonarray,
+                                  uint8_t **buf_out, int *w_out, int *h_out,
+                                  int *stride_out, char **err)
+{
+  if(!s) { _seterr(err, "no session"); return FALSE; }
+  if(!_session_apply(s, (JsonArray *)stack_jsonarray, err)) return FALSE;
 
   const int pw = s->pipe.processed_width;
   const int ph = s->pipe.processed_height;
@@ -1527,28 +1631,140 @@ gboolean dt_bridge_session_render(dt_bridge_session_t *s, void *stack_jsonarray,
   const int ow = MAX(1, (int)floor(scale * pw));
   const int oh = MAX(1, (int)floor(scale * ph));
 
-  dt_dev_pixelpipe_process(&s->pipe, &s->dev, 0, 0, ow, oh, (float)scale, DT_DEVICE_NONE);
-
-  const uint8_t *src = s->pipe.backbuf;
-  if(!src)
-  {
-    _seterr(err, "no output buffer after processing");
-    return FALSE;
-  }
-  const int stride = ow * 4;
-  const size_t bytes = (size_t)stride * oh;
-  uint8_t *copy = g_try_malloc(bytes);
-  if(!copy)
-  {
-    _seterr(err, "could not copy the rendered frame");
-    return FALSE;
-  }
-  memcpy(copy, src, bytes);
-  *buf_out = copy;
+  if(!_session_process(s, 0, 0, ow, oh, scale, buf_out, stride_out, err)) return FALSE;
   *w_out = ow;
   *h_out = oh;
-  *stride_out = stride;
   return TRUE;
+}
+
+gboolean dt_bridge_session_render_region(dt_bridge_session_t *s, void *stack_jsonarray,
+                                         double scale, int x, int y, int w, int h,
+                                         uint8_t **buf_out, int *stride_out, char **err)
+{
+  if(!s) { _seterr(err, "no session"); return FALSE; }
+  if(w < 1 || h < 1 || scale <= 0.0)
+  {
+    _seterr(err, "empty region or scale");
+    return FALSE;
+  }
+  if(!_session_apply(s, (JsonArray *)stack_jsonarray, err)) return FALSE;
+  return _session_process(s, x, y, w, h, scale, buf_out, stride_out, err);
+}
+
+void dt_bridge_session_info(dt_bridge_session_t *s, int *processed_w, int *processed_h,
+                            int *work_w, int *work_h)
+{
+  if(!s) return;
+  const int pw = s->pipe.processed_width;
+  const int ph = s->pipe.processed_height;
+  if(processed_w) *processed_w = pw;
+  if(processed_h) *processed_h = ph;
+  double scale = 1.0;
+  if(s->max_w > 0 && pw > 0) scale = fmin(scale, (double)s->max_w / pw);
+  if(s->max_h > 0 && ph > 0) scale = fmin(scale, (double)s->max_h / ph);
+  if(work_w) *work_w = MAX(1, (int)floor(scale * pw));
+  if(work_h) *work_h = MAX(1, (int)floor(scale * ph));
+}
+
+static int _cmp_iop_order(gconstpointer a, gconstpointer b)
+{
+  const dt_iop_module_t *x = a, *y = b;
+  return x->iop_order - y->iop_order;
+}
+
+static void _write_blend_object(const dt_develop_blend_params_t *bp, JsonBuilder *b)
+{
+  json_builder_begin_object(b);
+  json_builder_set_member_name(b, "mask_mode");
+  json_builder_add_int_value(b, bp->mask_mode);
+  json_builder_set_member_name(b, "blend_cst");
+  json_builder_add_int_value(b, bp->blend_cst);
+  json_builder_set_member_name(b, "blend_mode");
+  json_builder_add_int_value(b, bp->blend_mode & DEVELOP_BLEND_MODE_MASK);
+  json_builder_set_member_name(b, "reverse");
+  json_builder_add_boolean_value(b, (bp->blend_mode & DEVELOP_BLEND_REVERSE) != 0);
+  json_builder_set_member_name(b, "opacity");
+  json_builder_add_double_value(b, bp->opacity);
+  json_builder_set_member_name(b, "blend_parameter");
+  json_builder_add_double_value(b, bp->blend_parameter);
+  json_builder_set_member_name(b, "mask_combine");
+  json_builder_add_int_value(b, bp->mask_combine);
+  json_builder_set_member_name(b, "feathering_radius");
+  json_builder_add_double_value(b, bp->feathering_radius);
+  json_builder_set_member_name(b, "blur_radius");
+  json_builder_add_double_value(b, bp->blur_radius);
+  json_builder_set_member_name(b, "contrast");
+  json_builder_add_double_value(b, bp->contrast);
+  json_builder_set_member_name(b, "brightness");
+  json_builder_add_double_value(b, bp->brightness);
+  json_builder_end_object(b);
+}
+
+char *dt_bridge_session_modules_json(dt_bridge_session_t *s, char **err)
+{
+  if(!s) { _seterr(err, "no session"); return NULL; }
+
+  // module params are whatever the last render left; the imported state is the
+  // reference the UI shows controls against
+  dt_dev_pop_history_items_ext(&s->dev, s->base_end);
+
+  GList *sorted = g_list_sort(g_list_copy(s->dev.iop), _cmp_iop_order);
+  JsonBuilder *b = json_builder_new();
+  json_builder_begin_array(b);
+  for(GList *l = sorted; l; l = g_list_next(l))
+  {
+    dt_iop_module_t *m = l->data;
+    const int flags = m->flags();
+    if(flags & IOP_FLAGS_HIDDEN) continue;
+
+    json_builder_begin_object(b);
+    json_builder_set_member_name(b, "operation");
+    json_builder_add_string_value(b, m->op);
+    json_builder_set_member_name(b, "multi_priority");
+    json_builder_add_int_value(b, m->multi_priority);
+    json_builder_set_member_name(b, "multi_name");
+    json_builder_add_string_value(b, m->multi_name);
+    json_builder_set_member_name(b, "name");
+    json_builder_add_string_value(b, m->name());
+    json_builder_set_member_name(b, "iop_order");
+    json_builder_add_int_value(b, m->iop_order);
+    json_builder_set_member_name(b, "enabled");
+    json_builder_add_boolean_value(b, m->enabled);
+    json_builder_set_member_name(b, "default_enabled");
+    json_builder_add_boolean_value(b, m->default_enabled);
+    json_builder_set_member_name(b, "hide_enable_button");
+    json_builder_add_boolean_value(b, m->hide_enable_button);
+    json_builder_set_member_name(b, "deprecated");
+    json_builder_add_boolean_value(b, (flags & IOP_FLAGS_DEPRECATED) != 0);
+    json_builder_set_member_name(b, "one_instance");
+    json_builder_add_boolean_value(b, (flags & IOP_FLAGS_ONE_INSTANCE) != 0);
+    json_builder_set_member_name(b, "supports_blending");
+    json_builder_add_boolean_value(b, (flags & IOP_FLAGS_SUPPORTS_BLENDING) != 0);
+    json_builder_set_member_name(b, "no_masks");
+    json_builder_add_boolean_value(b, (flags & IOP_FLAGS_NO_MASKS) != 0);
+    json_builder_set_member_name(b, "group");
+    json_builder_add_int_value(b, m->default_group());
+    json_builder_set_member_name(b, "have_introspection");
+    json_builder_add_boolean_value(b, m->so && m->so->have_introspection);
+    if(m->so && m->so->have_introspection && m->params
+       && m->params_size == (int32_t)m->so->get_introspection()->size)
+    {
+      json_builder_set_member_name(b, "params");
+      _write_fields_object(m->so, m->params, b);
+    }
+    if((flags & IOP_FLAGS_SUPPORTS_BLENDING) && m->blend_params)
+    {
+      json_builder_set_member_name(b, "blend");
+      _write_blend_object(m->blend_params, b);
+    }
+    json_builder_end_object(b);
+  }
+  json_builder_end_array(b);
+  g_list_free(sorted);
+
+  char *out = _builder_to_string(b);
+  g_object_unref(b);
+  return out;
 }
 
 void dt_bridge_session_close(dt_bridge_session_t *s)

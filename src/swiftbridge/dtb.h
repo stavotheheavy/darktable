@@ -74,6 +74,19 @@ dtb_session *dtb_session_open(const char *path, int imgid, int max_w, int max_h,
 int dtb_session_render(dtb_session *session, const char *stack_json,
                        dtb_frame *out, char **err);
 
+/** one region of the image at an explicit scale (1.0 = full resolution output),
+    x,y,w,h in that scaled image's pixels: what a zoomed or panned view needs */
+int dtb_session_render_region(dtb_session *session, const char *stack_json, double scale,
+                              int x, int y, int w, int h, dtb_frame *out, char **err);
+
+/** full-resolution output size, and the size of dtb_session_render frames */
+void dtb_session_info(dtb_session *session, int *processed_w, int *processed_h,
+                      int *work_w, int *work_h);
+
+/** JSON array of the session's modules in pipeline order, each with its current
+    scalar parameters and blend parameters (the imported state) */
+char *dtb_session_modules_json(dtb_session *session, char **err);
+
 void dtb_session_close(dtb_session *session);
 
 void dtb_frame_free(dtb_frame *frame);

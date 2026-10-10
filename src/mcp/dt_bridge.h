@@ -77,6 +77,22 @@ gboolean dt_bridge_session_render(dt_bridge_session_t *s, void *stack_jsonarray,
                                   uint8_t **buf_out, int *w_out, int *h_out,
                                   int *stride_out, char **err);
 
+/** like render, but a region of the image at an explicit scale: x,y,w,h are in
+    the scaled image's pixels (scale 1.0 is the full-resolution output), so a
+    zoomed or panned view renders only what is on screen */
+gboolean dt_bridge_session_render_region(dt_bridge_session_t *s, void *stack_jsonarray,
+                                         double scale, int x, int y, int w, int h,
+                                         uint8_t **buf_out, int *stride_out, char **err);
+
+/** full-resolution output size, and the size frames of dt_bridge_session_render have */
+void dt_bridge_session_info(dt_bridge_session_t *s, int *processed_w, int *processed_h,
+                            int *work_w, int *work_h);
+
+/** JSON array of the session's modules in pipeline order: operation, multi_priority,
+    name, enabled, default_enabled, flags, group, current scalar params and blend.
+    values are the imported state, which a stack is applied on top of */
+char *dt_bridge_session_modules_json(dt_bridge_session_t *s, char **err);
+
 void dt_bridge_session_close(dt_bridge_session_t *s);
 
 /** like render, but returns per-channel statistics as JSON instead of a PNG */
