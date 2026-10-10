@@ -27,6 +27,9 @@ public final class DarkroomModel {
     public private(set) var touched: Set<String> = []
     public private(set) var isScrubbing = false
 
+    /// The long side every interactive frame is fitted to.
+    public static let workingSize = 1400
+
     private let engine: Engine
     private var path: String?
     private var rendering = false
@@ -73,6 +76,13 @@ public final class DarkroomModel {
         touched = []
         original = nil
         status = "Developing…"
+        do {
+            // one session per open image: decoded once, edits re-run only what changed
+            try await engine.openSession(path: path, maxSide: Self.workingSize)
+        } catch {
+            status = "\(error)"
+            return
+        }
         requestRender()
     }
 
@@ -90,7 +100,6 @@ public final class DarkroomModel {
 
     public func endScrub() {
         isScrubbing = false
-        requestRender() // the full-size frame for the value the user stopped on
     }
 
     public func reset(_ tool: Tool) {
@@ -139,15 +148,14 @@ public final class DarkroomModel {
 
         while wantsRender {
             wantsRender = false
-            guard let path else { return }
+            guard path != nil else { return }
             let stack = buildStack()
-            let side = isScrubbing ? 700 : 1400
             do {
-                let frame = try await engine.render(path: path, maxSide: side, stack: stack)
+                let frame = try await engine.sessionRender(stack: stack)
                 image = frame.image
                 lastMilliseconds = frame.milliseconds
                 status = "\(frame.width) x \(frame.height)"
-                if stack.isEmpty && !isScrubbing { original = frame.image }
+                if stack.isEmpty { original = frame.image }
             } catch {
                 status = "\(error)"
             }
@@ -163,7 +171,7 @@ public final class DarkroomModel {
         status = "Exporting…"
         let bound = Self.longSide(of: path) ?? 4096
         do {
-            let frame = try await engine.render(path: path, maxSide: bound, stack: buildStack())
+            let frame = try await engine.exportRender(path: path, maxSide: bound, stack: buildStack())
             guard let dest = CGImageDestinationCreateWithURL(
                 url as CFURL, UTType.jpeg.identifier as CFString, 1, nil)
             else { throw EngineError("cannot create \(url.lastPathComponent)") }

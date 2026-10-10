@@ -36,6 +36,8 @@ public actor Engine {
     public nonisolated var unownedExecutor: UnownedSerialExecutor { queue.asUnownedSerialExecutor() }
 
     private var started = false
+    private var session: OpaquePointer?   // dtb_session*
+    private var sessionMaxSide = 0
 
     public init() {}
 
@@ -60,12 +62,63 @@ public actor Engine {
 
     public func shutdown() {
         guard started else { return }
+        closeSession()
         dtb_shutdown()
         started = false
     }
 
+    // MARK: persistent session
+
+    /// Keep one image open so edits re-run only from the changed module onward.
+    /// Frames come out at the same size for the life of the session.
+    public func openSession(path: String, maxSide: Int) throws {
+        guard started else { throw EngineError("engine not started") }
+        closeSession()
+        var err: UnsafeMutablePointer<CChar>?
+        guard let s = dtb_session_open(path, 0, Int32(maxSide), Int32(maxSide), &err) else {
+            throw EngineError(Self.take(err) ?? "could not open the image")
+        }
+        session = s
+        sessionMaxSide = maxSide
+    }
+
+    public func closeSession() {
+        if let s = session { dtb_session_close(s) }
+        session = nil
+    }
+
+    public var hasSession: Bool { session != nil }
+
+    /// Render the open image with exactly `stack` applied.
+    public func sessionRender(stack: [StackEntry] = []) throws -> RenderedFrame {
+        guard let session else { throw EngineError("no image is open") }
+        let stackJSON: String? = stack.isEmpty ? nil : try Self.json(stack)
+        let t0 = DispatchTime.now().uptimeNanoseconds
+
+        var frame = dtb_frame()
+        var err: UnsafeMutablePointer<CChar>?
+        let rc = dtb_session_render(session, stackJSON, &frame, &err)
+        if rc != 0 { throw EngineError(Self.take(err) ?? "render failed (\(rc))") }
+        defer { dtb_frame_free(&frame) }
+
+        let ms = Double(DispatchTime.now().uptimeNanoseconds - t0) / 1_000_000
+        return try Self.wrap(frame, milliseconds: ms)
+    }
+
+    /// Full-size render for export. The one-shot path refuses a file a session still
+    /// holds, so the session is closed for the export and reopened afterwards.
+    public func exportRender(path: String, maxSide: Int, stack: [StackEntry]) throws -> RenderedFrame {
+        let size = sessionMaxSide
+        let wasOpen = session != nil
+        closeSession()
+        defer { if wasOpen { try? openSession(path: path, maxSide: size) } }
+        return try render(path: path, maxSide: maxSide, stack: stack)
+    }
+
+    // MARK: one-shot
+
     /// Render a file (scratch-imported, never written next to the original) into a CGImage
-    /// fitted inside `maxSide` x `maxSide`.
+    /// fitted inside `maxSide` x `maxSide`. Builds and discards a pipeline every call.
     public func render(path: String, maxSide: Int, stack: [StackEntry] = []) throws -> RenderedFrame {
         guard started else { throw EngineError("engine not started") }
 
@@ -79,24 +132,7 @@ public actor Engine {
         defer { dtb_frame_free(&frame) }
 
         let ms = Double(DispatchTime.now().uptimeNanoseconds - t0) / 1_000_000
-        let w = Int(frame.width), h = Int(frame.height), stride = Int(frame.stride)
-        guard let pixels = frame.pixels else { throw EngineError("empty frame") }
-
-        // dtb_frame_free releases the C buffer, so the image gets its own copy
-        let data = Data(bytes: pixels, count: stride * h)
-        guard
-            let provider = CGDataProvider(data: data as CFData),
-            let image = CGImage(
-                width: w, height: h,
-                bitsPerComponent: 8, bitsPerPixel: 32, bytesPerRow: stride,
-                space: CGColorSpace(name: CGColorSpace.sRGB)!,
-                bitmapInfo: CGBitmapInfo(
-                    rawValue: CGImageAlphaInfo.noneSkipFirst.rawValue
-                        | CGBitmapInfo.byteOrder32Little.rawValue),
-                provider: provider, decode: nil, shouldInterpolate: true, intent: .defaultIntent)
-        else { throw EngineError("could not wrap the frame as an image") }
-
-        return RenderedFrame(image: image, width: w, height: h, milliseconds: ms)
+        return try Self.wrap(frame, milliseconds: ms)
     }
 
     /// Names of every module darktable knows, straight from its introspection.
@@ -123,6 +159,25 @@ public actor Engine {
     }
 
     // MARK: helpers
+
+    /// dtb_frame_free releases the C buffer, so the image gets its own copy.
+    private static func wrap(_ frame: dtb_frame, milliseconds: Double) throws -> RenderedFrame {
+        let w = Int(frame.width), h = Int(frame.height), stride = Int(frame.stride)
+        guard let pixels = frame.pixels else { throw EngineError("empty frame") }
+        let data = Data(bytes: pixels, count: stride * h)
+        guard
+            let provider = CGDataProvider(data: data as CFData),
+            let image = CGImage(
+                width: w, height: h,
+                bitsPerComponent: 8, bitsPerPixel: 32, bytesPerRow: stride,
+                space: CGColorSpace(name: CGColorSpace.sRGB)!,
+                bitmapInfo: CGBitmapInfo(
+                    rawValue: CGImageAlphaInfo.noneSkipFirst.rawValue
+                        | CGBitmapInfo.byteOrder32Little.rawValue),
+                provider: provider, decode: nil, shouldInterpolate: true, intent: .defaultIntent)
+        else { throw EngineError("could not wrap the frame as an image") }
+        return RenderedFrame(image: image, width: w, height: h, milliseconds: milliseconds)
+    }
 
     private static func take(_ p: UnsafeMutablePointer<CChar>?) -> String? {
         guard let p else { return nil }

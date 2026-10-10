@@ -56,6 +56,29 @@ gboolean dt_bridge_render_rgb24(const char *path, int imgid_in, int width, int h
                                 int history_end, uint8_t **buf_out, int *w_out,
                                 int *h_out, int *stride_out, char **err);
 
+// --- persistent render session ---
+//
+// the one-shot render builds a throwaway pipeline per call, so every edit pays
+// for decoding the raw and building the module chain. a session keeps the
+// develop object, the raw buffer and a caching display pipe alive: an edit
+// re-runs only from the changed module onward. one session is one image at one
+// working size; drive it from a single thread.
+
+typedef struct dt_bridge_session_t dt_bridge_session_t;
+
+/** open `path` (imported as a scratch image, dropped again on close) or catalog
+    image `imgid_in`; frames are fitted inside width x height (0 = unbounded) */
+dt_bridge_session_t *dt_bridge_session_open(const char *path, int imgid_in, int width,
+                                            int height, char **err);
+
+/** render the image with exactly `stack_jsonarray` (a JsonArray*, NULL = the
+    imported state) applied. like dt_bridge_render_rgb24 the buffer is g_malloc'd */
+gboolean dt_bridge_session_render(dt_bridge_session_t *s, void *stack_jsonarray,
+                                  uint8_t **buf_out, int *w_out, int *h_out,
+                                  int *stride_out, char **err);
+
+void dt_bridge_session_close(dt_bridge_session_t *s);
+
 /** like render, but returns per-channel statistics as JSON instead of a PNG */
 char *dt_bridge_image_stats_json(const char *path, int imgid_in, int width, int height,
                                  void *stack_jsonarray, gboolean disable_tone_mappers,

@@ -59,6 +59,23 @@ void dtb_shutdown(void);
 int dtb_render(const char *path, int imgid, int max_w, int max_h,
                const char *stack_json, dtb_frame *out, char **err);
 
+/** a persistent render session: one image kept open at one working size, with its
+    decoded raw and per-module cache alive between renders, so an edit only
+    re-runs from the changed module onward */
+typedef struct dtb_session dtb_session;
+
+/** open `path` (or catalog image `imgid`, path NULL). frames fit max_w x max_h
+    (0 = unbounded). returns NULL with *err set on failure */
+dtb_session *dtb_session_open(const char *path, int imgid, int max_w, int max_h, char **err);
+
+/** render with exactly `stack_json` applied on top of the imported state (the same
+    JSON array dtb_render takes; NULL or "[]" is the unedited image).
+    returns 0 on success */
+int dtb_session_render(dtb_session *session, const char *stack_json,
+                       dtb_frame *out, char **err);
+
+void dtb_session_close(dtb_session *session);
+
 void dtb_frame_free(dtb_frame *frame);
 
 /** JSON array of [{ operation, version, have_introspection, doc_url }] */

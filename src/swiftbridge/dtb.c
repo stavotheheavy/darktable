@@ -168,6 +168,85 @@ int dtb_render(const char *path, int imgid, int max_w, int max_h,
   return 0;
 }
 
+dtb_session *dtb_session_open(const char *path, int imgid, int max_w, int max_h, char **err)
+{
+  g_mutex_lock(&_lock);
+  if(!_up)
+  {
+    g_mutex_unlock(&_lock);
+    _fail(err, "engine not started");
+    return NULL;
+  }
+  char *gerr = NULL;
+  dt_bridge_session_t *s = dt_bridge_session_open(path, imgid, max_w, max_h, &gerr);
+  g_mutex_unlock(&_lock);
+  if(!s)
+  {
+    if(err) *err = gerr ? gerr : g_strdup("could not open the image");
+    else g_free(gerr);
+  }
+  else
+    g_free(gerr);
+  return (dtb_session *)s;
+}
+
+int dtb_session_render(dtb_session *session, const char *stack_json, dtb_frame *out, char **err)
+{
+  if(!out || !session)
+  {
+    _fail(err, "no session or output frame");
+    return 1;
+  }
+  memset(out, 0, sizeof(*out));
+
+  JsonParser *parser = NULL;
+  JsonArray *stack = NULL;
+  if(stack_json && *stack_json)
+  {
+    parser = json_parser_new();
+    GError *ge = NULL;
+    if(!json_parser_load_from_data(parser, stack_json, -1, &ge))
+    {
+      _fail(err, ge ? ge->message : "stack is not valid JSON");
+      if(ge) g_error_free(ge);
+      g_object_unref(parser);
+      return 1;
+    }
+    JsonNode *root = json_parser_get_root(parser);
+    if(root && JSON_NODE_HOLDS_ARRAY(root)) stack = json_node_get_array(root);
+  }
+
+  g_mutex_lock(&_lock);
+  uint8_t *buf = NULL;
+  int w = 0, h = 0, stride = 0;
+  char *gerr = NULL;
+  const gboolean ok = _up
+    && dt_bridge_session_render((dt_bridge_session_t *)session, stack, &buf, &w, &h, &stride, &gerr);
+  g_mutex_unlock(&_lock);
+  if(parser) g_object_unref(parser);
+
+  if(!ok)
+  {
+    if(err) *err = gerr ? gerr : g_strdup("render failed");
+    else g_free(gerr);
+    return 1;
+  }
+  g_free(gerr);
+  out->pixels = buf;
+  out->width = w;
+  out->height = h;
+  out->stride = stride;
+  return 0;
+}
+
+void dtb_session_close(dtb_session *session)
+{
+  if(!session) return;
+  g_mutex_lock(&_lock);
+  if(_up) dt_bridge_session_close((dt_bridge_session_t *)session);
+  g_mutex_unlock(&_lock);
+}
+
 void dtb_frame_free(dtb_frame *frame)
 {
   if(!frame) return;

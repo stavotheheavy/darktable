@@ -26,6 +26,7 @@
 #include "common/variables.h"
 #include "common/image.h"
 #include "common/image_cache.h"
+#include "common/mipmap_cache.h"
 #include "common/datetime.h"
 #include "common/colorlabels.h"
 #include "common/ratings.h"
@@ -1404,6 +1405,155 @@ gboolean dt_bridge_render_rgb24(const char *path, int imgid_in, int width, int h
   *h_out = h;
   *stride_out = stride;
   return TRUE;
+}
+
+// --- persistent render session ---
+
+struct dt_bridge_session_t
+{
+  dt_develop_t dev;
+  dt_dev_pixelpipe_t pipe;
+  dt_mipmap_buffer_t buf;
+  dt_mcp_scratch_t sc;
+  dt_mcp_pristine_t pr;
+  dt_imgid_t imgid;
+  int base_end;            // history_end of the imported state
+  int max_w, max_h;
+  gboolean have_dev, have_buf, have_pipe;
+};
+
+static void _session_destroy(dt_bridge_session_t *s)
+{
+  if(!s) return;
+  if(s->have_pipe) dt_dev_pixelpipe_cleanup(&s->pipe);
+  if(s->have_buf) dt_mipmap_cache_release(&s->buf);
+  if(s->have_dev) dt_dev_cleanup(&s->dev);
+  _pristine_release(&s->pr);
+  if(s->sc.active) _drop_scratch(&s->sc);
+  g_free(s);
+}
+
+dt_bridge_session_t *dt_bridge_session_open(const char *path, int imgid_in, int width,
+                                            int height, char **err)
+{
+  dt_bridge_session_t *s = g_new0(dt_bridge_session_t, 1);
+  s->sc = (dt_mcp_scratch_t){ FALSE, NO_FILMID, NULL, { NULL, FALSE } };
+  s->max_w = MAX(width, 0);
+  s->max_h = MAX(height, 0);
+
+  s->imgid = _resolve_input(path, imgid_in, &s->sc, err);
+  if(!dt_is_valid_imgid(s->imgid))
+  {
+    g_free(s);
+    return NULL;
+  }
+
+  // a scratch row is dropped whole, so only a catalog image needs holding
+  _pristine_hold(s->sc.active ? NO_IMGID : s->imgid, &s->pr);
+
+  dt_dev_init(&s->dev, FALSE);
+  s->have_dev = TRUE;
+  dt_dev_load_image(&s->dev, s->imgid);
+  // load reads the history but does not replay it into module params
+  dt_dev_pop_history_items_ext(&s->dev, s->dev.history_end);
+  s->base_end = s->dev.history_end;
+
+  dt_mipmap_cache_get(&s->buf, s->imgid, DT_MIPMAP_FULL, DT_MIPMAP_BLOCKING, 'r');
+  s->have_buf = TRUE;
+  if(!s->buf.buf || !s->buf.width || !s->buf.height)
+  {
+    _seterr(err, "could not load the image data (invalid or unsupported file)");
+    _session_destroy(s);
+    return NULL;
+  }
+
+  // a display-type pipe: export and thumbnail pipes set nocache, a display pipe
+  // keeps one cache line per module so a later edit can reuse everything before it
+  if(!dt_dev_pixelpipe_init(&s->pipe))
+  {
+    _seterr(err, "could not allocate the pixel pipeline");
+    _session_destroy(s);
+    return NULL;
+  }
+  s->have_pipe = TRUE;
+
+  dt_ioppr_resync_modules_order(&s->dev);
+  dt_dev_pixelpipe_set_input(&s->pipe, &s->dev, (float *)s->buf.buf,
+                             s->buf.width, s->buf.height, s->buf.iscale);
+  dt_dev_pixelpipe_create_nodes(&s->pipe, &s->dev);
+  dt_dev_pixelpipe_synch_all(&s->pipe, &s->dev);
+  dt_dev_pixelpipe_get_dimensions(&s->pipe, &s->dev, s->pipe.iwidth, s->pipe.iheight,
+                                  &s->pipe.processed_width, &s->pipe.processed_height);
+  return s;
+}
+
+gboolean dt_bridge_session_render(dt_bridge_session_t *s, void *stack_jsonarray,
+                                  uint8_t **buf_out, int *w_out, int *h_out,
+                                  int *stride_out, char **err)
+{
+  if(!s) { _seterr(err, "no session"); return FALSE; }
+  JsonArray *stack = (JsonArray *)stack_jsonarray;
+
+  // declarative: go back to the imported state and apply exactly this stack, so
+  // a slider put back to neutral is simply absent. modules whose params did not
+  // change keep the same hash and are served from the pipe cache
+  dt_dev_pop_history_items_ext(&s->dev, s->base_end);
+  const guint n = stack ? json_array_get_length(stack) : 0;
+  for(guint i = 0; i < n; i++)
+  {
+    JsonNode *en = json_array_get_element(stack, i);
+    if(!JSON_NODE_HOLDS_OBJECT(en))
+    {
+      _seterr(err, "stack[%u] is not an object", i);
+      return FALSE;
+    }
+    if(!_apply_entry(&s->dev, json_node_get_object(en), err)) return FALSE;
+  }
+  dt_ioppr_resync_modules_order(&s->dev);
+
+  s->pipe.changed |= DT_DEV_PIPE_SYNCH;
+  dt_dev_pixelpipe_change(&s->pipe, &s->dev);
+
+  const int pw = s->pipe.processed_width;
+  const int ph = s->pipe.processed_height;
+  if(pw < 1 || ph < 1)
+  {
+    _seterr(err, "pipeline produced an empty image");
+    return FALSE;
+  }
+  double scale = 1.0;
+  if(s->max_w > 0) scale = fmin(scale, (double)s->max_w / pw);
+  if(s->max_h > 0) scale = fmin(scale, (double)s->max_h / ph);
+  const int ow = MAX(1, (int)floor(scale * pw));
+  const int oh = MAX(1, (int)floor(scale * ph));
+
+  dt_dev_pixelpipe_process(&s->pipe, &s->dev, 0, 0, ow, oh, (float)scale, DT_DEVICE_NONE);
+
+  const uint8_t *src = s->pipe.backbuf;
+  if(!src)
+  {
+    _seterr(err, "no output buffer after processing");
+    return FALSE;
+  }
+  const int stride = ow * 4;
+  const size_t bytes = (size_t)stride * oh;
+  uint8_t *copy = g_try_malloc(bytes);
+  if(!copy)
+  {
+    _seterr(err, "could not copy the rendered frame");
+    return FALSE;
+  }
+  memcpy(copy, src, bytes);
+  *buf_out = copy;
+  *w_out = ow;
+  *h_out = oh;
+  *stride_out = stride;
+  return TRUE;
+}
+
+void dt_bridge_session_close(dt_bridge_session_t *s)
+{
+  _session_destroy(s);
 }
 
 char *dt_bridge_image_stats_json(const char *path, int imgid_in, int width, int height,

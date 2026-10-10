@@ -156,5 +156,18 @@ struct SelfTest {
         model.reset(.light)
         await model.settle()
         print("reset light: luma \(String(format: "%.1f", meanLuma(model.image!))), stack: [\(describe(model.buildStack()))]")
+
+        // export closes the session for the full-size render and must reopen it
+        model.set(spec("exposure"), to: 0.5)
+        await model.settle()
+        let exportURL = FileManager.default.temporaryDirectory.appending(path: "dtb-selftest-export.jpg")
+        try? FileManager.default.removeItem(at: exportURL)
+        await model.export(to: exportURL)
+        let bytes = (try? FileManager.default.attributesOfItem(atPath: exportURL.path)[.size] as? Int) ?? 0
+        print("export: \(model.status); file \(bytes) bytes")
+        model.set(spec("exposure"), to: -0.5)
+        await model.settle()
+        print("after export, session render: \(model.image!.width)x\(model.image!.height), luma \(String(format: "%.1f", meanLuma(model.image!))), \(Int(model.lastMilliseconds ?? 0)) ms")
+        try? FileManager.default.removeItem(at: exportURL)
     }
 }
