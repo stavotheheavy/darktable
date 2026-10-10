@@ -39,7 +39,6 @@ struct ModuleList: View {
                     .accessibilityIdentifier("module-search")
                 Menu {
                     Toggle("Active modules only", isOn: $model.activeOnly)
-                    Toggle("Show deprecated", isOn: $model.showDeprecated)
                 } label: {
                     Image(systemName: model.activeOnly ? "line.3.horizontal.decrease.circle.fill"
                                                        : "line.3.horizontal.decrease.circle")
@@ -447,10 +446,15 @@ struct ParamRow: View {
         }
         if let soft {
             let lo = min(soft.lowerBound, current), hi = max(soft.upperBound, current)
-            Slider(
-                value: Binding(get: { current }, set: { model.setParam(module, field, to: .number($0)) }),
-                in: lo...hi, step: field.kind == .int ? 1 : 0
-            )
+            let binding = Binding(get: { current }, set: { model.setParam(module, field, to: .number($0)) })
+            Group {
+                // a zero step traps in SwiftUI, so only integers get one
+                if field.kind == .int, hi > lo {
+                    Slider(value: binding, in: lo...hi, step: 1)
+                } else if hi > lo {
+                    Slider(value: binding, in: lo...hi)
+                }
+            }
             .tint(.orange)
             .accessibilityLabel(field.label)
             .accessibilityIdentifier(id)
@@ -641,6 +645,12 @@ public struct DarkroomRoot: View {
 
     public var body: some View {
         DarkroomView(model: model)
-            .task { await model.bootstrap() }
+            .task {
+                await model.bootstrap()
+                await AutoTest.runIfRequested(model: model)
+            }
+            .onOpenURL { url in
+                if url.isFileURL { Task { await model.open(path: url.path) } }
+            }
     }
 }

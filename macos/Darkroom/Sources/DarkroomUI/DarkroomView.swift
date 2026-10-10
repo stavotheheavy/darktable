@@ -40,7 +40,7 @@ public struct DarkroomView: View {
                     .padding(.bottom, Self.margin)
             }
         }
-        .background(Color.black)
+        .background(model.backdrop.color)
         .preferredColorScheme(.dark)
         .fileImporter(isPresented: $choosing, allowedContentTypes: [.rawImage, .image]) { result in
             if case .success(let url) = result { Task { await model.open(path: url.path) } }
@@ -65,13 +65,15 @@ struct PhotoView: View {
         GeometryReader { geo in
             let size = geo.size
             ZStack {
-                Color.black
+                BackdropView(style: model.backdrop)
                 if let frame = model.frame {
                     let r = imageRect(frame: frame, in: size)
                     Image(decorative: frame, scale: 1)
                         .resizable()
                         .interpolation(.high)
                         .frame(width: r.width, height: r.height)
+                        .overlay(Rectangle().strokeBorder(Color.white.opacity(0.07), lineWidth: 1))
+                        .shadow(color: .black.opacity(0.5), radius: 26, y: 10)
                         .position(x: r.midX, y: r.midY)
                         .accessibilityLabel("Photo")
                         .accessibilityIdentifier("photo")
@@ -213,6 +215,8 @@ struct TopBar: View {
             Button { model.redo() } label: { Image(systemName: "arrow.uturn.forward").frame(width: 40, height: 40) }
                 .buttonStyle(.plain).disabled(!model.canRedo)
                 .accessibilityLabel("Redo").accessibilityIdentifier("redo")
+
+            BackdropMenu(model: model)
 
             Divider().frame(height: 22).padding(.horizontal, 6)
 

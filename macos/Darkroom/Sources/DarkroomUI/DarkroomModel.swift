@@ -70,6 +70,10 @@ public final class DarkroomModel {
     public var showingOriginal = false { didSet { if showingOriginal != oldValue { requestRender() } } }
     public var showingSnapshot = false { didSet { if showingSnapshot != oldValue { requestRender() } } }
     public var viewport = CGSize(width: 1000, height: 700)
+    /// What sits behind the photo; remembered between launches.
+    public var backdrop: BackdropStyle = BackdropStyle.load() {
+        didSet { if backdrop != oldValue { backdrop.save() } }
+    }
     /// Where the zoomed view looks, as 0...1 of the output image.
     public private(set) var center = CGPoint(x: 0.5, y: 0.5)
     public private(set) var scopes: ScopeData?
@@ -114,8 +118,10 @@ public final class DarkroomModel {
             status = "Engine did not start: \(error)"
             return
         }
-        if openingFirstArgument, let arg = CommandLine.arguments.dropFirst().first(where: { !$0.hasPrefix("-") }) {
-            await open(path: arg)
+        // a bare path argument would be taken by AppKit as a document-open request and
+        // suppress the window, so the launch file comes from --open=<path> or DARKROOM_OPEN
+        if openingFirstArgument, let launch = Self.launchPath(env: env) {
+            await open(path: launch)
         }
     }
 
@@ -511,6 +517,14 @@ public final class DarkroomModel {
     }
 
     // MARK: helpers
+
+    static func launchPath(env: [String: String]) -> String? {
+        if let p = env["DARKROOM_OPEN"], !p.isEmpty { return p }
+        for a in CommandLine.arguments.dropFirst() where a.hasPrefix("--open=") {
+            return String(a.dropFirst("--open=".count))
+        }
+        return nil
+    }
 
     private func describe(_ v: ParamValue, _ f: FieldSchema) -> String {
         switch v {

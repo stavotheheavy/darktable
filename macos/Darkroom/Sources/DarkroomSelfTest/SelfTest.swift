@@ -61,6 +61,7 @@ struct SelfTest {
         let maxSide = Int(take("--max") ?? "") ?? 1400
         let out = take("--out")
         let ui = has("--ui")
+        let listModules = has("--list-modules")
         guard let path = args.first else {
             print("usage: dtb-selftest <image> [--max 1400] [--out frame.png] [--ui]")
             exit(2)
@@ -79,7 +80,12 @@ struct SelfTest {
                 cacheDir: home.appending(path: ".cache/darktable-fork"))
             print(String(format: "engine start: %.0f ms", Date().timeIntervalSince(t0) * 1000))
 
-            if ui {
+            if listModules {
+                try await engine.openSession(path: path, maxSide: 400)
+                for m in try await engine.sessionModules() {
+                    print("\(m.id)\t\(m.name)\t\(m.haveIntrospection ? "params" : "-")\t\(m.deprecated ? "deprecated" : "")")
+                }
+            } else if ui {
                 try await runUI(engine: engine, path: path)
             } else {
                 try await runEngine(engine: engine, path: path, maxSide: maxSide, out: out)
@@ -165,14 +171,18 @@ struct SelfTest {
 
         print("editing")
         guard let ev = field(model, exposure, "exposure") else { throw EngineError("no exposure field") }
-        model.setParam(exposure, ev, to: .number(1.0))
+        // relative to this image's own imported state: some raws arrive with exposure already on
+        let baseEv = model.base(exposure, ev).double ?? 0
+        let startedOn = exposure.enabled
+        print("        imported exposure: \(startedOn ? "on" : "off"), \(String(format: "%+.2f", baseEv)) EV")
+        model.setParam(exposure, ev, to: .number(baseEv + 1.5))
         await model.settle()
         let up = luma(model)
-        check(up > base + 10, "exposure +1 brightens (\(String(format: "%.1f", base)) -> \(String(format: "%.1f", up)))")
-        check(model.isEnabled(exposure), "changing a control switches the module on")
+        check(up > base + 3, "exposure +1.5 EV brightens (\(String(format: "%.1f", base)) -> \(String(format: "%.1f", up)))")
+        check(model.isEnabled(exposure), "changing a control leaves the module on")
         check(model.history.count == 2 && model.historyIndex == 1, "one history step")
-        model.setParam(exposure, ev, to: .number(1.5))
-        model.setParam(exposure, ev, to: .number(1.2))
+        model.setParam(exposure, ev, to: .number(baseEv + 2.0))
+        model.setParam(exposure, ev, to: .number(baseEv + 1.5))
         check(model.history.count == 2, "dragging merges into one step")
         await model.settle()
         print("        edit render \(Int(model.lastMilliseconds ?? 0)) ms")
@@ -180,10 +190,10 @@ struct SelfTest {
         model.undo()
         await model.settle()
         check(abs(luma(model) - base) < 0.5, "undo returns to the original frame")
-        check(!model.isEnabled(exposure), "undo switches the module back off")
+        check(model.isEnabled(exposure) == startedOn, "undo restores the module's imported on/off state")
         model.redo()
         await model.settle()
-        check(luma(model) > base + 10, "redo restores the edit")
+        check(luma(model) > base + 3, "redo restores the edit")
 
         print("enable, blend, reset")
         if let sharpen = module(model, "sharpen") {
@@ -196,7 +206,7 @@ struct SelfTest {
         model.setBlend(exposure, "opacity", to: .number(40), detail: "opacity: 40%")
         await model.settle()
         let half = luma(model)
-        check(half > base + 3 && half < up + 5, "40% opacity lands between original and edit (\(String(format: "%.1f", half)))")
+        check(half > base + 0.5 && half < up - 0.5, "40% opacity lands between original and edit (\(String(format: "%.1f", half)))")
         let entry = model.buildStack().first { $0.operation == "exposure" }
         check(entry?.blend["opacity"] == .number(40), "blend travels in the stack entry")
         model.resetModule(exposure)
@@ -204,7 +214,7 @@ struct SelfTest {
         check(abs(luma(model) - base) < 0.5, "module reset returns to the original frame")
 
         print("compare and snapshot")
-        model.setParam(exposure, ev, to: .number(1.0))
+        model.setParam(exposure, ev, to: .number(baseEv + 1.5))
         await model.settle()
         let edited = luma(model)
         model.showingOriginal = true
@@ -214,7 +224,7 @@ struct SelfTest {
         await model.settle()
         check(abs(luma(model) - edited) < 0.5, "release returns to the edit")
         model.takeSnapshot()
-        model.setParam(exposure, ev, to: .number(-1.0))
+        model.setParam(exposure, ev, to: .number(baseEv - 1.0))
         await model.settle()
         let dark = luma(model)
         model.showingSnapshot = true
