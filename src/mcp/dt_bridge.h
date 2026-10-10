@@ -49,6 +49,13 @@ gboolean dt_bridge_render_png(const char *path, int imgid_in, int width, int hei
                               int history_end, uint8_t **png_out, size_t *png_len,
                               char **err);
 
+/** like render, but hands back the raw frame instead of a PNG: a g_malloc'd
+    8-bit B,G,R,x buffer (cairo RGB24) of `*stride_out` * `*h_out` bytes */
+gboolean dt_bridge_render_rgb24(const char *path, int imgid_in, int width, int height,
+                                void *stack_jsonarray, gboolean disable_tone_mappers,
+                                int history_end, uint8_t **buf_out, int *w_out,
+                                int *h_out, int *stride_out, char **err);
+
 /** like render, but returns per-channel statistics as JSON instead of a PNG */
 char *dt_bridge_image_stats_json(const char *path, int imgid_in, int width, int height,
                                  void *stack_jsonarray, gboolean disable_tone_mappers,

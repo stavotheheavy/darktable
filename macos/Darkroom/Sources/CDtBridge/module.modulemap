@@ -1,0 +1,5 @@
+module CDtBridge [system] {
+    header "../../../../src/swiftbridge/dtb.h"
+    link "dtbridge"
+    export *
+}

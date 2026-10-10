@@ -1370,6 +1370,42 @@ gboolean dt_bridge_render_png(const char *path, int imgid_in, int width, int hei
   return ok;
 }
 
+gboolean dt_bridge_render_rgb24(const char *path, int imgid_in, int width, int height,
+                                void *stack_jsonarray, gboolean disable_tone_mappers,
+                                int history_end, uint8_t **buf_out, int *w_out,
+                                int *h_out, int *stride_out, char **err)
+{
+  cairo_surface_t *surf = _render_surface(path, imgid_in, width, height,
+                                          (JsonArray *)stack_jsonarray,
+                                          disable_tone_mappers,
+                                          history_end, err);
+  if(!surf) return FALSE;
+
+  cairo_surface_flush(surf);
+  const int w = cairo_image_surface_get_width(surf);
+  const int h = cairo_image_surface_get_height(surf);
+  const int stride = cairo_image_surface_get_stride(surf);
+  const unsigned char *src = cairo_image_surface_get_data(surf);
+  const size_t bytes = (size_t)stride * h;
+
+  // the surface owns its pixels and frees them with itself, so hand back a copy
+  uint8_t *copy = src ? g_try_malloc(bytes) : NULL;
+  if(!copy)
+  {
+    cairo_surface_destroy(surf);
+    _seterr(err, "could not copy the rendered frame");
+    return FALSE;
+  }
+  memcpy(copy, src, bytes);
+  cairo_surface_destroy(surf);
+
+  *buf_out = copy;
+  *w_out = w;
+  *h_out = h;
+  *stride_out = stride;
+  return TRUE;
+}
+
 char *dt_bridge_image_stats_json(const char *path, int imgid_in, int width, int height,
                                  void *stack_jsonarray, gboolean disable_tone_mappers,
                                  int history_end, char **err)

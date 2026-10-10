@@ -1,0 +1,76 @@
+/*
+    This file is part of darktable,
+    Copyright (C) 2026 darktable developers.
+
+    darktable is free software: you can redistribute it and/or modify
+    it under the terms of the GNU General Public License as published by
+    the Free Software Foundation, either version 3 of the License, or
+    (at your option) any later version.
+
+    darktable is distributed in the hope that it will be useful,
+    but WITHOUT ANY WARRANTY; without even the implied warranty of
+    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+    GNU General Public License for more details.
+
+    You should have received a copy of the GNU General Public License
+    along with darktable.  If not, see <http://www.gnu.org/licenses/>.
+*/
+
+// a small plain-C surface over libdarktable's headless engine for a native
+// (Swift) front end. no GLib or darktable types appear here, so a Swift module
+// map can import this header without pulling in the GTK stack's headers.
+//
+// every call is serialized internally, but the engine is not designed for
+// arbitrary threads: drive it from one dedicated thread.
+//
+// strings returned by this API (including *err) are owned by the caller and
+// must be released with dtb_string_free()
+
+#ifndef DTB_H
+#define DTB_H
+
+#include <stdint.h>
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+typedef struct dtb_frame
+{
+  uint8_t *pixels; // 8-bit B,G,R,x (little-endian cairo RGB24); free with dtb_frame_free
+  int width;
+  int height;
+  int stride; // bytes per row
+} dtb_frame;
+
+/** start the engine without a GUI. `library` NULL means an in-memory catalog.
+    `datadir` is <prefix>/share/darktable, `moduledir` is <prefix>/lib/darktable.
+    returns 0 on success */
+int dtb_init(const char *datadir, const char *moduledir, const char *configdir,
+             const char *cachedir, const char *library, char **err);
+
+void dtb_shutdown(void);
+
+/** render `path` (not in the catalog: imported as a scratch image and dropped
+    again) or catalog image `imgid` (path NULL) into `out`, fitted inside
+    max_w x max_h (0 = unconstrained). `stack_json` is NULL or a JSON array of
+    {"operation": "exposure", "params": {"exposure": 0.5}, "enabled": true}.
+    returns 0 on success */
+int dtb_render(const char *path, int imgid, int max_w, int max_h,
+               const char *stack_json, dtb_frame *out, char **err);
+
+void dtb_frame_free(dtb_frame *frame);
+
+/** JSON array of [{ operation, version, have_introspection, doc_url }] */
+char *dtb_list_modules_json(void);
+
+/** JSON description of one module's parameter fields, or NULL with *err set */
+char *dtb_module_schema_json(const char *operation, char **err);
+
+void dtb_string_free(char *s);
+
+#ifdef __cplusplus
+}
+#endif
+
+#endif

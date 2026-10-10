@@ -1227,6 +1227,11 @@ add_subdirectory(cli)
 # have a Model Context Protocol server exposing the raw engine to AI agents
 if(USE_MCP)
   add_subdirectory(mcp)
+
+  # a plain-C face over the same headless engine for the native macOS front end
+  if(APPLE)
+    add_subdirectory(swiftbridge)
+  endif()
 endif()
 
 # have a command line utility to generate all the thumbnails
