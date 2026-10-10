@@ -37,7 +37,7 @@ func writePNG(_ image: CGImage, to url: URL) throws {
 
 func describe(_ stack: [StackEntry]) -> String {
     stack.map { e in
-        let f = e.params.keys.sorted().map { "\($0)=\(String(format: "%g", e.params[$0] ?? 0))" }.joined(separator: ", ")
+        let f = e.params.keys.sorted().map { "\($0)=\(String(format: "%g", e.params[$0]?.double ?? 0))" }.joined(separator: ", ")
         return "\(e.operation)(\(f))"
     }.joined(separator: " + ")
 }
@@ -119,55 +119,161 @@ struct SelfTest {
                      lumaDown, lumaUp, lumaDown < lumaUp ? "edit applied" : "NO CHANGE"))
     }
 
-    /// Drives the real DarkroomModel the way the sliders do.
+    /// Drives the real DarkroomModel the way the controls do, and checks what comes out.
     @MainActor
     static func runUI(engine: Engine, path: String) async throws {
+        var failures: [String] = []
+        func check(_ ok: Bool, _ what: String) {
+            print((ok ? "  ok    " : "  FAIL  ") + what)
+            if !ok { failures.append(what) }
+        }
+        func luma(_ m: DarkroomModel) -> Double { m.frame.map(meanLuma) ?? 0 }
+        func module(_ m: DarkroomModel, _ op: String) -> ModuleInfo? { m.modules.first { $0.operation == op } }
+        func field(_ m: DarkroomModel, _ mod: ModuleInfo, _ name: String) -> FieldSchema? {
+            m.schema(for: mod)?.fields.first { $0.name == name }
+        }
+
+        // a private copy: the sidecar this test writes must not land in anyone's folder
+        let work = FileManager.default.temporaryDirectory.appending(path: "dtb-selftest-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: work, withIntermediateDirectories: true)
+        let copy = work.appending(path: URL(fileURLWithPath: path).lastPathComponent)
+        try FileManager.default.copyItem(atPath: path, toPath: copy.path)
+        defer { try? FileManager.default.removeItem(at: work) }
+
         let model = DarkroomModel(engine: engine)
         await model.bootstrap(openingFirstArgument: false)
-
-        await model.open(path: path)
+        await model.open(path: copy.path)
         await model.settle()
-        guard let first = model.image else { throw EngineError("no image after open: \(model.status)") }
-        print("open: \(first.width)x\(first.height), luma \(String(format: "%.1f", meanLuma(first))), \(Int(model.lastMilliseconds ?? 0)) ms, stack: [\(describe(model.buildStack()))]")
 
-        func spec(_ id: String) -> SliderSpec { Catalog.spec(id)! }
-        var results: [(String, Double, Double)] = []   // label, luma, ms
+        print("open")
+        check(model.frame != nil, "a frame is on screen")
+        check(model.modules.count > 40, "module list has \(model.modules.count) modules")
+        check(model.info != nil, "output size known: \(model.info.map { "\($0.processedWidth)x\($0.processedHeight)" } ?? "?")")
+        let base = luma(model)
+        check(model.scopes != nil, "scopes measured")
+        check(model.selectedModule?.operation == "exposure", "exposure is selected first")
 
-        model.set(spec("exposure"), to: 1.0)
-        await model.settle()
-        results.append(("exposure +1.0", meanLuma(model.image!), model.lastMilliseconds ?? 0))
-        print("exposure +1: luma \(String(format: "%.1f", results[0].1)), \(Int(results[0].2)) ms, stack: [\(describe(model.buildStack()))]")
+        print("inspector from introspection")
+        guard let exposure = module(model, "exposure") else { throw EngineError("no exposure module") }
+        for _ in 0..<50 where model.schema(for: exposure) == nil { try await Task.sleep(for: .milliseconds(20)) }
+        let fields = model.schema(for: exposure)?.fields ?? []
+        check(fields.contains { $0.name == "exposure" && $0.kind == .float }, "exposure schema has a float 'exposure' (\(fields.count) fields)")
+        check(fields.contains { $0.kind == .enumeration && $0.options.count >= 2 }, "exposure schema has an enum with labelled options")
+        if let mode = fields.first(where: { $0.kind == .enumeration }) {
+            print("        enum \(mode.name): \(mode.options.map(\.label).joined(separator: ", "))")
+        }
 
-        // shadows lifts the dark end: the picture gets lighter, and the exposure edit stays
-        model.beginScrub()
-        model.set(spec("shadows"), to: 60)
+        print("editing")
+        guard let ev = field(model, exposure, "exposure") else { throw EngineError("no exposure field") }
+        model.setParam(exposure, ev, to: .number(1.0))
         await model.settle()
-        let scrubSize = "\(model.image!.width)x\(model.image!.height)"
-        print("shadows +60 while scrubbing: \(scrubSize), luma \(String(format: "%.1f", meanLuma(model.image!))), \(Int(model.lastMilliseconds ?? 0)) ms")
-        model.endScrub()
+        let up = luma(model)
+        check(up > base + 10, "exposure +1 brightens (\(String(format: "%.1f", base)) -> \(String(format: "%.1f", up)))")
+        check(model.isEnabled(exposure), "changing a control switches the module on")
+        check(model.history.count == 2 && model.historyIndex == 1, "one history step")
+        model.setParam(exposure, ev, to: .number(1.5))
+        model.setParam(exposure, ev, to: .number(1.2))
+        check(model.history.count == 2, "dragging merges into one step")
         await model.settle()
-        let fullSize = "\(model.image!.width)x\(model.image!.height)"
-        print("shadows +60 released: \(fullSize), luma \(String(format: "%.1f", meanLuma(model.image!))), \(Int(model.lastMilliseconds ?? 0)) ms, stack: [\(describe(model.buildStack()))]")
+        print("        edit render \(Int(model.lastMilliseconds ?? 0)) ms")
 
-        model.set(spec("sharpen"), to: 1.0)
+        model.undo()
         await model.settle()
-        print("sharpen 50%: stack: [\(describe(model.buildStack()))]")
+        check(abs(luma(model) - base) < 0.5, "undo returns to the original frame")
+        check(!model.isEnabled(exposure), "undo switches the module back off")
+        model.redo()
+        await model.settle()
+        check(luma(model) > base + 10, "redo restores the edit")
 
-        model.reset(.light)
+        print("enable, blend, reset")
+        if let sharpen = module(model, "sharpen") {
+            model.setEnabled(sharpen, true)
+            check(model.isEnabled(sharpen), "sharpen switched on")
+            model.setEnabled(sharpen, false)
+            check(!model.isEnabled(sharpen), "sharpen switched off again")
+        }
+        model.setBlend(exposure, "mask_mode", to: .number(1), detail: "blend: uniformly")
+        model.setBlend(exposure, "opacity", to: .number(40), detail: "opacity: 40%")
         await model.settle()
-        print("reset light: luma \(String(format: "%.1f", meanLuma(model.image!))), stack: [\(describe(model.buildStack()))]")
+        let half = luma(model)
+        check(half > base + 3 && half < up + 5, "40% opacity lands between original and edit (\(String(format: "%.1f", half)))")
+        let entry = model.buildStack().first { $0.operation == "exposure" }
+        check(entry?.blend["opacity"] == .number(40), "blend travels in the stack entry")
+        model.resetModule(exposure)
+        await model.settle()
+        check(abs(luma(model) - base) < 0.5, "module reset returns to the original frame")
 
-        // export closes the session for the full-size render and must reopen it
-        model.set(spec("exposure"), to: 0.5)
+        print("compare and snapshot")
+        model.setParam(exposure, ev, to: .number(1.0))
         await model.settle()
-        let exportURL = FileManager.default.temporaryDirectory.appending(path: "dtb-selftest-export.jpg")
-        try? FileManager.default.removeItem(at: exportURL)
+        let edited = luma(model)
+        model.showingOriginal = true
+        await model.settle()
+        check(abs(luma(model) - base) < 0.5, "hold-to-compare shows the original")
+        model.showingOriginal = false
+        await model.settle()
+        check(abs(luma(model) - edited) < 0.5, "release returns to the edit")
+        model.takeSnapshot()
+        model.setParam(exposure, ev, to: .number(-1.0))
+        await model.settle()
+        let dark = luma(model)
+        model.showingSnapshot = true
+        await model.settle()
+        check(abs(luma(model) - edited) < 0.5 && dark < edited, "snapshot shows the earlier edit")
+        model.showingSnapshot = false
+        await model.settle()
+
+        print("zoom and probe")
+        model.viewport = CGSize(width: 900, height: 600)
+        model.zoom = .actual
+        await model.settle()
+        let zw = model.frame?.width ?? 0, zh = model.frame?.height ?? 0
+        check(zw > 0 && zw <= Int(900 * model.backingScale) && zh <= Int(600 * model.backingScale),
+              "100% region is viewport sized: \(zw)x\(zh)")
+        model.pan(byFraction: CGSize(width: 0.1, height: 0))
+        await model.settle()
+        check(model.frame != nil, "pan re-renders (\(Int(model.lastMilliseconds ?? 0)) ms)")
+        model.zoom = .fit
+        await model.settle()
+        let pr = model.sample(x: (model.frame?.width ?? 2) / 2, y: (model.frame?.height ?? 2) / 2)
+        check(pr != nil && pr!.r <= 255, "pixel probe reads the frame: \(pr.map { "\($0.r) \($0.g) \($0.b)" } ?? "none")")
+
+        print("scopes")
+        if let s = model.scopes {
+            let peak = s.histogram[3].max() ?? 0
+            check(s.histogram.count == 4 && peak > 0.99, "histogram has data")
+            check((s.waveform.max() ?? 0) > 0.99, "waveform has data")
+            check((s.vectorscope.max() ?? 0) > 0.99, "vectorscope has data")
+        } else { check(false, "scopes measured after edits") }
+
+        print("history jump")
+        model.jump(to: 0)
+        await model.settle()
+        check(abs(luma(model) - base) < 0.5, "jump to step 0 shows the original")
+        model.jump(to: model.history.count - 1)
+        await model.settle()
+
+        print("save and reload")
+        await model.flushSave()
+        check(FileManager.default.fileExists(atPath: copy.path + ".darkroom.json"), "sidecar written next to the raw")
+        let saved = model.edits
+        let reopened = DarkroomModel(engine: engine)
+        await reopened.open(path: copy.path)
+        await reopened.settle()
+        check(reopened.edits == saved && reopened.history.count == model.history.count,
+              "a reopened image restores its edits and history")
+        check(abs(luma(reopened) - dark) < 1.0, "and renders the same frame")
+
+        print("export")
+        let exportURL = work.appending(path: "export.jpg")
         await model.export(to: exportURL)
         let bytes = (try? FileManager.default.attributesOfItem(atPath: exportURL.path)[.size] as? Int) ?? 0
-        print("export: \(model.status); file \(bytes) bytes")
-        model.set(spec("exposure"), to: -0.5)
+        check(bytes > 100_000, "export wrote \(bytes) bytes: \(model.status)")
+        model.setParam(exposure, ev, to: .number(0.3))
         await model.settle()
-        print("after export, session render: \(model.image!.width)x\(model.image!.height), luma \(String(format: "%.1f", meanLuma(model.image!))), \(Int(model.lastMilliseconds ?? 0)) ms")
-        try? FileManager.default.removeItem(at: exportURL)
+        check(model.frame != nil, "session still renders after export (\(Int(model.lastMilliseconds ?? 0)) ms)")
+
+        print(failures.isEmpty ? "\nALL CHECKS PASSED" : "\n\(failures.count) CHECK(S) FAILED")
+        if !failures.isEmpty { exit(1) }
     }
 }

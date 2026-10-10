@@ -7,15 +7,20 @@ public struct EngineError: Error, CustomStringConvertible, Sendable {
     public init(_ description: String) { self.description = description }
 }
 
-/// One edit to apply on top of the image's default pipeline.
+/// One edit to apply on top of the image's imported state.
 public struct StackEntry: Sendable {
     public var operation: String
-    public var params: [String: Double]
+    public var multiPriority: Int
+    public var params: [String: ParamValue]
+    public var blend: [String: ParamValue]
     public var enabled: Bool
 
-    public init(operation: String, params: [String: Double] = [:], enabled: Bool = true) {
+    public init(operation: String, multiPriority: Int = 0, params: [String: ParamValue] = [:],
+                blend: [String: ParamValue] = [:], enabled: Bool = true) {
         self.operation = operation
+        self.multiPriority = multiPriority
         self.params = params
+        self.blend = blend
         self.enabled = enabled
     }
 }
@@ -115,6 +120,60 @@ public actor Engine {
         return try render(path: path, maxSide: maxSide, stack: stack)
     }
 
+    /// The session's modules in pipeline order, in the imported state.
+    public func sessionModules() throws -> [ModuleInfo] {
+        guard let session else { throw EngineError("no image is open") }
+        var err: UnsafeMutablePointer<CChar>?
+        guard let c = dtb_session_modules_json(session, &err) else {
+            throw EngineError(Self.take(err) ?? "could not list modules")
+        }
+        defer { dtb_string_free(c) }
+        return try ModuleInfo.parse(Data(String(cString: c).utf8))
+    }
+
+    public func sessionInfo() -> SessionInfo? {
+        guard let session else { return nil }
+        var pw: Int32 = 0, ph: Int32 = 0, ww: Int32 = 0, wh: Int32 = 0
+        dtb_session_info(session, &pw, &ph, &ww, &wh)
+        return SessionInfo(processedWidth: Int(pw), processedHeight: Int(ph),
+                           workWidth: Int(ww), workHeight: Int(wh))
+    }
+
+    /// One region at an explicit scale (1.0 = full-resolution output), in that scaled
+    /// image's pixels. What a zoomed or panned view needs.
+    public func sessionRenderRegion(stack: [StackEntry], scale: Double, x: Int, y: Int,
+                                    width: Int, height: Int) throws -> RenderedFrame {
+        guard let session else { throw EngineError("no image is open") }
+        let stackJSON: String? = stack.isEmpty ? nil : try Self.json(stack)
+        let t0 = DispatchTime.now().uptimeNanoseconds
+
+        var frame = dtb_frame()
+        var err: UnsafeMutablePointer<CChar>?
+        let rc = dtb_session_render_region(session, stackJSON, scale, Int32(x), Int32(y),
+                                           Int32(width), Int32(height), &frame, &err)
+        if rc != 0 { throw EngineError(Self.take(err) ?? "render failed (\(rc))") }
+        defer { dtb_frame_free(&frame) }
+
+        let ms = Double(DispatchTime.now().uptimeNanoseconds - t0) / 1_000_000
+        return try Self.wrap(frame, milliseconds: ms)
+    }
+
+    private var schemas: [String: ModuleSchema] = [:]
+
+    /// A module's parameter fields: names, ranges, defaults, enum members.
+    public func schema(for operation: String) throws -> ModuleSchema {
+        if let s = schemas[operation] { return s }
+        guard started else { throw EngineError("engine not started") }
+        var err: UnsafeMutablePointer<CChar>?
+        guard let c = dtb_module_schema_json(operation, &err) else {
+            throw EngineError(Self.take(err) ?? "no schema for \(operation)")
+        }
+        defer { dtb_string_free(c) }
+        let s = try ModuleSchema.parse(Data(String(cString: c).utf8))
+        schemas[operation] = s
+        return s
+    }
+
     // MARK: one-shot
 
     /// Render a file (scratch-imported, never written next to the original) into a CGImage
@@ -186,8 +245,15 @@ public actor Engine {
     }
 
     private static func json(_ stack: [StackEntry]) throws -> String {
-        let objs: [[String: Any]] = stack.map {
-            ["operation": $0.operation, "params": $0.params, "enabled": $0.enabled]
+        let objs: [[String: Any]] = stack.map { e in
+            var o: [String: Any] = [
+                "operation": e.operation,
+                "multi_priority": e.multiPriority,
+                "enabled": e.enabled,
+                "params": e.params.mapValues(\.jsonObject),
+            ]
+            if !e.blend.isEmpty { o["blend"] = e.blend.mapValues(\.jsonObject) }
+            return o
         }
         let data = try JSONSerialization.data(withJSONObject: objs)
         return String(decoding: data, as: UTF8.self)

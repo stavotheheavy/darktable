@@ -1,3 +1,4 @@
+import AppKit
 import CoreGraphics
 import DarktableKit
 import Foundation
@@ -5,47 +6,96 @@ import ImageIO
 import Observation
 import UniformTypeIdentifiers
 
-/// Everything the darkroom view shows and does.
+public enum LeftTab: String, CaseIterable, Sendable { case modules = "Modules", history = "History" }
+public enum ScopeMode: String, CaseIterable, Sendable { case histogram = "Histogram", waveform = "Waveform", vectorscope = "Vector" }
+public enum ZoomMode: String, CaseIterable, Sendable { case fit = "Fit", actual = "100%", double = "200%" }
+
+public enum Stage: String, Sendable, CaseIterable { case raw = "Raw", scene = "Scene-referred", display = "Display" }
+
+public struct PixelProbe: Equatable, Sendable {
+    public var x: Int, y: Int
+    public var r: Int, g: Int, b: Int
+}
+
+/// A module as the list shows it: the module plus what the edits make of it.
+public struct ModuleRow: Identifiable, Equatable {
+    public var id: String { module.id }
+    public let module: ModuleInfo
+    public let stage: Stage
+    public let enabled: Bool
+    public let edited: Bool
+    public var title: String {
+        module.multiName.isEmpty ? module.name : "\(module.name) · \(module.multiName)"
+    }
+}
+
+/// Everything the darkroom shows and does.
 ///
-/// Rendering is latest-wins: one render is ever in flight, and if the sliders move
-/// meanwhile the loop renders again with the newest values. While a slider is being
-/// dragged the preview is smaller, so scrubbing stays as responsive as the engine allows.
+/// Edits are a snapshot map of what the user changed on top of darktable's imported
+/// state; every change is a history step, so undo, redo and jumping to any step are
+/// exact. Rendering is latest-wins through the persistent session.
 @MainActor
 @Observable
 public final class DarkroomModel {
-    // what the view shows
-    public private(set) var image: CGImage?
-    public private(set) var original: CGImage?
+    public static let workingSize = 1600
+
+    // image
+    public private(set) var frame: CGImage?
     public private(set) var fileName = "No image"
+    public private(set) var filePath: String?
+    public private(set) var exifLine = ""
     public private(set) var status = "Open a raw to begin"
     public private(set) var lastMilliseconds: Double?
-    public var openTool: Tool? = .light
-    public var showingOriginal = false
+    public private(set) var info: SessionInfo?
 
-    // edit state
-    public private(set) var values: [String: Double] = [:]
-    public private(set) var touched: Set<String> = []
-    public private(set) var isScrubbing = false
+    // modules
+    public private(set) var modules: [ModuleInfo] = []
+    public private(set) var schemas: [String: ModuleSchema] = [:]
+    public var selectedID: String?
+    public var moduleQuery = ""
+    public var activeOnly = false
+    public var showDeprecated = false
 
-    /// The long side every interactive frame is fitted to.
-    public static let workingSize = 1400
+    // edits and history
+    public private(set) var edits: EditMap = [:]
+    public private(set) var history: [HistoryItem] = [HistoryItem(label: "original", detail: "", edits: [:])]
+    public private(set) var historyIndex = 0
+    public private(set) var snapshotEdits: EditMap?
+    public private(set) var snapshotTime: Date?
+
+    // view
+    public var leftTab: LeftTab = .modules
+    public var scopeMode: ScopeMode = .histogram
+    public var zoom: ZoomMode = .fit { didSet { if zoom != oldValue { requestRender() } } }
+    public var showingOriginal = false { didSet { if showingOriginal != oldValue { requestRender() } } }
+    public var showingSnapshot = false { didSet { if showingSnapshot != oldValue { requestRender() } } }
+    public var viewport = CGSize(width: 1000, height: 700)
+    /// Where the zoomed view looks, as 0...1 of the output image.
+    public private(set) var center = CGPoint(x: 0.5, y: 0.5)
+    public private(set) var scopes: ScopeData?
+    public var probe: PixelProbe?
+    public private(set) var saveError: String?
 
     private let engine: Engine
-    private var path: String?
     private var rendering = false
     private var wantsRender = false
+    private var scopeGeneration = 0
+    private var scopeJobs = 0
+    private var saveTask: Task<Void, Never>?
+    public let backingScale: Double = Double(NSScreen.main?.backingScaleFactor ?? 2)
 
     public init(engine: Engine = Engine()) {
         self.engine = engine
     }
 
-    /// For layout checks and previews: a model that already holds a picture.
-    public static func preview(image: CGImage, fileName: String) -> DarkroomModel {
+    /// For layout checks and previews: a model that already holds a picture and modules.
+    public static func preview(image: CGImage, fileName: String, modules: [ModuleInfo] = []) -> DarkroomModel {
         let m = DarkroomModel()
-        m.image = image
-        m.original = image
+        m.frame = image
         m.fileName = fileName
         m.status = "\(image.width) x \(image.height)"
+        m.modules = modules
+        m.scopes = ScopeData.measure(image)
         return m
     }
 
@@ -64,81 +114,294 @@ public final class DarkroomModel {
             status = "Engine did not start: \(error)"
             return
         }
-        if openingFirstArgument, CommandLine.arguments.count > 1 {
-            await open(path: CommandLine.arguments[1])
+        if openingFirstArgument, let arg = CommandLine.arguments.dropFirst().first(where: { !$0.hasPrefix("-") }) {
+            await open(path: arg)
         }
     }
 
     public func open(path: String) async {
-        self.path = path
+        await flushSave()
+        filePath = path
         fileName = URL(fileURLWithPath: path).lastPathComponent
-        values = [:]
-        touched = []
-        original = nil
+        exifLine = Self.exif(of: path)
         status = "Developing…"
+        frame = nil
+        scopes = nil
+        center = CGPoint(x: 0.5, y: 0.5)
+        zoom = .fit
+        showingOriginal = false
+        showingSnapshot = false
+        snapshotEdits = nil
+        snapshotTime = nil
+
         do {
-            // one session per open image: decoded once, edits re-run only what changed
             try await engine.openSession(path: path, maxSide: Self.workingSize)
+            modules = try await engine.sessionModules()
+            info = await engine.sessionInfo()
         } catch {
             status = "\(error)"
             return
         }
-        requestRender()
-    }
 
-    // MARK: editing
-
-    public func value(for spec: SliderSpec) -> Double { values[spec.id] ?? spec.neutral }
-
-    public func set(_ spec: SliderSpec, to v: Double) {
-        values[spec.id] = v
-        touched.insert(spec.id)
-        requestRender()
-    }
-
-    public func beginScrub() { isScrubbing = true }
-
-    public func endScrub() {
-        isScrubbing = false
-    }
-
-    public func reset(_ tool: Tool) {
-        for s in tool.sliders {
-            values[s.id] = nil
-            touched.remove(s.id)
+        if let s = Sidecar.load(for: path) {
+            history = s.history
+            historyIndex = min(max(0, s.index), s.history.count - 1)
+            let known = Set(modules.map(\.id))
+            edits = history[historyIndex].edits.filter { known.contains($0.key) }
+        } else {
+            history = [HistoryItem(label: "original", detail: "", edits: [:])]
+            historyIndex = 0
+            edits = [:]
         }
+
+        selectedID = modules.first { $0.operation == "exposure" }?.id ?? modules.first?.id
+        if let sel = selectedID, let m = modules.first(where: { $0.id == sel }) { await loadSchema(for: m) }
         requestRender()
     }
 
-    public func toggle(_ tool: Tool) {
-        openTool = (openTool == tool) ? nil : tool
+    // MARK: module list
+
+    private var stageAnchors: (demosaic: Int, tone: Int) {
+        let demosaic = modules.first { $0.operation == "demosaic" }?.iopOrder ?? Int.min
+        let tone = modules.first { ["filmicrgb", "sigmoid", "agx"].contains($0.operation) }?.iopOrder ?? Int.max
+        return (demosaic, tone)
     }
 
-    public var isEdited: Bool { !touched.isEmpty }
+    public func stage(of m: ModuleInfo) -> Stage {
+        let a = stageAnchors
+        if m.iopOrder <= a.demosaic { return .raw }
+        if m.iopOrder <= a.tone { return .scene }
+        return .display
+    }
 
-    /// One stack entry per module that has a touched slider. A touched module gets all
-    /// of its exposed fields, untouched ones at their neutral value, so moving one
-    /// slider never drags in another field's module default.
-    public func buildStack() -> [StackEntry] {
-        let modules = Set(touched.compactMap { Catalog.spec($0)?.module })
-        var fields: [String: [String: Double]] = [:]
-        for spec in Catalog.all where modules.contains(spec.module) {
-            fields[spec.module, default: [:]][spec.field] = values[spec.id] ?? spec.neutral
+    public func isEnabled(_ m: ModuleInfo) -> Bool { edits[m.id]?.enabled ?? m.enabled }
+
+    public func isEdited(_ m: ModuleInfo) -> Bool {
+        guard let e = edits[m.id] else { return false }
+        return !e.isEmpty
+    }
+
+    public var moduleRows: [ModuleRow] {
+        let q = moduleQuery.trimmingCharacters(in: .whitespaces).lowercased()
+        return modules.compactMap { m in
+            if m.deprecated && !showDeprecated && !isEnabled(m) { return nil }
+            let on = isEnabled(m)
+            if activeOnly && !on { return nil }
+            if !q.isEmpty,
+               !m.name.lowercased().contains(q),
+               !m.operation.lowercased().contains(q),
+               !m.multiName.lowercased().contains(q) { return nil }
+            return ModuleRow(module: m, stage: stage(of: m), enabled: on, edited: isEdited(m))
         }
-        return fields.keys.sorted().map { StackEntry(operation: $0, params: fields[$0] ?? [:]) }
     }
 
-    // MARK: rendering
+    public var selectedModule: ModuleInfo? { modules.first { $0.id == selectedID } }
 
-    /// Returns once no render is running or queued. For headless callers and tests.
-    public func settle() async {
-        while rendering || wantsRender { try? await Task.sleep(for: .milliseconds(10)) }
+    public func select(_ m: ModuleInfo) {
+        selectedID = m.id
+        Task { await loadSchema(for: m) }
     }
 
-    private func requestRender() {
+    private func loadSchema(for m: ModuleInfo) async {
+        guard m.haveIntrospection, schemas[m.operation] == nil else { return }
+        if let s = try? await engine.schema(for: m.operation) { schemas[m.operation] = s }
+    }
+
+    // MARK: parameters
+
+    public func schema(for m: ModuleInfo) -> ModuleSchema? { schemas[m.operation] }
+
+    public func base(_ m: ModuleInfo, _ f: FieldSchema) -> ParamValue {
+        m.params[f.name] ?? f.defaultValue
+    }
+
+    public func value(_ m: ModuleInfo, _ f: FieldSchema) -> ParamValue {
+        edits[m.id]?.params[f.name] ?? base(m, f)
+    }
+
+    public func isChanged(_ m: ModuleInfo, _ f: FieldSchema) -> Bool {
+        edits[m.id]?.params[f.name] != nil
+    }
+
+    /// The label a step gets: "exposure", or "color balance rgb · skin".
+    private func title(_ m: ModuleInfo) -> String {
+        m.multiName.isEmpty ? m.name : "\(m.name) · \(m.multiName)"
+    }
+
+    public func setParam(_ m: ModuleInfo, _ f: FieldSchema, to v: ParamValue) {
+        var value = v
+        if case .number(var d) = v {
+            if f.hasUsableRange { d = min(max(d, f.min), f.max) }
+            if f.kind == .int { d = d.rounded() }
+            value = .number(d)
+        }
+        var e = edits[m.id] ?? ModuleEdit()
+        if value == base(m, f) { e.params[f.name] = nil } else { e.params[f.name] = value }
+        // changing a control on a module that is off turns it on, like the darkroom does
+        if !m.enabled, e.enabled == nil, !e.params.isEmpty, !m.hideEnableButton { e.enabled = true }
+        commit(id: m.id, edit: e, label: title(m), detail: "\(f.label): \(describe(value, f))",
+               target: "\(m.id).\(f.name)")
+    }
+
+    public func resetParam(_ m: ModuleInfo, _ f: FieldSchema) {
+        setParam(m, f, to: base(m, f))
+    }
+
+    public func setEnabled(_ m: ModuleInfo, _ on: Bool) {
+        var e = edits[m.id] ?? ModuleEdit()
+        e.enabled = (on == m.enabled) ? nil : on
+        commit(id: m.id, edit: e, label: title(m), detail: on ? "enabled" : "disabled",
+               target: "\(m.id).enabled")
+    }
+
+    public func toggleEnabled(_ m: ModuleInfo) { setEnabled(m, !isEnabled(m)) }
+
+    public func resetModule(_ m: ModuleInfo) {
+        commit(id: m.id, edit: ModuleEdit(), label: title(m), detail: "reset", target: nil)
+    }
+
+    // MARK: blend
+
+    private func blendBase(_ m: ModuleInfo, _ key: String) -> ParamValue? {
+        guard let b = m.blend else { return nil }
+        switch key {
+        case "mask_mode": return .number(Double(b.maskMode))
+        case "blend_mode": return .number(Double(b.blendMode))
+        case "reverse": return .bool(b.reverse)
+        case "opacity": return .number(b.opacity)
+        case "blend_parameter": return .number(b.blendParameter)
+        case "feathering_radius": return .number(b.featheringRadius)
+        case "blur_radius": return .number(b.blurRadius)
+        case "contrast": return .number(b.contrast)
+        case "brightness": return .number(b.brightness)
+        default: return nil
+        }
+    }
+
+    public func blendValue(_ m: ModuleInfo, _ key: String) -> ParamValue? {
+        edits[m.id]?.blend[key] ?? blendBase(m, key)
+    }
+
+    public func setBlend(_ m: ModuleInfo, _ key: String, to v: ParamValue, detail: String) {
+        var e = edits[m.id] ?? ModuleEdit()
+        if v == blendBase(m, key) { e.blend[key] = nil } else { e.blend[key] = v }
+        if !m.enabled, e.enabled == nil, !e.blend.isEmpty { e.enabled = true }
+        commit(id: m.id, edit: e, label: title(m), detail: detail, target: "\(m.id).blend.\(key)")
+    }
+
+    // MARK: history
+
+    private func commit(id: String, edit: ModuleEdit, label: String, detail: String, target: String?) {
+        var next = edits
+        if edit.isEmpty { next[id] = nil } else { next[id] = edit }
+        guard next != edits else { return }
+        edits = next
+
+        let now = Date()
+        // dragging a slider is one step, not hundreds
+        if let t = target, historyIndex == history.count - 1, historyIndex > 0,
+           history[historyIndex].target == t, now.timeIntervalSince(history[historyIndex].time) < 1.5 {
+            history[historyIndex].edits = next
+            history[historyIndex].detail = detail
+            history[historyIndex].time = now
+        } else {
+            history = Array(history[0...historyIndex])
+            history.append(HistoryItem(label: label, detail: detail, edits: next, target: target, time: now))
+            historyIndex = history.count - 1
+        }
+        changed()
+    }
+
+    public var canUndo: Bool { historyIndex > 0 }
+    public var canRedo: Bool { historyIndex < history.count - 1 }
+
+    public func undo() { if canUndo { jump(to: historyIndex - 1) } }
+    public func redo() { if canRedo { jump(to: historyIndex + 1) } }
+
+    public func jump(to index: Int) {
+        guard history.indices.contains(index), index != historyIndex else { return }
+        historyIndex = index
+        edits = history[index].edits
+        changed()
+    }
+
+    // MARK: snapshot
+
+    public func takeSnapshot() {
+        snapshotEdits = edits
+        snapshotTime = Date()
+    }
+
+    public func clearSnapshot() {
+        snapshotEdits = nil
+        snapshotTime = nil
+        showingSnapshot = false
+    }
+
+    // MARK: view
+
+    public var displayScale: Double {
+        switch zoom {
+        case .fit: return 0
+        case .actual: return 1
+        case .double: return 2
+        }
+    }
+
+    public func pan(byFraction d: CGSize) {
+        guard zoom != .fit else { return }
+        setCenter(CGPoint(x: center.x + d.width, y: center.y + d.height))
+    }
+
+    public func setCenter(_ p: CGPoint) {
+        center = CGPoint(x: min(max(0, p.x), 1), y: min(max(0, p.y), 1))
+        requestRender()
+    }
+
+    /// Sample the displayed frame; x and y are in the frame's own pixels.
+    public func sample(x: Int, y: Int) -> PixelProbe? {
+        guard let f = frame, x >= 0, y >= 0, x < f.width, y < f.height,
+              let data = f.dataProvider?.data, let p = CFDataGetBytePtr(data) else { return nil }
+        let o = y * f.bytesPerRow + x * 4
+        return PixelProbe(x: x, y: y, r: Int(p[o + 2]), g: Int(p[o + 1]), b: Int(p[o]))
+    }
+
+    // MARK: stack and rendering
+
+    public func stack(for map: EditMap) -> [StackEntry] {
+        let byID = Dictionary(uniqueKeysWithValues: modules.map { ($0.id, $0) })
+        return map.compactMap { id, e -> (Int, StackEntry)? in
+            guard !e.isEmpty, let m = byID[id] else { return nil }
+            return (m.iopOrder, StackEntry(
+                operation: m.operation, multiPriority: m.multiPriority,
+                params: e.params, blend: e.blend, enabled: e.enabled ?? m.enabled))
+        }
+        .sorted { $0.0 < $1.0 }
+        .map(\.1)
+    }
+
+    public func buildStack() -> [StackEntry] { stack(for: edits) }
+
+    private func changed() {
+        requestRender()
+        scheduleSave()
+    }
+
+    private var shownEdits: EditMap {
+        if showingOriginal { return [:] }
+        if showingSnapshot, let s = snapshotEdits { return s }
+        return edits
+    }
+
+    public func requestRender() {
         wantsRender = true
         guard !rendering else { return }
         Task { await renderLoop() }
+    }
+
+    /// Returns once no render is running or queued. For headless callers and tests.
+    public func settle() async {
+        while rendering || wantsRender || scopeJobs > 0 { try? await Task.sleep(for: .milliseconds(10)) }
     }
 
     private func renderLoop() async {
@@ -148,17 +411,78 @@ public final class DarkroomModel {
 
         while wantsRender {
             wantsRender = false
-            guard path != nil else { return }
-            let stack = buildStack()
+            guard filePath != nil else { return }
+            let entries = stack(for: shownEdits)
             do {
-                let frame = try await engine.sessionRender(stack: stack)
-                image = frame.image
-                lastMilliseconds = frame.milliseconds
-                status = "\(frame.width) x \(frame.height)"
-                if stack.isEmpty { original = frame.image }
+                let result: RenderedFrame
+                if zoom == .fit || info == nil {
+                    result = try await engine.sessionRender(stack: entries)
+                } else {
+                    let r = region()
+                    result = try await engine.sessionRenderRegion(
+                        stack: entries, scale: r.scale, x: r.x, y: r.y, width: r.w, height: r.h)
+                }
+                frame = result.image
+                lastMilliseconds = result.milliseconds
+                status = "\(result.width) x \(result.height)"
+                if !showingOriginal { measureScopes(result.image) }
             } catch {
                 status = "\(error)"
             }
+        }
+    }
+
+    private func region() -> (scale: Double, x: Int, y: Int, w: Int, h: Int) {
+        let scale = displayScale
+        let imgW = Double(info?.processedWidth ?? 1) * scale
+        let imgH = Double(info?.processedHeight ?? 1) * scale
+        let w = max(1, min(Int(viewport.width * backingScale), Int(imgW)))
+        let h = max(1, min(Int(viewport.height * backingScale), Int(imgH)))
+        let x = Int((center.x * imgW) - Double(w) / 2)
+        let y = Int((center.y * imgH) - Double(h) / 2)
+        return (scale, min(max(0, x), max(0, Int(imgW) - w)), min(max(0, y), max(0, Int(imgH) - h)), w, h)
+    }
+
+    private func measureScopes(_ image: CGImage) {
+        scopeGeneration += 1
+        scopeJobs += 1
+        let gen = scopeGeneration
+        Task { [weak self] in
+            // measured off the main actor; only the newest frame's result is kept
+            let data = await Task.detached(priority: .utility) {
+                ScopeData.measure(image, stride: 3)
+            }.value
+            guard let self else { return }
+            self.scopeJobs -= 1
+            if self.scopeGeneration == gen { self.scopes = data }
+        }
+    }
+
+    // MARK: save
+
+    private func scheduleSave() {
+        saveTask?.cancel()
+        saveTask = Task { [weak self] in
+            try? await Task.sleep(for: .milliseconds(800))
+            if Task.isCancelled { return }
+            await self?.flushSave()
+        }
+    }
+
+    public func flushSave() async {
+        saveTask?.cancel()
+        guard let path = filePath else { return }
+        let hasEdits = history.count > 1
+        let url = Sidecar.url(for: path)
+        do {
+            if hasEdits {
+                try Sidecar(history: history, index: historyIndex).save(for: path)
+            } else if FileManager.default.fileExists(atPath: url.path) {
+                try FileManager.default.removeItem(at: url)
+            }
+            saveError = nil
+        } catch {
+            saveError = "Could not save edits: \(error.localizedDescription)"
         }
     }
 
@@ -167,31 +491,56 @@ public final class DarkroomModel {
     /// Full-size JPEG of the current edit. The bound is the sensor's own long side, so
     /// darktable's upscale flag cannot enlarge the picture beyond the original.
     public func export(to url: URL) async {
-        guard let path else { return }
+        guard let path = filePath else { return }
         status = "Exporting…"
         let bound = Self.longSide(of: path) ?? 4096
         do {
-            let frame = try await engine.exportRender(path: path, maxSide: bound, stack: buildStack())
+            let result = try await engine.exportRender(path: path, maxSide: bound, stack: buildStack())
             guard let dest = CGImageDestinationCreateWithURL(
                 url as CFURL, UTType.jpeg.identifier as CFString, 1, nil)
             else { throw EngineError("cannot create \(url.lastPathComponent)") }
             CGImageDestinationAddImage(
-                dest, frame.image,
+                dest, result.image,
                 [kCGImageDestinationLossyCompressionQuality: 0.92] as CFDictionary)
             guard CGImageDestinationFinalize(dest) else { throw EngineError("cannot write \(url.lastPathComponent)") }
-            status = "Exported \(frame.width) x \(frame.height) to \(url.lastPathComponent)"
+            status = "Exported \(result.width) x \(result.height) to \(url.lastPathComponent)"
         } catch {
             status = "Export failed: \(error)"
         }
+        requestRender()
+    }
+
+    // MARK: helpers
+
+    private func describe(_ v: ParamValue, _ f: FieldSchema) -> String {
+        switch v {
+        case .number(let d): return f.kind == .int ? String(Int(d)) : String(format: "%.3g", d)
+        case .bool(let b): return b ? "on" : "off"
+        case .option(let s): return f.options.first { $0.name == s }?.label ?? s
+        }
+    }
+
+    private static func properties(of path: String) -> [CFString: Any]? {
+        guard let src = CGImageSourceCreateWithURL(URL(fileURLWithPath: path) as CFURL, nil) else { return nil }
+        return CGImageSourceCopyPropertiesAtIndex(src, 0, nil) as? [CFString: Any]
     }
 
     private static func longSide(of path: String) -> Int? {
-        guard
-            let src = CGImageSourceCreateWithURL(URL(fileURLWithPath: path) as CFURL, nil),
-            let props = CGImageSourceCopyPropertiesAtIndex(src, 0, nil) as? [CFString: Any],
-            let w = props[kCGImagePropertyPixelWidth] as? Int,
-            let h = props[kCGImagePropertyPixelHeight] as? Int
-        else { return nil }
+        guard let p = properties(of: path),
+              let w = p[kCGImagePropertyPixelWidth] as? Int,
+              let h = p[kCGImagePropertyPixelHeight] as? Int else { return nil }
         return max(w, h)
+    }
+
+    static func exif(of path: String) -> String {
+        guard let p = properties(of: path), let ex = p[kCGImagePropertyExifDictionary] as? [CFString: Any] else { return "" }
+        var parts: [String] = []
+        if let iso = (ex[kCGImagePropertyExifISOSpeedRatings] as? [Int])?.first { parts.append("ISO \(iso)") }
+        if let f = ex[kCGImagePropertyExifFocalLength] as? Double { parts.append("\(Int(f.rounded())) mm") }
+        if let a = ex[kCGImagePropertyExifFNumber] as? Double { parts.append(String(format: "f/%.1f", a)) }
+        if let t = ex[kCGImagePropertyExifExposureTime] as? Double, t > 0 {
+            parts.append(t >= 1 ? String(format: "%.1f s", t) : "1/\(Int((1 / t).rounded()))")
+        }
+        return parts.joined(separator: " · ")
     }
 }
