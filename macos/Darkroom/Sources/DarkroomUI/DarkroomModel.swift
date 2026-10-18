@@ -67,6 +67,10 @@ public final class DarkroomModel {
     // view
     /// The header's Hide UI: every panel fades out so the photo is seen whole.
     public var uiHidden = false
+    /// Simple or Pro, remembered between launches; the same file and edits either way.
+    public var mode: EditMode = EditMode.load() {
+        didSet { UserDefaults.standard.set(mode.rawValue, forKey: EditMode.key) }
+    }
     public var leftTab: LeftTab = .modules
     public var scopeMode: ScopeMode = .histogram
     public var zoom: ZoomMode = .fit { didSet { if zoom != oldValue { requestRender() } } }
@@ -211,7 +215,7 @@ public final class DarkroomModel {
         Task { await loadSchema(for: m) }
     }
 
-    private func loadSchema(for m: ModuleInfo) async {
+    func loadSchema(for m: ModuleInfo) async {
         guard m.haveIntrospection, schemas[m.operation] == nil else { return }
         if let s = try? await engine.schema(for: m.operation) { schemas[m.operation] = s }
     }

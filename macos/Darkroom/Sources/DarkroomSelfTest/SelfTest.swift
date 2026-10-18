@@ -274,6 +274,29 @@ struct SelfTest {
               "a reopened image restores its edits and history")
         check(abs(luma(reopened) - dark) < 1.0, "and renders the same frame")
 
+        print("simple mode")
+        let simple = reopened
+        simple.mode = .simple
+        await simple.prepareSimple()
+        check(simple.simpleReady, "the five sliders found their modules")
+        simple.jump(to: 0)
+        await simple.settle()
+        let s0 = luma(simple)
+        simple.setSimple(.light, to: 50)
+        await simple.settle()
+        check(luma(simple) > s0 + 3, "Light +50 brightens the frame (\(String(format: "%.1f", s0)) to \(String(format: "%.1f", luma(simple))))")
+        check(abs(simple.simpleValue(.light) - 50) < 1, "the slider reads back from the real parameter")
+        simple.setSimple(.light, to: 0)
+        simple.apply(SimpleLook.all[1])
+        await simple.settle()
+        check(abs(simple.simpleValue(.warmth) - 55) < 2, "a look sets Warmth to its value (\(String(format: "%.0f", simple.simpleValue(.warmth))))")
+        check(simple.customEditCount == 0, "Simple edits alone leave no custom edits")
+        if let shadhi = module(simple, "shadhi") {
+            simple.setEnabled(shadhi, true)
+            check(simple.customEditCount == 1, "a Pro edit shows up as one custom edit")
+        }
+        simple.mode = .pro
+
         print("export")
         let exportURL = work.appending(path: "export.jpg")
         await model.export(to: exportURL)

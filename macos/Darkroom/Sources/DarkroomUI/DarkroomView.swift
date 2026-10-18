@@ -22,25 +22,32 @@ public struct DarkroomView: View {
 
             VStack(spacing: 0) {
                 TopBar(model: model, choosing: $choosing)
-                HStack(alignment: .top, spacing: 0) {
-                    LeftPanel(model: model)
-                        .frame(width: Self.panelWidth)
-                    Spacer(minLength: 0)
-                    RightColumn(model: model)
-                        .frame(width: Self.panelWidth)
+                if model.mode == .pro {
+                    HStack(alignment: .top, spacing: 0) {
+                        LeftPanel(model: model)
+                            .frame(width: Self.panelWidth)
+                        Spacer(minLength: 0)
+                        RightColumn(model: model)
+                            .frame(width: Self.panelWidth)
+                    }
+                    .padding(.top, 12)
+                    .chrome(hidden: model.uiHidden)
                 }
-                .padding(.top, 12)
-                .chrome(hidden: model.uiHidden)
                 Spacer(minLength: 0)
             }
             .padding(Self.margin)
 
-            VStack {
-                Spacer()
-                ReadoutBar(model: model)
-                    .padding(.bottom, Self.margin)
+            if model.mode == .pro {
+                VStack {
+                    Spacer()
+                    ReadoutBar(model: model)
+                        .padding(.bottom, Self.margin)
+                }
+                .chrome(hidden: model.uiHidden)
+            } else {
+                SimpleChrome(model: model)
+                    .chrome(hidden: model.uiHidden)
             }
-            .chrome(hidden: model.uiHidden)
 
             // keyboard routes: instant, because a key that is pressed often should not animate
             Group {
@@ -167,6 +174,7 @@ struct TopBar: View {
         GlassEffectContainer(spacing: 12) {
             HStack(spacing: 12) {
                 fileCapsule.chrome(hidden: model.uiHidden)
+                ModeSwitch(model: model).chrome(hidden: model.uiHidden)
                 Spacer(minLength: 8)
                 toolsCapsule.chrome(hidden: model.uiHidden)
                 Spacer(minLength: 8)
