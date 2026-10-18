@@ -637,20 +637,42 @@ struct BlendSection: View {
     }
 }
 
-/// The window's root: owns the model and starts the engine.
+/// The window's root: owns the engine, the library and the darkroom, and starts the engine.
 public struct DarkroomRoot: View {
-    @State private var model = DarkroomModel()
+    @State private var model: DarkroomModel
+    @State private var library: LibraryModel
+    @State private var screen: Screen
 
-    public init() {}
+    @MainActor public init() {
+        let engine = Engine()
+        _model = State(initialValue: DarkroomModel(engine: engine))
+        _library = State(initialValue: LibraryModel(engine: engine))
+        // a launch file (DARKROOM_OPEN or --open=) goes straight to the darkroom
+        let launching = DarkroomModel.launchPath(env: ProcessInfo.processInfo.environment) != nil
+        _screen = State(initialValue: launching ? .darkroom : .library)
+    }
 
     public var body: some View {
-        DarkroomView(model: model)
-            .task {
-                await model.bootstrap()
-                await AutoTest.runIfRequested(model: model)
+        ZStack {
+            switch screen {
+            case .library: LibraryView(library: library, open: openPhoto)
+            case .darkroom: DarkroomView(model: model)
             }
-            .onOpenURL { url in
-                if url.isFileURL { Task { await model.open(path: url.path) } }
-            }
+        }
+        .task {
+            model.onBack = { screen = .library; library.paused = false }
+            await model.bootstrap()
+            if screen == .library, let f = library.restoredFolder { library.load(folder: f) }
+            await AutoTest.runIfRequested(model: model)
+        }
+        .onOpenURL { url in
+            if url.isFileURL { openPhoto(url.path) }
+        }
+    }
+
+    private func openPhoto(_ path: String) {
+        screen = .darkroom
+        library.paused = true   // thumbnails share the engine, so they wait while you edit
+        Task { await model.open(path: path) }
     }
 }

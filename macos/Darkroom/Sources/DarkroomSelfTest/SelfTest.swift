@@ -1,4 +1,5 @@
 import CoreGraphics
+import CoreImage
 import DarkroomUI
 import DarktableKit
 import Foundation
@@ -296,6 +297,47 @@ struct SelfTest {
             check(simple.customEditCount == 1, "a Pro edit shows up as one custom edit")
         }
         simple.mode = .pro
+
+        print("culling")
+        let other = ["IMG_2448.CR2", "img_3759.cr2"].map { NSHomeDirectory() + "/Downloads/" + $0 }.first {
+            FileManager.default.fileExists(atPath: $0) && $0 != path
+        }
+        if let other, let thumb = try? await engine.render(path: other, maxSide: 480).image {
+            let ci = CIImage(cgImage: thumb)
+            let blurred = ci.applyingFilter("CIGaussianBlur", parameters: [kCIInputRadiusKey: 6]).cropped(to: ci.extent)
+            if let soft = CIContext().createCGImage(blurred, from: ci.extent) {
+                let a = Culling.sharpness(of: thumb), b = Culling.sharpness(of: soft)
+                check(a > b + 10, "a blurred copy scores clearly lower (\(String(format: "%.0f", a)) vs \(String(format: "%.0f", b)))")
+                check(Culling.distance(Culling.averageHash(of: thumb), Culling.averageHash(of: soft)) <= 10, "a blurred copy still hashes close to the original")
+            }
+        } else { check(false, "a second raw was available to score") }
+        let t0 = Date(), hA: UInt64 = 0xF0F0_F0F0_F0F0_F0F0
+        let groups = Culling.stacks(dates: [t0, t0.addingTimeInterval(3), t0.addingTimeInterval(120), t0.addingTimeInterval(122)],
+                                    hashes: [hA, hA ^ 0b111, hA, ~hA])
+        check(groups[0] != nil && groups[0] == groups[1], "frames seconds apart that look alike share a stack")
+        check(groups[2] == nil && groups[3] == nil, "a distant frame, and a different-looking one, stand alone")
+
+        print("library")
+        let lib = LibraryModel(engine: engine)
+        let libDir = work.appending(path: "library")
+        try? FileManager.default.createDirectory(at: libDir, withIntermediateDirectories: true)
+        let raws = ((try? FileManager.default.contentsOfDirectory(atPath: NSHomeDirectory() + "/Downloads")) ?? [])
+            .filter { $0.lowercased().hasSuffix(".cr2") }.sorted().prefix(4)
+        for r in raws {
+            try? FileManager.default.createSymbolicLink(at: libDir.appending(path: r), withDestinationURL: URL(fileURLWithPath: NSHomeDirectory() + "/Downloads/" + r))
+        }
+        lib.load(folder: libDir)
+        check(lib.items.count == raws.count && raws.count > 0, "the library lists \(lib.items.count) photos from a folder")
+        for _ in 0..<240 where lib.scored < lib.items.count { try? await Task.sleep(for: .milliseconds(500)) }
+        check(lib.scored == lib.items.count, "every thumbnail was developed and scored (\(lib.scored))")
+        check(lib.items.allSatisfy { $0.thumb != nil && ($0.sharpness ?? -1) >= 0 }, "each has a thumbnail and a sharpness score")
+        if let first = lib.items.first {
+            lib.setRating(4, for: first.path)
+            lib.toggleReject(first.path)
+            check(lib.items[0].rejected && lib.items[0].rating == 0, "rejecting clears the stars")
+            lib.toggleReject(first.path)
+            lib.setRating(0, for: first.path)
+        }
 
         print("export")
         let exportURL = work.appending(path: "export.jpg")

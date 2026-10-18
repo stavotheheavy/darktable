@@ -185,6 +185,12 @@ struct TopBar: View {
 
     private var fileCapsule: some View {
         HStack(spacing: 10) {
+            if let back = model.onBack {
+                Button(action: back) { Image(systemName: "chevron.left").frame(width: 30, height: 30) }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("Back to the library")
+                    .accessibilityIdentifier("back")
+            }
             Button { choosing = true } label: {
                 Image(systemName: "photo.on.rectangle").frame(width: 30, height: 30)
             }

@@ -67,6 +67,8 @@ public final class DarkroomModel {
     // view
     /// The header's Hide UI: every panel fades out so the photo is seen whole.
     public var uiHidden = false
+    /// Set by the window root so the darkroom can return to the library.
+    public var onBack: (() -> Void)?
     /// Simple or Pro, remembered between launches; the same file and edits either way.
     public var mode: EditMode = EditMode.load() {
         didSet { UserDefaults.standard.set(mode.rawValue, forKey: EditMode.key) }
