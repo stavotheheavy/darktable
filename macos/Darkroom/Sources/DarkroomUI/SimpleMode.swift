@@ -136,6 +136,19 @@ extension DarkroomModel {
         for c in SimpleControl.allCases { setSimple(c, to: look.values[c] ?? 0) }
     }
 
+    /// True when something other than this slider has changed the module behind it, in Pro:
+    /// another parameter on the same module, or a mask or blend. The slider then shows a dot.
+    public func simpleTouchedByPro(_ c: SimpleControl) -> Bool {
+        let (op, owned): (String, Set<String>) = switch c {
+        case .light: ("exposure", ["exposure"])
+        case .contrast, .color: ("colorbalancergb", ["contrast", "vibrance", "saturation_global"])
+        case .warmth: ("temperature", ["red", "blue"])
+        case .detail: ("sharpen", ["amount"])
+        }
+        guard let m = module(op), let e = edits[m.id] else { return false }
+        return !Set(e.params.keys).subtracting(owned).isEmpty || !e.blend.isEmpty
+    }
+
     /// Edited modules Simple has no slider for, so the panel can say what Pro changed.
     public var customEditCount: Int {
         moduleRows.filter { $0.edited && !Self.simpleOperations.contains($0.module.operation) }.count
@@ -182,6 +195,10 @@ struct SimplePanel: View {
                 VStack(spacing: 0) {
                     HStack {
                         Text(c.rawValue).font(.callout.weight(.medium))
+                        if model.simpleTouchedByPro(c) {
+                            Circle().fill(Theme.accent).frame(width: 7, height: 7)
+                                .accessibilityLabel("Also edited in Pro")
+                        }
                         Spacer()
                         Text(String(format: "%+.0f", model.simpleValue(c)))
                             .font(.caption.monospacedDigit()).foregroundStyle(.secondary)

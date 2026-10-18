@@ -296,6 +296,10 @@ struct SelfTest {
             simple.setEnabled(shadhi, true)
             check(simple.customEditCount == 1, "a Pro edit shows up as one custom edit")
         }
+        if let ex = module(simple, "exposure"), let black = field(simple, ex, "black") {
+            simple.setParam(ex, black, to: .number(0.02))
+            check(simple.simpleTouchedByPro(.light) && !simple.simpleTouchedByPro(.warmth), "a Pro edit on the same module puts a dot on its slider only")
+        }
         simple.mode = .pro
 
         print("culling")

@@ -134,6 +134,25 @@ public final class LibraryModel {
         }
     }
 
+    /// The frames of a stack in capture order.
+    public func members(ofStackWith path: String) -> [LibraryItem] {
+        guard let g = items.first(where: { $0.path == path })?.stack else { return [] }
+        return items.filter { $0.stack == g }.sorted { ($0.date ?? .distantPast) < ($1.date ?? .distantPast) }
+    }
+
+    /// Keeps one frame of a stack and rejects the others. Nothing is deleted.
+    public func keepOnly(_ path: String) {
+        for m in members(ofStackWith: path) where m.path != path {
+            if let i = items.firstIndex(where: { $0.path == m.path }) { items[i].rejected = true; items[i].rating = 0; persist(items[i]) }
+        }
+        if let i = items.firstIndex(where: { $0.path == path }) { items[i].rejected = false; persist(items[i]) }
+    }
+
+    /// A larger developed copy for comparing; not cached, made on demand.
+    public func preview(for path: String) async -> CGImage? {
+        try? await engine.render(path: path, maxSide: 1400).image
+    }
+
     public func setRating(_ r: Int, for path: String) {
         guard let i = items.firstIndex(where: { $0.path == path }) else { return }
         items[i].rating = items[i].rating == r ? 0 : r
@@ -193,6 +212,7 @@ public struct LibraryView: View {
     @Bindable var library: LibraryModel
     let open: (String) -> Void
     @State private var choosing = false
+    @State private var comparing: String?
     @FocusState private var focused: Bool
 
     public init(library: LibraryModel, open: @escaping (String) -> Void) {
@@ -225,6 +245,11 @@ public struct LibraryView: View {
                 if library.selected != nil, !library.items.isEmpty { selectionBar }
             }
             .padding(12)
+
+            if let path = comparing {
+                CompareView(library: library, start: path) { comparing = nil }
+                    .transition(.opacity)
+            }
         }
         .focusable()
         .focused($focused)
@@ -296,6 +321,11 @@ public struct LibraryView: View {
                 Label(sel?.rejected == true ? "Restore" : "Reject", systemImage: "xmark")
             }
             .buttonStyle(FlatCapsuleStyle(on: sel?.rejected == true))
+            if let sel, sel.stack != nil {
+                Button { comparing = sel.path } label: { Label("Compare stack", systemImage: "square.split.2x1") }
+                    .buttonStyle(FlatCapsuleStyle())
+                    .accessibilityIdentifier("compare-stack")
+            }
             Button { if let p = sel?.path { open(p) } } label: { Text("Open in darkroom") }
                 .buttonStyle(PrimaryCapsuleStyle())
                 .accessibilityIdentifier("open-selected")
@@ -378,5 +408,113 @@ private struct EmptyLibrary: View {
                 .accessibilityIdentifier("empty-choose")
             if let restore { Button("Open the last folder", action: restore).buttonStyle(.plain).foregroundStyle(.secondary) }
         }
+    }
+}
+
+
+/// Two frames of one stack side by side, large enough to judge focus. The best frame by
+/// score is pinned on the left; arrow keys move the right-hand frame through the others.
+struct CompareView: View {
+    @Bindable var library: LibraryModel
+    let start: String
+    let close: () -> Void
+    @State private var members: [LibraryItem] = []
+    @State private var pinned = 0
+    @State private var other = 0
+    @State private var frames: [String: CGImage] = [:]
+    @FocusState private var focused: Bool
+
+    var body: some View {
+        ZStack {
+            Color(red: 0.08, green: 0.085, blue: 0.105).ignoresSafeArea()
+            HStack(spacing: 10) {
+                pane(index: pinned, pinned: true)
+                pane(index: other, pinned: false)
+            }
+            .padding(.top, 84).padding(.bottom, 168).padding(.horizontal, 12)
+
+            VStack {
+                HStack {
+                    Button(action: close) { Label("Back to the library", systemImage: "chevron.left") }
+                        .buttonStyle(FlatCapsuleStyle()).padding(8).glassEffect(.regular, in: .capsule)
+                    Spacer()
+                }
+                Spacer()
+                bar
+            }
+            .padding(12)
+        }
+        .focusable().focused($focused).focusEffectDisabled()
+        .onKeyPress(.leftArrow) { step(-1); return .handled }
+        .onKeyPress(.rightArrow) { step(1); return .handled }
+        .onKeyPress(.escape) { close(); return .handled }
+        .onKeyPress("k") {
+            guard members.indices.contains(other) else { return .ignored }
+            library.keepOnly(members[other].path); close(); return .handled
+        }
+        .task {
+            members = library.members(ofStackWith: start)
+            pinned = members.firstIndex { $0.bestInStack } ?? 0
+            other = members.indices.first { $0 != pinned } ?? 0
+            focused = true
+            for m in members { if let f = await library.preview(for: m.path) { frames[m.path] = f } }
+        }
+        .accessibilityIdentifier("compare")
+    }
+
+    private func step(_ d: Int) {
+        let idx = members.indices.filter { $0 != pinned }
+        guard let pos = idx.firstIndex(of: other), !idx.isEmpty else { return }
+        other = idx[(pos + d + idx.count) % idx.count]
+    }
+
+    private func pane(index: Int, pinned isPinned: Bool) -> some View {
+        let m = members.indices.contains(index) ? members[index] : nil
+        return ZStack(alignment: .topLeading) {
+            if let m, let f = frames[m.path] {
+                Image(decorative: f, scale: 1).resizable().scaledToFit().frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else {
+                ProgressView().frame(maxWidth: .infinity, maxHeight: .infinity)
+            }
+            if let m {
+                HStack(spacing: 8) {
+                    Circle().fill(Color(red: 0.44, green: 0.88, blue: 0.69)).frame(width: 7, height: 7)
+                    Text("\(Int(m.sharpness ?? 0))").font(.callout.monospacedDigit())
+                    if m.bestInStack { Text("Best of \(m.stackSize)").font(.callout.weight(.semibold)).foregroundStyle(Theme.accent) }
+                }
+                .padding(.horizontal, 14).frame(height: 40).glassEffect(.regular, in: .capsule).padding(14)
+            }
+        }
+        .clipShape(RoundedRectangle(cornerRadius: 26))
+        .overlay(RoundedRectangle(cornerRadius: 26).strokeBorder(isPinned ? Theme.accent : .white.opacity(0.12), lineWidth: isPinned ? 3 : 1))
+    }
+
+    private var bar: some View {
+        let current = members.indices.contains(other) ? members[other] : nil
+        return VStack(spacing: 8) {
+            HStack(spacing: 10) {
+                Text("Stack of \(members.count)").font(.callout.weight(.semibold))
+                Spacer()
+                Text("\u{2190} \u{2192} switch   K keep right   Esc close").font(.caption.monospaced()).foregroundStyle(.secondary)
+                if let current {
+                    Button { library.keepOnly(current.path); close() } label: { Text("Keep this one") }
+                        .buttonStyle(PrimaryCapsuleStyle())
+                        .accessibilityIdentifier("keep-this")
+                }
+            }
+            HStack(spacing: 8) {
+                ForEach(Array(members.enumerated()), id: \.offset) { i, m in
+                    Group {
+                        if let t = m.thumb { Image(decorative: t, scale: 1).resizable().scaledToFill() } else { Color.white.opacity(0.1) }
+                    }
+                    .frame(width: 64, height: 64).clipShape(RoundedRectangle(cornerRadius: 18))
+                    .overlay(RoundedRectangle(cornerRadius: 18).strokeBorder(i == other ? Theme.accent : .white.opacity(0.12), lineWidth: i == other ? 3 : 1))
+                    .onTapGesture { if i != pinned { other = i } else { pinned = other; other = i } }
+                }
+                Spacer()
+            }
+        }
+        .padding(14)
+        .glassEffect(.regular, in: .rect(cornerRadius: 30))
     }
 }
