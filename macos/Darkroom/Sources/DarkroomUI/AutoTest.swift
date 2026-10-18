@@ -1,6 +1,9 @@
+import AppKit
 import DarktableKit
 import Foundation
+import ImageIO
 import SwiftUI
+import UniformTypeIdentifiers
 
 /// A scripted run inside the real app, switched on by DARKROOM_AUTOTEST. It drives the
 /// model the way a person would, so the actual views render for every module, and it
@@ -28,6 +31,7 @@ public enum AutoTest {
         switch scenario {
         case "modules": await modules(model)
         case "ui": await ui(model)
+        case "shots": await shots(model)
         default:
             await modules(model)
             await ui(model)
@@ -69,6 +73,78 @@ public enum AutoTest {
             await model.settle()
         }
         if !slow.isEmpty { log("slow renders: " + slow.map { "\($0.0) \(Int($0.1)) ms" }.joined(separator: ", ")) }
+    }
+
+    // MARK: pictures of the live window
+
+    /// The app's own window as an image. The window server composites the glass, so this
+    /// is what is on screen, taken without any screen-recording permission because it is
+    /// the app's own window.
+    private static func capture(to path: String) -> Bool {
+        guard let win = NSApp.windows.first(where: { $0.contentView != nil && $0.frame.width > 400 }) else {
+            log("    no window to capture")
+            return false
+        }
+        typealias Create = @convention(c) (CGRect, UInt32, UInt32, UInt32) -> Unmanaged<CGImage>?
+        guard let sym = dlsym(dlopen(nil, RTLD_NOW), "CGWindowListCreateImage") else { return false }
+        let fn = unsafeBitCast(sym, to: Create.self)
+        guard let image = fn(.null, CGWindowListOption.optionIncludingWindow.rawValue,
+                             UInt32(win.windowNumber), CGWindowImageOption.boundsIgnoreFraming.rawValue)?
+            .takeRetainedValue() else { return false }
+        guard let dest = CGImageDestinationCreateWithURL(
+            URL(fileURLWithPath: path) as CFURL, UTType.png.identifier as CFString, 1, nil) else { return false }
+        CGImageDestinationAddImage(dest, image, nil)
+        return CGImageDestinationFinalize(dest)
+    }
+
+    private static func shots(_ model: DarkroomModel) async {
+        let dir = ProcessInfo.processInfo.environment["DARKROOM_SHOTS"] ?? NSTemporaryDirectory()
+        try? FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true)
+        func shot(_ name: String) async {
+            await model.settle()
+            try? await Task.sleep(for: .milliseconds(700))
+            let ok = capture(to: "\(dir)/\(name).png")
+            log("shot \(name): \(ok ? "written" : "FAILED")")
+        }
+        NSApp.activate()
+        await shot("01-default")
+
+        if let cb = model.modules.first(where: { $0.operation == "colorbalancergb" }) {
+            model.select(cb)
+            try? await Task.sleep(for: .milliseconds(400))
+            if let f = model.schema(for: cb)?.fields.first(where: { $0.name == "contrast" }) {
+                model.setParam(cb, f, to: .number(0.25))
+            }
+            await shot("02-colorbalance")
+        }
+        if let ex = model.modules.first(where: { $0.operation == "exposure" }) {
+            model.select(ex)
+            try? await Task.sleep(for: .milliseconds(400))
+            if let f = model.schema(for: ex)?.fields.first(where: { $0.name == "exposure" }) {
+                model.setParam(ex, f, to: .number(0.8))
+            }
+            model.blendOpen = true
+            model.setBlend(ex, "mask_mode", to: .number(1), detail: "blend: uniformly")
+            await shot("03-blend")
+        }
+        model.leftTab = .history
+        await shot("04-history")
+        model.leftTab = .modules
+        model.scopeMode = .waveform
+        await shot("05-waveform")
+        model.scopeMode = .vectorscope
+        await shot("06-vectorscope")
+        model.scopeMode = .histogram
+        model.backdrop = .neutralGrey
+        await shot("07-neutral-grey")
+        model.backdrop = .lightGrey
+        await shot("08-light-grey")
+        model.backdrop = .depthGrey
+        model.viewport = CGSize(width: 1280, height: 800)
+        model.zoom = .actual
+        await shot("09-zoom100")
+        model.zoom = .fit
+        await shot("10-fit")
     }
 
     private static func ui(_ model: DarkroomModel) async {

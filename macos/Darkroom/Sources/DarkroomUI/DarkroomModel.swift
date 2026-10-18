@@ -55,6 +55,7 @@ public final class DarkroomModel {
     public var moduleQuery = ""
     public var activeOnly = false
     public var showDeprecated = false
+    public var blendOpen = false
 
     // edits and history
     public private(set) var edits: EditMap = [:]

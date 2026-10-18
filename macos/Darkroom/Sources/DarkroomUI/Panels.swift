@@ -548,7 +548,7 @@ struct NumberField: View {
 struct BlendSection: View {
     @Bindable var model: DarkroomModel
     let module: ModuleInfo
-    @State private var open = false
+    private var open: Bool { model.blendOpen }
 
     static let modes: [(String, Int)] = [
         ("normal", 0x18), ("multiply", 0x04), ("screen", 0x09), ("overlay", 0x0A), ("soft light", 0x0B),
@@ -561,7 +561,7 @@ struct BlendSection: View {
         let opacity = model.blendValue(module, "opacity")?.double ?? 100
         VStack(alignment: .leading, spacing: 4) {
             Divider().padding(.vertical, 4)
-            Button { withAnimation(.smooth(duration: 0.2)) { open.toggle() } } label: {
+            Button { withAnimation(.smooth(duration: 0.2)) { model.blendOpen.toggle() } } label: {
                 HStack {
                     Text("Blend and mask").font(.callout.weight(.semibold))
                     Spacer()
