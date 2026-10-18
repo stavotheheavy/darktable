@@ -642,6 +642,7 @@ public struct DarkroomRoot: View {
     @State private var model: DarkroomModel
     @State private var library: LibraryModel
     @State private var screen: Screen
+    @State private var welcomed: Bool
 
     @MainActor public init() {
         let engine = Engine()
@@ -650,6 +651,7 @@ public struct DarkroomRoot: View {
         // a launch file (DARKROOM_OPEN or --open=) goes straight to the darkroom
         let launching = DarkroomModel.launchPath(env: ProcessInfo.processInfo.environment) != nil
         _screen = State(initialValue: launching ? .darkroom : .library)
+        _welcomed = State(initialValue: launching || UserDefaults.standard.bool(forKey: "darkroom.welcomed"))
     }
 
     public var body: some View {
@@ -658,11 +660,20 @@ public struct DarkroomRoot: View {
             case .library: LibraryView(library: library, open: openPhoto)
             case .darkroom: DarkroomView(model: model)
             }
+            if !welcomed {
+                WelcomeView { mode, folder in
+                    UserDefaults.standard.set(true, forKey: "darkroom.welcomed")
+                    model.mode = mode
+                    welcomed = true
+                    if let folder { library.load(folder: folder) }
+                }
+                .transition(.opacity)
+            }
         }
         .task {
             model.onBack = { screen = .library; library.paused = false }
             await model.bootstrap()
-            if screen == .library, let f = library.restoredFolder { library.load(folder: f) }
+            if screen == .library, welcomed, let f = library.restoredFolder { library.load(folder: f) }
             await AutoTest.runIfRequested(model: model)
         }
         .onOpenURL { url in
