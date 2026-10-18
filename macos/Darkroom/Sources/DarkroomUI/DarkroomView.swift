@@ -30,6 +30,7 @@ public struct DarkroomView: View {
                         .frame(width: Self.panelWidth)
                 }
                 .padding(.top, 12)
+                .chrome(hidden: model.uiHidden)
                 Spacer(minLength: 0)
             }
             .padding(Self.margin)
@@ -39,6 +40,15 @@ public struct DarkroomView: View {
                 ReadoutBar(model: model)
                     .padding(.bottom, Self.margin)
             }
+            .chrome(hidden: model.uiHidden)
+
+            // keyboard routes: instant, because a key that is pressed often should not animate
+            Group {
+                Button("") { model.uiHidden.toggle() }.keyboardShortcut("h", modifiers: [.command, .shift])
+                Button("") { if model.history.count > 1 { model.showingOriginal.toggle() } }
+                    .keyboardShortcut("\\", modifiers: [.command])
+            }
+            .opacity(0).frame(width: 0, height: 0).allowsHitTesting(false)
         }
         .background(model.backdrop.color)
         .preferredColorScheme(.dark)
@@ -52,6 +62,16 @@ public struct DarkroomView: View {
             }
             return true
         }
+    }
+}
+
+extension View {
+    /// Fades the floating panels out for Hide UI. The fade is opacity only (220 ms ease-out);
+    /// hidden panels also stop taking clicks.
+    func chrome(hidden: Bool) -> some View {
+        self.opacity(hidden ? 0 : 1)
+            .allowsHitTesting(!hidden)
+            .animation(.timingCurve(0.23, 1, 0.32, 1, duration: 0.22), value: hidden)
     }
 }
 
@@ -146,11 +166,11 @@ struct TopBar: View {
     var body: some View {
         GlassEffectContainer(spacing: 12) {
             HStack(spacing: 12) {
-                fileCapsule
+                fileCapsule.chrome(hidden: model.uiHidden)
                 Spacer(minLength: 8)
-                toolsCapsule
+                toolsCapsule.chrome(hidden: model.uiHidden)
                 Spacer(minLength: 8)
-                exportButton
+                rightGroup
             }
         }
     }
@@ -181,18 +201,6 @@ struct TopBar: View {
 
     private var toolsCapsule: some View {
         HStack(spacing: 2) {
-            // hold to see the original
-            Image(systemName: "rectangle.lefthalf.inset.filled")
-                .frame(width: 40, height: 40)
-                .contentShape(Circle())
-                .opacity(model.history.count > 1 ? 1 : 0.4)
-                .onLongPressGesture(minimumDuration: 0, maximumDistance: 60, pressing: { down in
-                    model.showingOriginal = down && model.history.count > 1
-                }, perform: {})
-                .accessibilityLabel("Hold to compare with the original")
-                .accessibilityAddTraits(.isButton)
-                .accessibilityIdentifier("compare")
-
             Menu {
                 Button("Take snapshot") { model.takeSnapshot() }
                 if model.snapshotEdits != nil {
@@ -239,14 +247,36 @@ struct TopBar: View {
         .glassEffect(.regular, in: .capsule)
     }
 
-    private var exportButton: some View {
-        Button(action: export) {
-            Text("Export").font(.callout.weight(.semibold)).padding(.horizontal, 20).padding(.vertical, 12)
+    /// Hide UI, Original and Export. This group stays visible when the panels fade, so the
+    /// way back is always on screen.
+    private var rightGroup: some View {
+        HStack(spacing: 6) {
+            Button {
+                model.uiHidden.toggle()
+            } label: {
+                Label(model.uiHidden ? "Show UI" : "Hide UI",
+                      systemImage: model.uiHidden ? "eye" : "rectangle.split.3x1")
+            }
+            .buttonStyle(FlatCapsuleStyle(on: model.uiHidden))
+            .accessibilityIdentifier("hide-ui")
+
+            Button {
+                model.showingOriginal.toggle()
+            } label: {
+                Label("Original", systemImage: "arrow.uturn.backward")
+            }
+            .buttonStyle(FlatCapsuleStyle(on: model.showingOriginal))
+            .disabled(model.history.count <= 1)
+            .accessibilityLabel("Show the original")
+            .accessibilityIdentifier("original")
+
+            Button(action: export) { Text("Export") }
+                .buttonStyle(PrimaryCapsuleStyle())
+                .disabled(model.frame == nil)
+                .accessibilityIdentifier("export")
         }
-        .buttonStyle(.plain)
-        .glassEffect(.regular.tint(.orange).interactive(), in: .capsule)
-        .disabled(model.frame == nil)
-        .accessibilityIdentifier("export")
+        .padding(8)
+        .glassEffect(.regular, in: .capsule)
     }
 
     private func export() {

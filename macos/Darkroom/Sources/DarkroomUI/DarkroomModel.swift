@@ -65,6 +65,8 @@ public final class DarkroomModel {
     public private(set) var snapshotTime: Date?
 
     // view
+    /// The header's Hide UI: every panel fades out so the photo is seen whole.
+    public var uiHidden = false
     public var leftTab: LeftTab = .modules
     public var scopeMode: ScopeMode = .histogram
     public var zoom: ZoomMode = .fit { didSet { if zoom != oldValue { requestRender() } } }

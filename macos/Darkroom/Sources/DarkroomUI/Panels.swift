@@ -88,7 +88,7 @@ struct ModuleRowView: View {
             Button { model.toggleEnabled(row.module) } label: {
                 Image(systemName: "power")
                     .font(.system(size: 14, weight: .semibold))
-                    .foregroundStyle(row.enabled ? Color.orange : Color.secondary.opacity(0.7))
+                    .foregroundStyle(row.enabled ? Theme.accent : Color.secondary.opacity(0.7))
                     .frame(width: 40, height: 40)
             }
             .buttonStyle(.plain)
@@ -104,7 +104,7 @@ struct ModuleRowView: View {
                         .foregroundStyle(row.enabled ? Color.primary : Color.secondary)
                         .lineLimit(1)
                     if row.edited {
-                        Circle().fill(Color.orange).frame(width: 7, height: 7)
+                        Circle().fill(Theme.accent).frame(width: 7, height: 7)
                     }
                     Spacer(minLength: 0)
                 }
@@ -117,11 +117,11 @@ struct ModuleRowView: View {
             .accessibilityAddTraits(selected ? .isSelected : [])
         }
         .background(
-            selected ? Color.orange.opacity(0.22) : Color.clear,
+            selected ? Theme.accent.opacity(0.22) : Color.clear,
             in: RoundedRectangle(cornerRadius: 12))
         .overlay(
             RoundedRectangle(cornerRadius: 12)
-                .strokeBorder(selected ? Color.orange.opacity(0.5) : .clear, lineWidth: 1))
+                .strokeBorder(selected ? Theme.accent.opacity(0.5) : .clear, lineWidth: 1))
     }
 }
 
@@ -161,7 +161,7 @@ struct HistoryList: View {
                             .frame(height: 44)
                             .opacity(future ? 0.45 : 1)
                             .background(
-                                current ? Color.orange.opacity(0.22) : Color.clear,
+                                current ? Theme.accent.opacity(0.22) : Color.clear,
                                 in: RoundedRectangle(cornerRadius: 12))
                             .contentShape(Rectangle())
                         }
@@ -342,7 +342,7 @@ struct InspectorCard: View {
             Button { model.toggleEnabled(m) } label: {
                 Image(systemName: "power")
                     .font(.system(size: 15, weight: .semibold))
-                    .foregroundStyle(model.isEnabled(m) ? Color.orange : Color.secondary)
+                    .foregroundStyle(model.isEnabled(m) ? Theme.accent : Color.secondary)
                     .frame(width: 36, height: 36)
             }
             .buttonStyle(.plain)
@@ -437,7 +437,7 @@ struct ParamRow: View {
         HStack(spacing: 6) {
             Text(field.label)
                 .font(.footnote)
-                .foregroundStyle(changed ? Color.orange : Color.secondary)
+                .foregroundStyle(changed ? Theme.accent : Color.secondary)
                 .lineLimit(1)
                 .onTapGesture(count: 2) { model.resetParam(module, field) }
                 .help("Double-click to reset")
@@ -455,7 +455,7 @@ struct ParamRow: View {
                     Slider(value: binding, in: lo...hi)
                 }
             }
-            .tint(.orange)
+            .tint(Theme.accent)
             .accessibilityLabel(field.label)
             .accessibilityIdentifier(id)
         }
@@ -470,10 +470,10 @@ struct ParamRow: View {
         ) {
             Text(field.label)
                 .font(.footnote)
-                .foregroundStyle(changed ? Color.orange : Color.primary)
+                .foregroundStyle(changed ? Theme.accent : Color.primary)
         }
         .toggleStyle(.switch)
-        .tint(.orange)
+        .tint(Theme.accent)
         .frame(minHeight: 30)
         .accessibilityIdentifier(id)
     }
@@ -482,7 +482,7 @@ struct ParamRow: View {
         VStack(alignment: .leading, spacing: 3) {
             Text(field.label)
                 .font(.footnote)
-                .foregroundStyle(changed ? Color.orange : Color.secondary)
+                .foregroundStyle(changed ? Theme.accent : Color.secondary)
                 .onTapGesture(count: 2) { model.resetParam(module, field) }
             let binding = Binding<String>(
                 get: { model.value(module, field).option ?? field.options.first?.name ?? "" },
@@ -621,7 +621,7 @@ struct BlendSection: View {
                         }),
                         in: 0...100
                     )
-                    .tint(.orange)
+                    .tint(Theme.accent)
                     .accessibilityLabel("Opacity")
                     .accessibilityIdentifier("blend-opacity")
                     Toggle("Reverse", isOn: Binding(
@@ -629,7 +629,7 @@ struct BlendSection: View {
                         set: { model.setBlend(module, "reverse", to: .bool($0), detail: "blend reversed: \($0 ? "on" : "off")") }))
                         .font(.footnote)
                         .toggleStyle(.switch)
-                        .tint(.orange)
+                        .tint(Theme.accent)
                         .accessibilityIdentifier("blend-reverse")
                 }
             }
