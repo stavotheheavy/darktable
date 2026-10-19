@@ -33,7 +33,9 @@ struct FlatCapsuleStyle: ButtonStyle {
         configuration.label
             .font(.callout.weight(.medium))
             .padding(.horizontal, 14)
-            .frame(height: 40)
+            .frame(height: 44)
+            .lineLimit(1)
+            .fixedSize()
             .background(on ? Theme.selectedFill : Color.white.opacity(0.12), in: Capsule())
             .overlay(Capsule().strokeBorder(on ? Theme.selectedRing : Color.white.opacity(0.16), lineWidth: 1))
             .scaleEffect(configuration.isPressed ? 0.97 : 1)

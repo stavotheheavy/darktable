@@ -290,10 +290,13 @@ public struct LibraryView: View {
             .padding(12)
 
             if let path = comparing {
-                CompareView(library: library, start: path) { comparing = nil }
+                CompareView(library: library, start: path) { comparing = nil; focused = true }
                     .transition(.opacity)
             }
         }
+        // keys go to the grid again whenever the selection or the folder changes, so a click elsewhere
+        // never leaves the arrows and star keys without a receiver
+        .onChange(of: library.selected) { _, _ in focused = true }
         .focusable()
         .focused($focused)
         .focusEffectDisabled()

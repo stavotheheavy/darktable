@@ -151,7 +151,9 @@ public final class Rig {
             "clicks": clicks,
             "library": ["order": library.shown.prefix(6).map { "\($0.name):\(Int($0.sharpness ?? -1))" }, "comparing": library.items.isEmpty ? false : (comparingNow?() ?? false),
                         "items": library.items.count, "scored": library.scored, "failed": library.failed,
-                        "selected": library.selected ?? "", "status": library.status],
+                        "selected": library.selected ?? "",
+                        "selectedRating": library.items.first { $0.path == library.selected }?.rating ?? -1,
+                        "selectedRejected": library.items.first { $0.path == library.selected }?.rejected ?? false, "status": library.status],
         ]
     }
 

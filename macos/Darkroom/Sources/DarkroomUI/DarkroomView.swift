@@ -176,14 +176,23 @@ struct TopBar: View {
 
     var body: some View {
         GlassEffectContainer(spacing: 12) {
-            HStack(spacing: 12) {
-                fileCapsule.chrome(hidden: model.uiHidden)
-                ModeSwitch(model: model).chrome(hidden: model.uiHidden)
-                Spacer(minLength: 8)
-                toolsCapsule.chrome(hidden: model.uiHidden)
-                Spacer(minLength: 8)
-                rightGroup
+            // the first layout that fits wins; at the narrowest window the zoom group and the
+            // button labels give way instead of wrapping or clipping
+            ViewThatFits(in: .horizontal) {
+                row(compact: false)
+                row(compact: true)
             }
+        }
+    }
+
+    private func row(compact: Bool) -> some View {
+        HStack(spacing: 12) {
+            fileCapsule.chrome(hidden: model.uiHidden)
+            ModeSwitch(model: model).chrome(hidden: model.uiHidden)
+            Spacer(minLength: 8)
+            toolsCapsule(compact: compact).chrome(hidden: model.uiHidden)
+            Spacer(minLength: 8)
+            rightGroup(compact: compact)
         }
     }
 
@@ -213,11 +222,11 @@ struct TopBar: View {
         .padding(.leading, 12)
         .padding(.trailing, 18)
         .padding(.vertical, 8)
-        .frame(minWidth: 240, alignment: .leading)
+        .frame(minWidth: 200, alignment: .leading)
         .glassEffect(.regular, in: .capsule)
     }
 
-    private var toolsCapsule: some View {
+    private func toolsCapsule(compact: Bool) -> some View {
         HStack(spacing: 2) {
             Menu {
                 Button("Take snapshot") { model.takeSnapshot() }
@@ -244,6 +253,7 @@ struct TopBar: View {
 
             BackdropMenu(model: model)
 
+            if !compact {
             Divider().frame(height: 22).padding(.horizontal, 6)
 
             ForEach(ZoomMode.allCases, id: \.self) { z in
@@ -251,13 +261,15 @@ struct TopBar: View {
                     Text(z.rawValue)
                         .font(.callout.weight(.medium))
                         .padding(.horizontal, 12)
-                        .frame(height: 36)
+                        
+                        .frame(height: 44)
                         .background(model.zoom == z ? Color.white.opacity(0.22) : .clear, in: Capsule())
                 }
                 .buttonStyle(.plain)
                 .accessibilityLabel("Zoom \(z.rawValue)")
                 .rig("zoom-\(z.rawValue)")
                 .accessibilityAddTraits(model.zoom == z ? .isSelected : [])
+            }
             }
         }
         .padding(.horizontal, 10)
@@ -267,13 +279,13 @@ struct TopBar: View {
 
     /// Hide UI, Original and Export. This group stays visible when the panels fade, so the
     /// way back is always on screen.
-    private var rightGroup: some View {
+    private func rightGroup(compact: Bool) -> some View {
         HStack(spacing: 6) {
             Button {
                 model.uiHidden.toggle()
             } label: {
-                Label(model.uiHidden ? "Show UI" : "Hide UI",
-                      systemImage: model.uiHidden ? "eye" : "rectangle.split.3x1")
+                if compact { Image(systemName: model.uiHidden ? "eye" : "rectangle.split.3x1") }
+                else { Label(model.uiHidden ? "Show UI" : "Hide UI", systemImage: model.uiHidden ? "eye" : "rectangle.split.3x1") }
             }
             .buttonStyle(FlatCapsuleStyle(on: model.uiHidden))
             .rig("hide-ui")
@@ -281,7 +293,7 @@ struct TopBar: View {
             Button {
                 model.showingOriginal.toggle()
             } label: {
-                Label("Original", systemImage: "arrow.uturn.backward")
+                if compact { Image(systemName: "arrow.uturn.backward") } else { Label("Original", systemImage: "arrow.uturn.backward") }
             }
             .buttonStyle(FlatCapsuleStyle(on: model.showingOriginal))
             .disabled(model.history.count <= 1)
@@ -361,3 +373,4 @@ enum ColorMath {
         return (116 * fy - 16, 500 * (fx - fy), 200 * (fy - fz))
     }
 }
+

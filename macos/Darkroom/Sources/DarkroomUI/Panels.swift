@@ -1,3 +1,4 @@
+import AppKit
 import DarktableKit
 import SwiftUI
 
