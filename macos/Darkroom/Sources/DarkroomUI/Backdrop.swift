@@ -1,9 +1,9 @@
 import AppKit
 import SwiftUI
 
-/// What sits behind the photo. Not black by default: a mid-dark grey felt board gives
-/// the photo depth, and a neutral grey is easier to judge tones against. Anyone can
-/// pick their own colour, texture and vignette.
+/// What sits behind the photo. Not black by default: a smooth deep blue-black with a soft
+/// falloff gives the photo depth without competing with it. Anyone can pick their own
+/// colour, texture and vignette; the felt grain is there but off unless chosen.
 public struct BackdropStyle: Codable, Equatable, Sendable, Identifiable {
     public var id: String { name }
     public var name: String
@@ -23,10 +23,13 @@ public struct BackdropStyle: Codable, Equatable, Sendable, Identifiable {
         self.felt = felt; self.vignette = vignette
     }
 
+    /// The default: smooth, deep blue-black with a soft falloff at the edges. No grain.
+    public static let night = BackdropStyle(
+        name: "Night", red: 0.075, green: 0.082, blue: 0.108, felt: 0, vignette: 0.35)
     public static let depthGrey = BackdropStyle(
-        name: "Depth grey", red: 0.24, green: 0.24, blue: 0.255, felt: 0.55, vignette: 0.55)
+        name: "Depth grey", red: 0.24, green: 0.24, blue: 0.255, felt: 0, vignette: 0.55)
     public static let charcoal = BackdropStyle(
-        name: "Charcoal", red: 0.13, green: 0.13, blue: 0.14, felt: 0.2, vignette: 0.3)
+        name: "Charcoal", red: 0.13, green: 0.13, blue: 0.14, felt: 0, vignette: 0.3)
     public static let neutralGrey = BackdropStyle(
         name: "Neutral grey", red: 0.46, green: 0.46, blue: 0.46, felt: 0, vignette: 0)
     public static let lightGrey = BackdropStyle(
@@ -34,7 +37,7 @@ public struct BackdropStyle: Codable, Equatable, Sendable, Identifiable {
     public static let black = BackdropStyle(
         name: "Black", red: 0, green: 0, blue: 0, felt: 0, vignette: 0)
 
-    public static let presets: [BackdropStyle] = [.depthGrey, .charcoal, .neutralGrey, .lightGrey, .black]
+    public static let presets: [BackdropStyle] = [.night, .depthGrey, .charcoal, .neutralGrey, .lightGrey, .black]
 
     /// A custom colour keeps the texture and vignette the user already chose.
     public func with(color: Color) -> BackdropStyle {
@@ -47,11 +50,12 @@ public struct BackdropStyle: Codable, Equatable, Sendable, Identifiable {
 
     // MARK: persistence
 
-    static let key = "darkroom.backdrop"
+    // v2: the first default was a grey felt with visible grain, which the owner did not like
+    static let key = "darkroom.backdrop.v2"
 
     static func load() -> BackdropStyle {
         guard let data = UserDefaults.standard.data(forKey: key),
-              let s = try? JSONDecoder().decode(BackdropStyle.self, from: data) else { return .depthGrey }
+              let s = try? JSONDecoder().decode(BackdropStyle.self, from: data) else { return .night }
         return s
     }
 

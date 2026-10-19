@@ -153,8 +153,12 @@ struct PhotoView: View {
         if model.zoom == .fit {
             // keep clear of the floating panels
             let side = DarkroomView.panelWidth + DarkroomView.margin * 2
-            let area = CGRect(x: side, y: 84, width: max(100, size.width - side * 2),
-                              height: max(100, size.height - 84 - 72))
+            // Simple has one panel on the right and a row of looks along the bottom
+            let simple = model.mode == .simple
+            let left = simple ? DarkroomView.margin * 2 : side
+            let bottom: CGFloat = simple ? 140 : 72
+            let area = CGRect(x: left, y: 84, width: max(100, size.width - left - side),
+                              height: max(100, size.height - 84 - bottom))
             let s = min(area.width / fw, area.height / fh)
             let w = fw * s, h = fh * s
             return CGRect(x: area.midX - w / 2, y: area.midY - h / 2, width: w, height: h)
@@ -284,6 +288,9 @@ struct TopBar: View {
             .accessibilityLabel("Show the original")
             .rig("original")
 
+            if Rig.canary("smalltarget") {
+                Button { } label: { Image(systemName: "gearshape").font(.system(size: 9)) }.buttonStyle(.plain).frame(width: 14, height: 14).rig("canary-gear")
+            }
             Button(action: export) { Text("Export") }
                 .buttonStyle(PrimaryCapsuleStyle())
                 .disabled(model.frame == nil)

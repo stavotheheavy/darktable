@@ -107,8 +107,13 @@ public final class LibraryModel {
         for path in paths {
             while paused, !Task.isCancelled { try? await Task.sleep(for: .milliseconds(300)) }
             if Task.isCancelled { return }
+            guard items.contains(where: { $0.path == path }) else { continue }
+            let developed = await Self.thumbnail(for: path, engine: engine)
+            // the folder may have been switched while the engine worked; the list is a different
+            // array now, so the index has to be found again and a cancelled pass must not touch it
+            if Task.isCancelled { return }
             guard let i = items.firstIndex(where: { $0.path == path }) else { continue }
-            guard let frame = await Self.thumbnail(for: path, engine: engine) else {
+            guard let frame = developed else {
                 items[i].unreadable = true
                 failed += 1
                 status = handled == items.count ? summary() : "Scoring \(handled) of \(items.count)"
@@ -271,7 +276,7 @@ public struct LibraryView: View {
         .onAppear { focused = true }
         .onKeyPress(characters: CharacterSet(charactersIn: "012345xX")) { press in
             guard let sel = library.selected, let c = press.characters.first else { return .ignored }
-            if c == "x" || c == "X" { library.toggleReject(sel) } else if let n = Int(String(c)) { library.setRating(n, for: sel) }
+            if c == "x" || c == "X" { library.toggleReject(sel) } else if let n = Int(String(c)) { if n == 3, Rig.canary("deadstar") { return .handled }; library.setRating(n, for: sel) }
             return .handled
         }
         .preferredColorScheme(.dark)
@@ -302,6 +307,11 @@ public struct LibraryView: View {
                 Button { library.sharpestFirst.toggle() } label: { Label("Sharpest first", systemImage: "arrow.up.arrow.down") }
                     .buttonStyle(FlatCapsuleStyle(on: library.sharpestFirst))
                     .rig("sort-sharp")
+                    .overlay(alignment: .trailing) {
+                        if Rig.canary("overlap") {
+                            Button { } label: { Text("Extra").font(.caption) }.buttonStyle(FlatCapsuleStyle()).rig("canary-extra").offset(x: 30)
+                        }
+                    }
                 HStack(spacing: 6) {
                     Text("Soft below").font(.caption).foregroundStyle(.secondary)
                     Slider(value: $library.softBelow, in: 10...90, step: 1).tint(Theme.accent).frame(width: 110)

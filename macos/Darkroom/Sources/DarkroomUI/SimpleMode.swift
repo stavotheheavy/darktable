@@ -167,6 +167,7 @@ struct SimpleChrome: View {
                 SimplePanel(model: model).frame(width: 316)
             }
             .padding(.top, 84)
+            .frame(maxHeight: .infinity, alignment: .top)
             VStack {
                 Spacer()
                 LooksStrip(model: model).padding(.bottom, 14)

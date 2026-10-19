@@ -146,6 +146,10 @@ public final class Rig {
     /// Slider setters, keyed like the registry: fraction 0...1 of the slider's range.
     static var setters: [String: (Double) -> Void] = [:]
     static let enabled = ProcessInfo.processInfo.environment["DARKROOM_RIG"] != nil
+    /// Planted bugs for the testers, named in DARKROOM_CANARY (comma separated). Rig runs only.
+    static func canary(_ name: String) -> Bool {
+        enabled && (ProcessInfo.processInfo.environment["DARKROOM_CANARY"] ?? "").split(separator: ",").contains { $0 == name }
+    }
 
     private var window: NSWindow? { NSApp.windows.first { $0.isVisible && $0.frame.width > 400 && $0.contentView != nil } }
 
