@@ -591,9 +591,11 @@ static gboolean _image_set_rawcrops(dt_iop_module_t *self,
   const gboolean cropvalid = (left >= 0) && (right >= 0) && (top >= 0) && (bottom >= 0)
     && (left+right < img->width / 2) && (top + bottom < img->height /2);
 
+  // a refused crop leaves the full frame, so compare against that: comparing
+  // against the refused values never matches and rewrites the image on every commit
   const gboolean testdim =
-      (img->p_width == img->width - left - right)
-   && (img->p_height == img->height - top - bottom);
+      (img->p_width == img->width - (cropvalid ? left + right : 0))
+   && (img->p_height == img->height - (cropvalid ? top + bottom : 0));
 
   if(testdim && cropvalid) return FALSE;
 
@@ -610,6 +612,8 @@ static gboolean _image_set_rawcrops(dt_iop_module_t *self,
   }
   else
     dt_iop_clear_module_trouble_message(self);
+
+  if(testdim) return FALSE;
 
   // we update p_width & height both in the image_storage for fast access within the pipeline
   // and the database so we can access that also via dt_image_cache_get()
@@ -730,6 +734,13 @@ void commit_params(dt_iop_module_t *self,
 
   if(_image_set_rawcrops(self, pipe->image.id, d->left, d->right, d->top, d->bottom))
     DT_CONTROL_SIGNAL_RAISE(DT_SIGNAL_METADATA_UPDATE);
+
+  // _image_set_rawcrops() keeps the full frame for a crop it refuses, so the pipe
+  // must not crop either: modify_roi_out() would otherwise subtract the refused
+  // crop and hand later modules a negative width
+  const dt_image_t *const img = &self->dev->image_storage;
+  if(img->p_width == img->width && img->p_height == img->height)
+    d->left = d->top = d->right = d->bottom = 0;
 
   if(!(dt_image_is_rawprepare_supported(&piece->pipe->image))
      || _image_is_normalized(&piece->pipe->image))
