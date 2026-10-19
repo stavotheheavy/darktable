@@ -122,5 +122,20 @@ check("tint +50 gives green relative to magenta", tintUp.x < 1 && tintUp.z < 1 &
 check("tint -50 gives magenta relative to green", tintDown.x > tintUp.x, "\(tintDown)")
 check("tint 0 is neutral at 6500 K", near(WhiteBalance.gains(kelvin: 6500, tint: 0), SIMD3(1, 1, 1), 1e-9))
 
+// A1 highlight sources: dark foliage, a clipped patch, and a flat grey field on a 9 by 9 image
+do {
+    let n = 9
+    var img = [SIMD3<Double>](repeating: SIMD3(repeating: 0.7), count: n * n)  // above sourceHi of clip
+    for y in 0..<n { img[y * n] = SIMD3(0.04, 0.1, 0.03) }  // foliage in column 0
+    for y in 3...5 { for x in 3...5 { img[y * n + x] = SIMD3(repeating: 1) } }  // clipped patch
+    let w = HighlightSources.weights(img, width: n, height: n)
+    check("A1 clipped pixel weight is 0", w[4 * n + 4] == 0)
+    check("A1 pixel next to a clip is excluded", w[4 * n + 2] == 0, "\(w[4 * n + 2])")
+    check("A1 dark foliage weight is 0", w[4 * n + 0] == 0)
+    check("A1 pixel on the foliage edge is excluded", w[4 * n + 1] == 0, "\(w[4 * n + 1])")
+    check("A1 flat bright field far from clip and edges has weight 1", w[8 * n + 8] == 1, "\(w[8 * n + 8])")
+    check("A1 weights stay in 0...1", w.allSatisfy { $0 >= 0 && $0 <= 1 })
+}
+
 print(failures == 0 ? "\nall checks passed" : "\n\(failures) failed")
 exit(failures == 0 ? 0 : 1)
