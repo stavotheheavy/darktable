@@ -53,5 +53,51 @@ check("exposure + WB on Metal matches the CPU oracle within 1/255 (display)",
 print("      worst linear error \(worstLinear), worst display error \(worstDisplay)")
 check("alpha passes through", gpuOut.allSatisfy { $0.w == 1 })
 
+// B2 tone and display: tone per channel, then the Rec.2020 to sRGB display transform, against the CPU chain
+let toneKernel: MetalToneDisplay
+do {
+    toneKernel = try MetalToneDisplay()
+} catch {
+    print("FAIL  no tone kernel: \(error)")
+    exit(1)
+}
+let toneMap = ToneMap()
+let rec = ColorSpaces.rec2020ToSRGB
+let columns = [rec.apply(SIMD3(1, 0, 0)), rec.apply(SIMD3(0, 1, 0)), rec.apply(SIMD3(0, 0, 1))]
+    .map { SIMD3<Float>(Float($0.x), Float($0.y), Float($0.z)) }
+
+func checkToneDisplay(_ kernel: MetalToneDisplay, _ name: String, _ scene: [SIMD3<Double>]) {
+    let input = scene.map { SIMD4<Float>(Float($0.x), Float($0.y), Float($0.z), 1) }
+    let out = kernel.run(input, tone: toneMap, columns: columns)
+    guard out.count == input.count else {
+        check(name, false, "got \(out.count) pixels, expected \(input.count)")
+        return
+    }
+    var worst = 0.0
+    for (i, px) in input.enumerated() {
+        // compare from the same Float-rounded inputs the GPU saw
+        let s = SIMD3<Double>(Double(px.x), Double(px.y), Double(px.z))
+        let cpu = DisplayTransform.apply(SIMD3(toneMap.apply(s.x), toneMap.apply(s.y), toneMap.apply(s.z)))
+        let g = out[i]
+        let d = cpu - SIMD3<Double>(Double(g.x), Double(g.y), Double(g.z))
+        worst = Swift.max(worst, Swift.max(Swift.abs(d.x), Swift.abs(d.y), Swift.abs(d.z)))
+    }
+    check(name, worst <= 1.0 / 255, "worst display error \(worst)")
+}
+
+// HDR colour gradient: scene values from near black to about 4 (above the SDR white)
+var gradient: [SIMD3<Double>] = []
+for y in 0..<n {
+    for x in 0..<n {
+        let t = Double(x) / Double(n - 1), v = Double(y) / Double(n - 1)
+        gradient.append(SIMD3(0.001 + 4 * t, 0.02 + 1.5 * v, 0.2 + 2.5 * (1 - t) * v))
+    }
+}
+checkToneDisplay(toneKernel, "B2 HDR colour gradient matches the CPU chain within 1/255", gradient)
+
+// sRGB ramp: 256 neutral steps from black to scene white
+let ramp = (0..<256).map { SIMD3(repeating: Double($0) / 255) }
+checkToneDisplay(toneKernel, "B2 neutral ramp matches the CPU chain within 1/255", ramp)
+
 print(failures == 0 ? "\nall Metal checks passed" : "\n\(failures) failed")
 exit(failures == 0 ? 0 : 1)
