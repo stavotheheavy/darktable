@@ -3,6 +3,7 @@
 import DarkroomCore
 import DarkroomMetal
 import Foundation
+import Metal
 
 nonisolated(unsafe) var failures = 0
 func check(_ name: String, _ ok: Bool, _ detail: @autoclosure () -> String = "") {
@@ -172,6 +173,45 @@ do {
     print("      viewport 2560x1440 GPU chain in one command buffer, 30 runs: p50 \(String(format: "%.1f", p50)) ms, p95 \(String(format: "%.1f", p95)) ms, budget 16 ms")
     print("      of which GPU execution p95 \(String(format: "%.1f", g95)) ms (copies in and out excluded)")
     check("T5 viewport p95 under 16 ms (exposure, tone+display, sharpen)", p95 < 16, "p95 \(p95) ms")
+
+    // texture path: the source is already on the GPU and the result stays in a texture, as the app would use it
+    guard let source = chain.makeSource(frame) else {
+        print("FAIL  texture path: no source buffer")
+        exit(1)
+    }
+    var texTimes: [Double] = [], texGPU: [Double] = []
+    var lastTexture: MTLTexture?
+    for _ in 0..<30 {
+        let t0 = DispatchTime.now().uptimeNanoseconds
+        let tex = chain.renderToTexture(source: source, width: w, height: h, scale: SIMD3(repeating: 0.9),
+                                        columns: columns, amount: 0.6)
+        let t1 = DispatchTime.now().uptimeNanoseconds
+        texTimes.append(Double(t1 - t0) / 1_000_000)
+        texGPU.append(chain.lastGPUMilliseconds)
+        lastTexture = tex
+    }
+    guard let tex = lastTexture else {
+        print("FAIL  texture path: no texture rendered")
+        exit(1)
+    }
+    // read the texture back once, outside the timing, and compare with the buffer path
+    var texPixels = [SIMD4<Float>](repeating: .zero, count: w * h)
+    texPixels.withUnsafeMutableBytes { raw in
+        tex.getBytes(raw.baseAddress!, bytesPerRow: w * MemoryLayout<SIMD4<Float>>.stride,
+                     from: MTLRegionMake2D(0, 0, w, h), mipmapLevel: 0)
+    }
+    var worstTex: Float = 0
+    for i in 0..<min(texPixels.count, once.count) {
+        let d = texPixels[i] - once[i]
+        worstTex = Swift.max(worstTex, Swift.max(Swift.abs(d.x), Swift.abs(d.y), Swift.abs(d.z)))
+    }
+    check("texture output matches the buffer path", worstTex < 1e-6, "worst \(worstTex)")
+    texTimes.sort()
+    texGPU.sort()
+    let tp50 = texTimes[texTimes.count / 2], tp95 = texTimes[Int(Double(texTimes.count) * 0.95) - 1]
+    let tg95 = texGPU[Int(Double(texGPU.count) * 0.95) - 1]
+    print("      texture path (source on GPU, result in texture), 30 runs: p50 \(String(format: "%.1f", tp50)) ms, p95 \(String(format: "%.1f", tp95)) ms, GPU p95 \(String(format: "%.1f", tg95)) ms")
+    check("T5 texture path p95 under 16 ms (no host copies)", tp95 < 16, "p95 \(tp95) ms")
 }
 
 print(failures == 0 ? "\nall Metal checks passed" : "\n\(failures) failed")
