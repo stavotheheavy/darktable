@@ -13,7 +13,7 @@ struct LeftPanel: View {
             }
             .pickerStyle(.segmented)
             .labelsHidden()
-            .accessibilityIdentifier("left-tab")
+            .rig("left-tab")
 
             switch model.leftTab {
             case .modules: ModuleList(model: model)
@@ -36,7 +36,7 @@ struct ModuleList: View {
                 Image(systemName: "magnifyingglass").foregroundStyle(.secondary)
                 TextField("Find a module", text: $model.moduleQuery)
                     .textFieldStyle(.plain)
-                    .accessibilityIdentifier("module-search")
+                    .rig("module-search")
                 Menu {
                     Toggle("Active modules only", isOn: $model.activeOnly)
                 } label: {
@@ -73,7 +73,7 @@ struct ModuleList: View {
                     }
                 }
             }
-            .accessibilityIdentifier("module-list")
+            .rig("module-list")
         }
     }
 }
@@ -95,7 +95,7 @@ struct ModuleRowView: View {
             .disabled(row.module.hideEnableButton)
             .accessibilityLabel("Enable \(row.title)")
             .accessibilityValue(row.enabled ? "on" : "off")
-            .accessibilityIdentifier("enable-\(row.id)")
+            .rig("enable-\(row.id)")
 
             Button { model.select(row.module) } label: {
                 HStack(spacing: 8) {
@@ -113,7 +113,7 @@ struct ModuleRowView: View {
             }
             .buttonStyle(.plain)
             .accessibilityLabel(row.title)
-            .accessibilityIdentifier("module-\(row.id)")
+            .rig("module-\(row.id)")
             .accessibilityAddTraits(selected ? .isSelected : [])
         }
         .background(
@@ -134,7 +134,7 @@ struct HistoryList: View {
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .padding(.horizontal, 10)
-                .accessibilityIdentifier("history-count")
+                .rig("history-count")
             ScrollView {
                 LazyVStack(spacing: 2) {
                     ForEach(Array(model.history.enumerated()), id: \.element.id) { i, item in
@@ -167,7 +167,7 @@ struct HistoryList: View {
                         }
                         .buttonStyle(.plain)
                         .accessibilityLabel("Step \(i): \(item.label)")
-                        .accessibilityIdentifier("history-\(i)")
+                        .rig("history-\(i)")
                         .accessibilityAddTraits(current ? .isSelected : [])
                     }
                 }
@@ -201,7 +201,7 @@ struct ScopesCard: View {
             }
             .pickerStyle(.segmented)
             .labelsHidden()
-            .accessibilityIdentifier("scope-mode")
+            .rig("scope-mode")
 
             ZStack {
                 RoundedRectangle(cornerRadius: 14).fill(Color.black.opacity(0.4))
@@ -218,7 +218,7 @@ struct ScopesCard: View {
             .frame(maxHeight: .infinity)
             .accessibilityElement(children: .ignore)
             .accessibilityLabel("\(model.scopeMode.rawValue) of the current frame")
-            .accessibilityIdentifier("scope")
+            .rig("scope")
 
             if let s = model.scopes {
                 HStack {
@@ -323,7 +323,7 @@ struct InspectorCard: View {
                     }
                     .padding(.bottom, 8)
                 }
-                .accessibilityIdentifier("inspector-scroll")
+                .rig("inspector-scroll")
             } else {
                 Text("Select a module to see its parameters.")
                     .font(.callout)
@@ -348,17 +348,17 @@ struct InspectorCard: View {
             .buttonStyle(.plain)
             .disabled(m.hideEnableButton)
             .accessibilityLabel("Enable \(m.name)")
-            .accessibilityIdentifier("inspector-enable")
+            .rig("inspector-enable")
 
             Text(m.multiName.isEmpty ? m.name : "\(m.name) · \(m.multiName)")
                 .font(.headline)
                 .lineLimit(1)
-                .accessibilityIdentifier("inspector-title")
+                .rig("inspector-title")
             Spacer(minLength: 4)
             Button("Reset") { model.resetModule(m) }
                 .buttonStyle(.glass)
                 .disabled(!model.isEdited(m))
-                .accessibilityIdentifier("inspector-reset")
+                .rig("inspector-reset")
         }
     }
 }
@@ -382,11 +382,11 @@ struct ParamList: View {
                         showAll.toggle()
                     }
                     .buttonStyle(.glass)
-                    .accessibilityIdentifier("show-more")
+                    .rig("show-more")
                 } else if showAll, primary.count > 12 {
                     Button("Show fewer parameters") { showAll = false }
                         .buttonStyle(.glass)
-                        .accessibilityIdentifier("show-more")
+                        .rig("show-more")
                 }
                 if schema.fields.isEmpty {
                     note("This module has no scalar parameters. Its controls (curves, nodes, matrices) are not editable here yet.")
@@ -457,7 +457,18 @@ struct ParamRow: View {
             }
             .tint(Theme.accent)
             .accessibilityLabel(field.label)
-            .accessibilityIdentifier(id)
+            .rig(id)
+            .onAppear {
+                // the rig sets a slider through the same model call its binding makes
+                if Rig.enabled {
+                    Rig.setters[id] = { frac in
+                        let c = model.value(module, field).double ?? 0
+                        let l = min(soft.lowerBound, c), h = max(soft.upperBound, c)
+                        model.setParam(module, field, to: .number(l + (h - l) * frac))
+                    }
+                }
+            }
+            .onDisappear { Rig.setters[id] = nil }
         }
     }
 
@@ -475,7 +486,7 @@ struct ParamRow: View {
         .toggleStyle(.switch)
         .tint(Theme.accent)
         .frame(minHeight: 30)
-        .accessibilityIdentifier(id)
+        .rig(id)
     }
 
     private func enumeration(changed: Bool, id: String) -> some View {
@@ -493,14 +504,14 @@ struct ParamRow: View {
                 }
                 .pickerStyle(.segmented)
                 .labelsHidden()
-                .accessibilityIdentifier(id)
+                .rig(id)
             } else {
                 Picker(field.label, selection: binding) {
                     ForEach(field.options, id: \.name) { Text($0.label).tag($0.name) }
                 }
                 .pickerStyle(.menu)
                 .labelsHidden()
-                .accessibilityIdentifier(id)
+                .rig(id)
             }
         }
     }
@@ -530,7 +541,7 @@ struct NumberField: View {
             .onSubmit { apply() }
             .onChange(of: focused) { _, f in if !f { apply() } }
             .accessibilityLabel("Value")
-            .accessibilityIdentifier(id + "-value")
+            .rig(id + "-value")
     }
 
     private func apply() {
@@ -574,7 +585,7 @@ struct BlendSection: View {
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
-            .accessibilityIdentifier("blend-toggle")
+            .rig("blend-toggle")
 
             if open {
                 Picker("Mask", selection: Binding(
@@ -587,7 +598,7 @@ struct BlendSection: View {
                 }
                 .pickerStyle(.segmented)
                 .labelsHidden()
-                .accessibilityIdentifier("blend-mask")
+                .rig("blend-mask")
                 Text("Drawn and parametric masks are not available yet.")
                     .font(.caption2)
                     .foregroundStyle(.secondary)
@@ -607,7 +618,7 @@ struct BlendSection: View {
                         }
                         .labelsHidden()
                         .frame(width: 140)
-                        .accessibilityIdentifier("blend-mode")
+                        .rig("blend-mode")
                     }
                     HStack {
                         Text("Opacity").font(.footnote).foregroundStyle(.secondary)
@@ -623,14 +634,14 @@ struct BlendSection: View {
                     )
                     .tint(Theme.accent)
                     .accessibilityLabel("Opacity")
-                    .accessibilityIdentifier("blend-opacity")
+                    .rig("blend-opacity")
                     Toggle("Reverse", isOn: Binding(
                         get: { model.blendValue(module, "reverse")?.bool ?? false },
                         set: { model.setBlend(module, "reverse", to: .bool($0), detail: "blend reversed: \($0 ? "on" : "off")") }))
                         .font(.footnote)
                         .toggleStyle(.switch)
                         .tint(Theme.accent)
-                        .accessibilityIdentifier("blend-reverse")
+                        .rig("blend-reverse")
                 }
             }
         }
@@ -670,9 +681,12 @@ public struct DarkroomRoot: View {
                 .transition(.opacity)
             }
         }
+        .coordinateSpace(.named("rigRoot"))
         .task {
             model.onBack = { screen = .library; library.paused = false }
             await model.bootstrap()
+            Rig.startIfRequested(model: model, library: library, screen: { screen }, go: { screen = $0; library.paused = ($0 == .darkroom) },
+                                 open: openPhoto)
             if screen == .library, welcomed, let f = library.restoredFolder { library.load(folder: f) }
             await AutoTest.runIfRequested(model: model)
         }

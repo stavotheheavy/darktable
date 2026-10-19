@@ -47,6 +47,7 @@ func describe(_ stack: [StackEntry]) -> String {
 struct SelfTest {
     @MainActor
     static func main() async {
+        setvbuf(stdout, nil, _IOLBF, 0)
         var args = Array(CommandLine.arguments.dropFirst())
         func take(_ flag: String) -> String? {
             guard let i = args.firstIndex(of: flag), i + 1 < args.count else { return nil }
@@ -63,6 +64,9 @@ struct SelfTest {
         let out = take("--out")
         let ui = has("--ui")
         let listModules = has("--list-modules")
+        let bench = has("--bench")
+        let effects = has("--effects")
+        let fromModule = take("--from")
         guard let path = args.first else {
             print("usage: dtb-selftest <image> [--max 1400] [--out frame.png] [--ui]")
             exit(2)
@@ -77,11 +81,15 @@ struct SelfTest {
             let t0 = Date()
             try await engine.start(
                 prefix: prefix,
-                configDir: home.appending(path: ".config/darktable-fork"),
-                cacheDir: home.appending(path: ".cache/darktable-fork"))
+                configDir: env["DARKROOM_CONFIG_DIR"].map { URL(fileURLWithPath: $0) } ?? home.appending(path: ".config/darktable-fork"),
+                cacheDir: env["DARKROOM_CACHE_DIR"].map { URL(fileURLWithPath: $0) } ?? home.appending(path: ".cache/darktable-fork"))
             print(String(format: "engine start: %.0f ms", Date().timeIntervalSince(t0) * 1000))
 
-            if listModules {
+            if effects {
+                try await runEffects(engine: engine, path: path, from: fromModule)
+            } else if bench {
+                try await runBench(engine: engine, folder: path)
+            } else if listModules {
                 try await engine.openSession(path: path, maxSide: 400)
                 for m in try await engine.sessionModules() {
                     print("\(m.id)\t\(m.name)\t\(m.haveIntrospection ? "params" : "-")\t\(m.deprecated ? "deprecated" : "")")
@@ -96,6 +104,221 @@ struct SelfTest {
             print("FAILED: \(error)")
             exit(1)
         }
+    }
+
+    // MARK: every control, its effect, undo and redo
+
+    /// 256 by 256 grey bytes of the frame: equal bytes mean an equal picture for the checks below.
+    static func fingerprint(_ image: CGImage) -> [UInt8] {
+        var px = [UInt8](repeating: 0, count: 256 * 256)
+        px.withUnsafeMutableBytes { buf in
+            if let ctx = CGContext(data: buf.baseAddress, width: 256, height: 256, bitsPerComponent: 8, bytesPerRow: 256,
+                                   space: CGColorSpaceCreateDeviceGray(), bitmapInfo: CGImageAlphaInfo.none.rawValue) {
+                ctx.interpolationQuality = .medium
+                ctx.draw(image, in: CGRect(x: 0, y: 0, width: 256, height: 256))
+            }
+        }
+        return px
+    }
+
+    static func meanDiff(_ a: [UInt8], _ b: [UInt8]) -> Double {
+        var t = 0
+        for i in 0..<min(a.count, b.count) { t += abs(Int(a[i]) - Int(b[i])) }
+        return Double(t) / Double(max(1, min(a.count, b.count)))
+    }
+
+    /// Drives every parameter of every module that has introspection, and every on/off switch:
+    /// set a value that is not the default, render, check the picture moved (or note that it did
+    /// not), undo, check it is byte-identical to the start, redo, check it is byte-identical to the
+    /// edit. One line per control goes to a tsv as it happens, so a crash names its culprit.
+    @MainActor
+    static func runEffects(engine: Engine, path: String, from: String?) async throws {
+        let fm = FileManager.default
+        let farm = URL(fileURLWithPath: NSTemporaryDirectory()).appending(path: "darkroom-rig-effects")
+        try? fm.removeItem(at: farm)
+        try fm.createDirectory(at: farm, withIntermediateDirectories: true)
+        let name = URL(fileURLWithPath: path).lastPathComponent
+        let link = farm.appending(path: name)
+        try fm.createSymbolicLink(at: link, withDestinationURL: URL(fileURLWithPath: path))
+        let tsvPath = NSHomeDirectory() + "/Documents/plans/2026-10-18-darkroom-effects-\(name).tsv"
+        fm.createFile(atPath: tsvPath, contents: Data("module\tcontrol\tkind\ttried\tmoved\tundo_exact\tredo_exact\tms\n".utf8))
+        let handle = FileHandle(forWritingAtPath: tsvPath)
+        handle?.seekToEndOfFile()
+        func log(_ line: String) { handle?.write(Data((line + "\n").utf8)) }
+
+        let model = DarkroomModel(engine: engine)
+        await model.open(path: link.path)
+        await model.settle()
+        guard let frame0 = model.frame else { print("FAILED: no frame"); exit(1) }
+        let base = fingerprint(frame0)
+        var tried = 0, moved = 0, undoBad = 0, redoBad = 0, still: [String] = [], badUndo: [String] = []
+        let started = Date()
+        var seenFrom = from == nil
+
+        for m in model.modules where m.haveIntrospection {
+            if !seenFrom { if m.operation == from || m.id == from { seenFrom = true } else { continue } }
+            model.select(m)
+            for _ in 0..<40 where model.schema(for: m) == nil { try? await Task.sleep(for: .milliseconds(50)) }
+            guard let schema = model.schema(for: m) else { continue }
+
+            // the module's own switch
+            if !m.hideEnableButton {
+                let t = Date()
+                let was = model.isEnabled(m)
+                model.setEnabled(m, !was)
+                await model.settle()
+                let after = model.frame.map(fingerprint) ?? base
+                model.undo(); await model.settle()
+                let u = model.frame.map(fingerprint) ?? base
+                model.redo(); await model.settle()
+                let r = model.frame.map(fingerprint) ?? base
+                model.undo(); await model.settle()
+                let diff = meanDiff(base, after)
+                tried += 1; if diff > 0.05 { moved += 1 }
+                if u != base { undoBad += 1; badUndo.append("\(m.operation) switch") }
+                if r != after { redoBad += 1 }
+                log("\(m.operation)\t(switch)\ttoggle\t1\t\(diff > 0.05 ? 1 : 0)\t\(u == base ? 1 : 0)\t\(r == after ? 1 : 0)\t\(Int(Date().timeIntervalSince(t) * 1000))")
+            }
+
+            for f in schema.fields {
+                let cur = model.value(m, f)
+                var target: ParamValue
+                switch f.kind {
+                case .bool:
+                    target = .bool(!(cur.double.map { $0 != 0 } ?? false))
+                case .enumeration:
+                    guard let other = f.options.first(where: { ParamValue.option($0.name) != cur }) else { continue }
+                    target = .option(other.name)
+                case .float, .int:
+                    guard let c = cur.double else { continue }
+                    var v: Double
+                    if f.hasUsableRange, f.max > f.min {
+                        let hi = f.min + (f.max - f.min) * 0.75, lo = f.min + (f.max - f.min) * 0.25
+                        v = abs(hi - c) > abs(lo - c) ? hi : lo
+                    } else { v = c == 0 ? 1 : c * 1.5 }
+                    if f.kind == .int { v = v.rounded() }
+                    if v == c { continue }
+                    target = .number(v)
+                }
+                let t = Date()
+                model.setParam(m, f, to: target)
+                await model.settle()
+                let edited = model.frame.map(fingerprint) ?? base
+                model.undo(); await model.settle()
+                let u = model.frame.map(fingerprint) ?? base
+                model.redo(); await model.settle()
+                let r = model.frame.map(fingerprint) ?? base
+                model.undo(); await model.settle()
+                let diff = meanDiff(base, edited)
+                tried += 1
+                if diff > 0.05 { moved += 1 } else { still.append("\(m.operation).\(f.name)") }
+                if u != base { undoBad += 1; badUndo.append("\(m.operation).\(f.name)") }
+                if r != edited { redoBad += 1 }
+                log("\(m.operation)\t\(f.name)\t\(f.kind.rawValue)\t1\t\(diff > 0.05 ? 1 : 0)\t\(u == base ? 1 : 0)\t\(r == edited ? 1 : 0)\t\(Int(Date().timeIntervalSince(t) * 1000))")
+            }
+            if Int(Date().timeIntervalSince(started)) % 60 == 0 { print("  at \(m.operation): \(tried) controls tried") }
+        }
+        let secs = Date().timeIntervalSince(started)
+        print(String(format: "effects on %@: %d controls tried in %.0f s; %d moved the picture; undo not exact on %d; redo not exact on %d",
+                     name, tried, secs, moved, undoBad, redoBad))
+        if !badUndo.isEmpty { print("undo failures: " + badUndo.prefix(40).joined(separator: ", ")) }
+        print("no visible effect on \(still.count) controls (often a disabled mask, a hidden mode, or a guard); see \(tsvPath)")
+        try? handle?.close()
+    }
+
+    // MARK: bench
+
+    static func rssMB() -> Double {
+        var info = mach_task_basic_info()
+        var count = mach_msg_type_number_t(MemoryLayout<mach_task_basic_info>.size) / 4
+        let kr = withUnsafeMutablePointer(to: &info) {
+            $0.withMemoryRebound(to: integer_t.self, capacity: Int(count)) {
+                task_info(mach_task_self_, task_flavor_t(MACH_TASK_BASIC_INFO), $0, &count)
+            }
+        }
+        return kr == KERN_SUCCESS ? Double(info.resident_size) / 1_048_576 : 0
+    }
+
+    static func percentile(_ xs: [Double], _ p: Double) -> Double {
+        guard !xs.isEmpty else { return 0 }
+        let s = xs.sorted()
+        return s[min(s.count - 1, Int((Double(s.count - 1) * p).rounded()))]
+    }
+
+    /// Speed and memory over a folder of real raws, per format. Originals are never opened
+    /// in place: a symlink farm takes the sidecars, so the folder stays untouched.
+    @MainActor
+    static func runBench(engine: Engine, folder: String) async throws {
+        let fm = FileManager.default
+        let farm = URL(fileURLWithPath: NSTemporaryDirectory()).appending(path: "darkroom-rig-photos")
+        try? fm.removeItem(at: farm)
+        try fm.createDirectory(at: farm, withIntermediateDirectories: true)
+        let names = ((try? fm.contentsOfDirectory(atPath: folder)) ?? []).sorted()
+        var byFormat: [String: [String]] = [:]
+        for n in names {
+            let ext = (n as NSString).pathExtension.lowercased()
+            guard ["nef", "arw", "cr2", "cr3", "dng", "raf"].contains(ext) else { continue }
+            try fm.createSymbolicLink(at: farm.appending(path: n), withDestinationURL: URL(fileURLWithPath: folder).appending(path: n))
+            byFormat[ext.uppercased(), default: []].append(n)
+        }
+        let total = byFormat.values.reduce(0) { $0 + $1.count }
+        print("bench: \(total) raws in \(folder): " + byFormat.sorted { $0.key < $1.key }.map { "\($0.key) \($0.value.count)" }.joined(separator: ", "))
+
+        var table = ["| format | photos timed | open to first frame (ms, p50 / p95) | edit render (ms, p50 / p95) | edit to pixels (ms, p50 / p95) | export (ms, p50) | RSS after (MB) |", "|---|---|---|---|---|---|---|"]
+        let model = DarkroomModel(engine: engine)
+        for (fmt, files) in byFormat.sorted(by: { $0.key < $1.key }) {
+            var opens: [Double] = [], renders: [Double] = [], walls: [Double] = [], exports: [Double] = []
+            let sample = Array(files.prefix(6))
+            for n in sample {
+                let path = farm.appending(path: n).path
+                let t0 = Date()
+                await model.open(path: path)
+                await model.settle()
+                opens.append(Date().timeIntervalSince(t0) * 1000)
+                guard let ex = model.modules.first(where: { $0.operation == "exposure" }) else { continue }
+                await model.prepareSimple()
+                guard let ev = model.schema(for: ex)?.fields.first(where: { $0.name == "exposure" }) else { continue }
+                for i in 0..<20 {
+                    let t = Date()
+                    model.setParam(ex, ev, to: .number(i % 2 == 0 ? 0.8 : -0.4))
+                    await model.settle()
+                    walls.append(Date().timeIntervalSince(t) * 1000)
+                    if let ms = model.lastMilliseconds { renders.append(ms) }
+                }
+                let url = farm.appending(path: "bench-\(n).jpg")
+                let te = Date()
+                await model.export(to: url)
+                exports.append(Date().timeIntervalSince(te) * 1000)
+                try? fm.removeItem(at: url)
+            }
+            table.append(String(format: "| %@ | %d | %.0f / %.0f | %.0f / %.0f | %.0f / %.0f | %.0f | %.0f |", fmt, sample.count,
+                                percentile(opens, 0.5), percentile(opens, 0.95), percentile(renders, 0.5), percentile(renders, 0.95),
+                                percentile(walls, 0.5), percentile(walls, 0.95), percentile(exports, 0.5), rssMB()))
+            print(table.last!)
+        }
+
+        // the library: every thumbnail developed and scored, cold cache
+        let thumbs = fm.homeDirectoryForCurrentUser.appending(path: ".cache/darktable-fork/thumbs")
+        try? fm.removeItem(at: thumbs)
+        await engine.closeSession()   // a file a session holds cannot also be developed one-shot
+        let lib = LibraryModel(engine: engine)
+        let t0 = Date()
+        lib.load(folder: farm)
+        var last = -1
+        while lib.handled < lib.items.count {
+            try? await Task.sleep(for: .seconds(1))
+            if lib.handled != last, lib.handled % 20 == 0 { print("  scored \(lib.scored) of \(lib.items.count), RSS \(Int(rssMB())) MB"); last = lib.handled }
+            if Date().timeIntervalSince(t0) > 1500 { print("  gave up after 25 minutes"); break }
+        }
+        let secs = Date().timeIntervalSince(t0)
+        let soft = lib.items.filter { ($0.sharpness ?? 100) < 50 }.count
+        let stacks = Set(lib.items.compactMap(\.stack)).count
+        let libLine = String(format: "library: %d photos developed and scored in %.0f s (%.2f photos/s), %d soft, %d stacks, peak RSS %.0f MB",
+                             lib.scored, secs, Double(lib.scored) / max(secs, 0.1), soft, stacks, rssMB())
+        print(libLine)
+        let report = "# Darkroom bench\n\nFolder: \(folder)\n\n" + table.joined(separator: "\n") + "\n\n" + libLine + "\n"
+        try? report.write(toFile: NSHomeDirectory() + "/Documents/plans/2026-10-18-darkroom-bench.md", atomically: true, encoding: .utf8)
+        print("wrote ~/Documents/plans/2026-10-18-darkroom-bench.md")
     }
 
     static func runEngine(engine: Engine, path: String, maxSide: Int, out: String?) async throws {
@@ -332,7 +555,7 @@ struct SelfTest {
         }
         lib.load(folder: libDir)
         check(lib.items.count == raws.count && raws.count > 0, "the library lists \(lib.items.count) photos from a folder")
-        for _ in 0..<240 where lib.scored < lib.items.count { try? await Task.sleep(for: .milliseconds(500)) }
+        for _ in 0..<240 where lib.handled < lib.items.count { try? await Task.sleep(for: .milliseconds(500)) }
         check(lib.scored == lib.items.count, "every thumbnail was developed and scored (\(lib.scored))")
         check(lib.items.allSatisfy { $0.thumb != nil && ($0.sharpness ?? -1) >= 0 }, "each has a thumbnail and a sharpness score")
         if let first = lib.items.first {

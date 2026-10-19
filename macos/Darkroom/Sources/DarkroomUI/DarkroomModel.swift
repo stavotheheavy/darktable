@@ -121,8 +121,8 @@ public final class DarkroomModel {
         do {
             try await engine.start(
                 prefix: prefix,
-                configDir: home.appending(path: ".config/darktable-fork"),
-                cacheDir: home.appending(path: ".cache/darktable-fork"))
+                configDir: env["DARKROOM_CONFIG_DIR"].map { URL(fileURLWithPath: $0) } ?? home.appending(path: ".config/darktable-fork"),
+                cacheDir: env["DARKROOM_CACHE_DIR"].map { URL(fileURLWithPath: $0) } ?? home.appending(path: ".cache/darktable-fork"))
         } catch {
             status = "Engine did not start: \(error)"
             return

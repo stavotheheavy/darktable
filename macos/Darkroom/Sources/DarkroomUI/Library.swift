@@ -16,6 +16,8 @@ public struct LibraryItem: Identifiable, Equatable {
     public var hash: UInt64?
     public var rating = 0
     public var rejected = false
+    /// The engine could not develop this file (damaged, unsupported, or held open elsewhere).
+    public var unreadable = false
     /// Near-duplicates share a number; nil means the frame stands alone.
     public var stack: Int?
     public var stackPosition = 0
@@ -32,7 +34,9 @@ public struct LibraryItem: Identifiable, Equatable {
 struct RatingStore {
     struct Entry: Codable { var rating: Int; var rejected: Bool }
     static var url: URL {
-        FileManager.default.homeDirectoryForCurrentUser.appending(path: ".config/darktable-fork/darkroom-ratings.json")
+        let dir = ProcessInfo.processInfo.environment["DARKROOM_CONFIG_DIR"].map { URL(fileURLWithPath: $0) }
+            ?? FileManager.default.homeDirectoryForCurrentUser.appending(path: ".config/darktable-fork")
+        return dir.appending(path: "darkroom-ratings.json")
     }
     static func load() -> [String: Entry] {
         guard let d = try? Data(contentsOf: url), let m = try? JSONDecoder().decode([String: Entry].self, from: d) else { return [:] }
@@ -56,6 +60,9 @@ public final class LibraryModel {
     public var sharpestFirst = false
     public private(set) var status = "Choose a folder of photos"
     public private(set) var scored = 0
+    /// Files the engine could not develop; they still count as handled, so the status can finish.
+    public private(set) var failed = 0
+    public var handled: Int { scored + failed }
     public var paused = false
 
     private let engine: Engine
@@ -89,6 +96,7 @@ public final class LibraryModel {
             return it
         }
         scored = 0
+        failed = 0
         status = items.isEmpty ? "No photos in \(folder.lastPathComponent)" : "Reading \(items.count) photos"
         selected = items.first?.path
         loading = Task { await self.makeThumbnails() }
@@ -99,14 +107,19 @@ public final class LibraryModel {
         for path in paths {
             while paused, !Task.isCancelled { try? await Task.sleep(for: .milliseconds(300)) }
             if Task.isCancelled { return }
-            guard let frame = await Self.thumbnail(for: path, engine: engine) else { continue }
             guard let i = items.firstIndex(where: { $0.path == path }) else { continue }
+            guard let frame = await Self.thumbnail(for: path, engine: engine) else {
+                items[i].unreadable = true
+                failed += 1
+                status = handled == items.count ? summary() : "Scoring \(handled) of \(items.count)"
+                continue
+            }
             items[i].thumb = frame
             items[i].sharpness = Culling.sharpness(of: frame)
             items[i].hash = Culling.averageHash(of: frame)
             scored += 1
-            status = scored == items.count ? summary() : "Scoring \(scored) of \(items.count)"
-            if scored % 8 == 0 || scored == items.count { regroup() }
+            status = handled == items.count ? summary() : "Scoring \(handled) of \(items.count)"
+            if scored % 8 == 0 || handled == items.count { regroup() }
         }
         regroup()
         status = summary()
@@ -115,7 +128,8 @@ public final class LibraryModel {
     private func summary() -> String {
         let soft = items.filter { ($0.sharpness ?? 100) < softBelow }.count
         let stacks = Set(items.compactMap(\.stack)).count
-        return "\(items.count) photos, \(soft) soft, \(stacks) stacks"
+        let broken = failed > 0 ? ", \(failed) could not be read" : ""
+        return "\(items.count) photos, \(soft) soft, \(stacks) stacks\(broken)"
     }
 
     func regroup() {
@@ -264,14 +278,14 @@ public struct LibraryView: View {
         .fileImporter(isPresented: $choosing, allowedContentTypes: [.folder]) { result in
             if case .success(let url) = result { library.load(folder: url) }
         }
-        .accessibilityIdentifier("library")
+        .rig("library")
     }
 
     private var header: some View {
         HStack(spacing: 12) {
             HStack(spacing: 10) {
                 Button { choosing = true } label: { Image(systemName: "folder").frame(width: 34, height: 34) }
-                    .buttonStyle(.plain).accessibilityLabel("Choose a folder").accessibilityIdentifier("choose-folder")
+                    .buttonStyle(.plain).accessibilityLabel("Choose a folder").rig("choose-folder")
                 VStack(alignment: .leading, spacing: 0) {
                     Text(library.folder?.lastPathComponent ?? "Library").font(.callout.weight(.medium))
                     Text(library.status).font(.caption.monospaced()).foregroundStyle(.secondary)
@@ -287,7 +301,7 @@ public struct LibraryView: View {
                     .buttonStyle(FlatCapsuleStyle(on: library.groupStacks))
                 Button { library.sharpestFirst.toggle() } label: { Label("Sharpest first", systemImage: "arrow.up.arrow.down") }
                     .buttonStyle(FlatCapsuleStyle(on: library.sharpestFirst))
-                    .accessibilityIdentifier("sort-sharp")
+                    .rig("sort-sharp")
                 HStack(spacing: 6) {
                     Text("Soft below").font(.caption).foregroundStyle(.secondary)
                     Slider(value: $library.softBelow, in: 10...90, step: 1).tint(Theme.accent).frame(width: 110)
@@ -324,11 +338,11 @@ public struct LibraryView: View {
             if let sel, sel.stack != nil {
                 Button { comparing = sel.path } label: { Label("Compare stack", systemImage: "square.split.2x1") }
                     .buttonStyle(FlatCapsuleStyle())
-                    .accessibilityIdentifier("compare-stack")
+                    .rig("compare-stack")
             }
             Button { if let p = sel?.path { open(p) } } label: { Text("Open in darkroom") }
                 .buttonStyle(PrimaryCapsuleStyle())
-                .accessibilityIdentifier("open-selected")
+                .rig("open-selected")
         }
         .padding(.horizontal, 12).padding(.vertical, 8)
         .glassEffect(.regular, in: .capsule)
@@ -356,6 +370,12 @@ private struct Cell: View {
             .overlay {
                 if item.rejected || soft { RoundedRectangle(cornerRadius: 14).fill(.black.opacity(item.rejected ? 0.6 : 0.28)) }
             }
+            .overlay {
+                if item.unreadable {
+                    VStack(spacing: 4) { Image(systemName: "exclamationmark.triangle"); Text("Could not read").font(.caption) }
+                        .foregroundStyle(.secondary)
+                }
+            }
             .overlay(alignment: .topLeading) {
                 if let s = item.sharpness { badge { Circle().fill(dot(s)).frame(width: 7, height: 7); Text("\(Int(s))").font(.caption.monospacedDigit()) } }
             }
@@ -378,7 +398,7 @@ private struct Cell: View {
         .onTapGesture { library.selected = item.path }
         .accessibilityElement(children: .combine)
         .accessibilityLabel(item.name)
-        .accessibilityIdentifier("cell-\(item.name)")
+        .rig("cell-\(item.name)")
     }
 
     private func dot(_ s: Double) -> Color {
@@ -405,7 +425,7 @@ private struct EmptyLibrary: View {
             Text("Choose a folder. Soft frames and near-duplicates are flagged as it loads, on this Mac.")
                 .foregroundStyle(.secondary).multilineTextAlignment(.center).frame(maxWidth: 320)
             Button(action: choose) { Text("Choose a folder") }.buttonStyle(PrimaryCapsuleStyle())
-                .accessibilityIdentifier("empty-choose")
+                .rig("empty-choose")
             if let restore { Button("Open the last folder", action: restore).buttonStyle(.plain).foregroundStyle(.secondary) }
         }
     }
@@ -459,7 +479,7 @@ struct CompareView: View {
             focused = true
             for m in members { if let f = await library.preview(for: m.path) { frames[m.path] = f } }
         }
-        .accessibilityIdentifier("compare")
+        .rig("compare")
     }
 
     private func step(_ d: Int) {
@@ -499,7 +519,7 @@ struct CompareView: View {
                 if let current {
                     Button { library.keepOnly(current.path); close() } label: { Text("Keep this one") }
                         .buttonStyle(PrimaryCapsuleStyle())
-                        .accessibilityIdentifier("keep-this")
+                        .rig("keep-this")
                 }
             }
             HStack(spacing: 8) {

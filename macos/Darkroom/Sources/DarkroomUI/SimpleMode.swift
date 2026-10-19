@@ -187,7 +187,7 @@ struct SimplePanel: View {
                     Label("Auto", systemImage: "sparkles").frame(maxWidth: .infinity)
                 }
                 .buttonStyle(PrimaryCapsuleStyle())
-                .accessibilityIdentifier("simple-auto")
+                .rig("simple-auto")
             }
             .padding(.bottom, 2)
 
@@ -208,7 +208,14 @@ struct SimplePanel: View {
                         .tint(Theme.accent)
                         .frame(height: 36)
                         .accessibilityLabel(c.rawValue)
-                        .accessibilityIdentifier("simple-\(c.rawValue.lowercased())")
+                        .rig("simple-\(c.rawValue.lowercased())")
+                        .onAppear {
+                            if Rig.enabled {
+                                Rig.setters["simple-\(c.rawValue.lowercased())"] = { frac in
+                                    model.setSimple(c, to: c.range.lowerBound + (c.range.upperBound - c.range.lowerBound) * frac)
+                                }
+                            }
+                        }
                 }
             }
 
@@ -240,7 +247,7 @@ struct SimplePanel: View {
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
-            .accessibilityIdentifier("simple-more")
+            .rig("simple-more")
         }
         .padding(14)
         .disabled(!model.simpleReady)
@@ -267,7 +274,7 @@ struct LooksStrip: View {
                 }
                 .buttonStyle(.plain)
                 .disabled(!model.simpleReady)
-                .accessibilityIdentifier("look-\(look.id)")
+                .rig("look-\(look.id)")
             }
         }
         .padding(8)
@@ -290,7 +297,7 @@ struct ModeSwitch: View {
                         .background(model.mode == m ? Color.white.opacity(0.26) : .clear, in: Capsule())
                 }
                 .buttonStyle(.plain)
-                .accessibilityIdentifier("mode-\(m.rawValue.lowercased())")
+                .rig("mode-\(m.rawValue.lowercased())")
                 .accessibilityAddTraits(model.mode == m ? .isSelected : [])
             }
         }

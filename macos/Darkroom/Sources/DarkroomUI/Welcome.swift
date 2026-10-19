@@ -59,7 +59,7 @@ struct WelcomeView: View {
             Button { step = .mode } label: { Text("Use Darkroom on this Mac").frame(maxWidth: .infinity) }
                 .buttonStyle(PrimaryCapsuleStyle())
                 .padding(.top, 14)
-                .accessibilityIdentifier("welcome-continue")
+                .rig("welcome-continue")
         }
     }
 
@@ -77,7 +77,7 @@ struct WelcomeView: View {
                 Button("Back") { step = .account }.buttonStyle(.plain).foregroundStyle(.secondary)
                 Spacer()
                 Button { step = .folder } label: { Text("Continue") }.buttonStyle(PrimaryCapsuleStyle())
-                    .accessibilityIdentifier("welcome-mode-continue")
+                    .rig("welcome-mode-continue")
             }
             .padding(.top, 12)
         }
@@ -95,7 +95,7 @@ struct WelcomeView: View {
             .overlay(RoundedRectangle(cornerRadius: 26).strokeBorder(mode == m ? Theme.selectedRing : Color.white.opacity(0.14), lineWidth: 1))
         }
         .buttonStyle(.plain)
-        .accessibilityIdentifier("welcome-\(m.rawValue.lowercased())")
+        .rig("welcome-\(m.rawValue.lowercased())")
         .accessibilityAddTraits(mode == m ? .isSelected : [])
     }
 
@@ -109,7 +109,7 @@ struct WelcomeView: View {
                 Spacer()
                 Button("Later") { finish(mode, nil) }.buttonStyle(.plain).foregroundStyle(.secondary).padding(.trailing, 12)
                 Button { choosing = true } label: { Text("Choose a folder") }.buttonStyle(PrimaryCapsuleStyle())
-                    .accessibilityIdentifier("welcome-folder")
+                    .rig("welcome-folder")
             }
             .padding(.top, 20)
         }

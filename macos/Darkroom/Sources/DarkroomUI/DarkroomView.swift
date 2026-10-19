@@ -103,12 +103,12 @@ struct PhotoView: View {
                         .shadow(color: .black.opacity(0.5), radius: 26, y: 10)
                         .position(x: r.midX, y: r.midY)
                         .accessibilityLabel("Photo")
-                        .accessibilityIdentifier("photo")
+                        .rig("photo")
                 } else {
                     Text(model.status)
                         .font(.title3)
                         .foregroundStyle(.secondary)
-                        .accessibilityIdentifier("photo-status")
+                        .rig("photo-status")
                 }
             }
             .contentShape(Rectangle())
@@ -189,14 +189,14 @@ struct TopBar: View {
                 Button(action: back) { Image(systemName: "chevron.left").frame(width: 30, height: 30) }
                     .buttonStyle(.plain)
                     .accessibilityLabel("Back to the library")
-                    .accessibilityIdentifier("back")
+                    .rig("back")
             }
             Button { choosing = true } label: {
                 Image(systemName: "photo.on.rectangle").frame(width: 30, height: 30)
             }
             .buttonStyle(.plain)
             .accessibilityLabel("Open image")
-            .accessibilityIdentifier("open")
+            .rig("open")
 
             VStack(alignment: .leading, spacing: 0) {
                 Text(model.fileName).font(.callout.weight(.medium)).lineLimit(1)
@@ -229,14 +229,14 @@ struct TopBar: View {
             .buttonStyle(.plain)
             .menuIndicator(.hidden)
             .accessibilityLabel("Snapshot")
-            .accessibilityIdentifier("snapshot")
+            .rig("snapshot")
 
             Button { model.undo() } label: { Image(systemName: "arrow.uturn.backward").frame(width: 40, height: 40) }
                 .buttonStyle(.plain).disabled(!model.canUndo)
-                .accessibilityLabel("Undo").accessibilityIdentifier("undo")
+                .accessibilityLabel("Undo").rig("undo")
             Button { model.redo() } label: { Image(systemName: "arrow.uturn.forward").frame(width: 40, height: 40) }
                 .buttonStyle(.plain).disabled(!model.canRedo)
-                .accessibilityLabel("Redo").accessibilityIdentifier("redo")
+                .accessibilityLabel("Redo").rig("redo")
 
             BackdropMenu(model: model)
 
@@ -252,7 +252,7 @@ struct TopBar: View {
                 }
                 .buttonStyle(.plain)
                 .accessibilityLabel("Zoom \(z.rawValue)")
-                .accessibilityIdentifier("zoom-\(z.rawValue)")
+                .rig("zoom-\(z.rawValue)")
                 .accessibilityAddTraits(model.zoom == z ? .isSelected : [])
             }
         }
@@ -272,7 +272,7 @@ struct TopBar: View {
                       systemImage: model.uiHidden ? "eye" : "rectangle.split.3x1")
             }
             .buttonStyle(FlatCapsuleStyle(on: model.uiHidden))
-            .accessibilityIdentifier("hide-ui")
+            .rig("hide-ui")
 
             Button {
                 model.showingOriginal.toggle()
@@ -282,12 +282,12 @@ struct TopBar: View {
             .buttonStyle(FlatCapsuleStyle(on: model.showingOriginal))
             .disabled(model.history.count <= 1)
             .accessibilityLabel("Show the original")
-            .accessibilityIdentifier("original")
+            .rig("original")
 
             Button(action: export) { Text("Export") }
                 .buttonStyle(PrimaryCapsuleStyle())
                 .disabled(model.frame == nil)
-                .accessibilityIdentifier("export")
+                .rig("export")
         }
         .padding(8)
         .glassEffect(.regular, in: .capsule)
@@ -327,7 +327,7 @@ struct ReadoutBar: View {
         .padding(.horizontal, 22)
         .frame(height: 44)
         .glassEffect(.regular, in: .capsule)
-        .accessibilityIdentifier("readout")
+        .rig("readout")
     }
 
     private func readout(_ name: String, _ value: String) -> some View {
