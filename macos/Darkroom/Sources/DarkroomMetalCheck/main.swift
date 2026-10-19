@@ -99,5 +99,35 @@ checkToneDisplay(toneKernel, "B2 HDR colour gradient matches the CPU chain withi
 let ramp = (0..<256).map { SIMD3(repeating: Double($0) / 255) }
 checkToneDisplay(toneKernel, "B2 neutral ramp matches the CPU chain within 1/255", ramp)
 
+// B3 sharpen: one line of 512 pixels with a sharp step and a bright spike, against Sharpen.line on the CPU
+let sharpenKernel: MetalSharpen
+do {
+    sharpenKernel = try MetalSharpen()
+} catch {
+    print("FAIL  no sharpen kernel: \(error)")
+    exit(1)
+}
+var line: [SIMD3<Double>] = []
+for i in 0..<512 {
+    let step = i < 200 ? 0.1 : (i < 320 ? 0.7 : 0.25)
+    let spike = (i == 400) ? 3.0 : 0.0
+    line.append(SIMD3(step + spike, 0.5 * step, 0.2 + 0.001 * Double(i)))
+}
+let lineInput = line.map { SIMD4<Float>(Float($0.x), Float($0.y), Float($0.z), 1) }
+let lineRounded = lineInput.map { SIMD3<Double>(Double($0.x), Double($0.y), Double($0.z)) }
+let sharpened = sharpenKernel.run(lineInput, amount: 0.6)
+check("B3 sharpen returns one pixel per input", sharpened.count == lineInput.count, "got \(sharpened.count)")
+let cpuSharp = Sharpen.line(lineRounded, amount: 0.6)
+var worstSharpDisplay = 0.0
+for i in 0..<min(cpuSharp.count, sharpened.count) {
+    let g = sharpened[i]
+    let gpu = SIMD3<Double>(Double(g.x), Double(g.y), Double(g.z))
+    let d = DisplayTransform.apply(cpuSharp[i]) - DisplayTransform.apply(gpu)
+    worstSharpDisplay = Swift.max(worstSharpDisplay, Swift.max(Swift.abs(d.x), Swift.abs(d.y), Swift.abs(d.z)))
+}
+check("B3 sharpen on Metal matches the CPU oracle within 1/255 (display)",
+      worstSharpDisplay <= 1.0 / 255, "worst display error \(worstSharpDisplay)")
+print("      worst sharpen display error \(worstSharpDisplay)")
+
 print(failures == 0 ? "\nall Metal checks passed" : "\n\(failures) failed")
 exit(failures == 0 ? 0 : 1)

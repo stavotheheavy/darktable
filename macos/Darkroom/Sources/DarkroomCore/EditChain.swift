@@ -36,11 +36,7 @@ public enum EditChain {
                 px.map { SIMD3(tone.apply($0.x), tone.apply($0.y), tone.apply($0.z)) }
             },
             Stage(name: "sharpen", params: "\(sharpen)") { px in
-                px.indices.map { i in
-                    let prev = px[max(i - 1, 0)], next = px[min(i + 1, px.count - 1)]
-                    let blur = (prev + px[i] + next) / 3
-                    return px[i] + sharpen * (px[i] - blur)
-                }
+                Sharpen.line(px, amount: sharpen)
             },
             Stage(name: "display", params: "srgb") { px in
                 px.map(DisplayTransform.apply)
