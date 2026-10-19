@@ -137,5 +137,22 @@ do {
     check("A1 weights stay in 0...1", w.allSatisfy { $0 >= 0 && $0 <= 1 })
 }
 
+// A2 rebuild: a clipped patch (x and y 12...28) on dark branches comes out neutral; on a warm field it keeps the warm colour
+do {
+    let n = 41
+    func patchImage(_ field: SIMD3<Double>) -> [SIMD3<Double>] {
+        var img = [SIMD3<Double>](repeating: field, count: n * n)
+        for y in 12...28 { for x in 12...28 { img[y * n + x] = SIMD3(repeating: 1) } }
+        return img
+    }
+    let dark = HighlightRebuild.rebuild(patchImage(SIMD3(repeating: 0.05)), width: n, height: n)
+    let c = dark[20 * n + 20]
+    check("A2 clipped sky among dark branches is neutral white", (c.max() - c.min()) < 0.02, "\(c)")
+    let warm = HighlightRebuild.rebuild(patchImage(SIMD3(0.7, 0.4, 0.25)), width: n, height: n)
+    let w = warm[20 * n + 20]
+    check("A2 clipped patch on a warm field keeps the warm hue", w.x > w.z + 0.5, "\(w)")
+    check("A2 pixels outside the patch are unchanged", warm[0] == SIMD3(0.7, 0.4, 0.25))
+}
+
 print(failures == 0 ? "\nall checks passed" : "\n\(failures) failed")
 exit(failures == 0 ? 0 : 1)
