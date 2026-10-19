@@ -13,6 +13,8 @@ let package = Package(
     products: [
         .library(name: "DarktableKit", targets: ["DarktableKit"]),
         .library(name: "DarkroomUI", targets: ["DarkroomUI"]),
+        .library(name: "DarkroomCore", targets: ["DarkroomCore"]),
+        .executable(name: "darkroom-core-check", targets: ["DarkroomCoreCheck"]),
         .executable(name: "Darkroom", targets: ["Darkroom"]),
         .executable(name: "dtb-selftest", targets: ["DarkroomSelfTest"]),
     ],
@@ -28,6 +30,12 @@ let package = Package(
                 .unsafeFlags(["-L\(libdir)", "-Xlinker", "-rpath", "-Xlinker", libdir]),
             ]
         ),
+
+        // the clean engine's maths: pure Swift, no darktable, no dylibs (see THIRD-PARTY.md)
+        .target(name: "DarkroomCore"),
+
+        // chart checks for DarkroomCore (T-series from the engine roadmap)
+        .executableTarget(name: "DarkroomCoreCheck", dependencies: ["DarkroomCore"]),
 
         // model + SwiftUI views, a library so the self-test can render them offscreen
         .target(
