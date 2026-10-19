@@ -58,5 +58,69 @@ let hdr = ToneMap(peak: 4)
 check("tone: HDR stays <= peak and SDR range matches SDR", hdr.table.max()! <= 4 && abs(hdr.apply(0.18) - neutral.apply(0.18)) < 1e-6)
 check("tone: zero and negative give zero", neutral.apply(0) == 0 && neutral.apply(-1) == 0)
 
+// T1 exposure round trip: +1 EV then -1 EV returns the ramp within 1e-3 (4096 steps, below clip)
+var worstRound = 0.0
+for i in 0..<4096 {
+    let v = 0.5 * Double(i) / 4095
+    worstRound = max(worstRound, abs(v * Exposure.gain(ev: 1) * Exposure.gain(ev: -1) - v))
+}
+check("T1 exposure +1 then -1 EV round trip", worstRound < 1e-3, "\(worstRound)")
+check("T1 +1 EV doubles, -1 EV halves", Exposure.gain(ev: 1) == 2 && Exposure.gain(ev: -1) == 0.5)
+
+// T2 clipped sky: a blown patch with equal channels must stay neutral after WB of +-1500 K
+for k in [5000.0, 8000.0] {
+    let g = WhiteBalance.gains(kelvin: k)
+    let applied = WhiteBalance.clipNeutral(SIMD3(1, 1, 1), gains: g) * g
+    let spread = (applied.max() - applied.min()) / applied.max()
+    check("T2 clipped patch neutral at \(Int(k)) K", spread < 0.02, "spread \(spread)")
+    let unclipped = SIMD3(1.0, 1.0, 1.0) * g
+    check("T2 control: without clipNeutral the patch tints at \(Int(k)) K",
+          (unclipped.max() - unclipped.min()) / unclipped.max() > 0.02)
+}
+check("T2 neutral reference gives unit gains", near(WhiteBalance.gains(kelvin: 6500), SIMD3(1, 1, 1), 1e-9))
+let warm = WhiteBalance.gains(kelvin: 5000)
+check("T2 warm light: blue gain above red gain", warm.z > warm.x, "\(warm)")
+
+// T4 downstream-only recompute: dragging sharpen re-runs only sharpen; dragging WB re-runs WB and later
+func chain(ev: Double, kelvin: Double, sharpen: Double) -> [Stage] {
+    EditChain.stages(ev: ev, kelvin: kelvin, tint: 0, contrast: 0, sharpen: sharpen)
+}
+let source = (0..<64).map { SIMD3(0.02 + 0.007 * Double($0), 0.1, 0.3) }
+let graph = StageGraph(stageCount: 5)
+_ = graph.render(chain(ev: 0.5, kelvin: 6500, sharpen: 0.4), input: source)
+let base = graph.executions
+let afterSharpen = graph.render(chain(ev: 0.5, kelvin: 6500, sharpen: 0.8), input: source)
+check("T4 sharpen drag runs only sharpen",
+      ["exposure", "whitebalance", "tone"].allSatisfy { graph.executions[$0] == base[$0] }
+      && graph.executions["sharpen"] == base["sharpen"]! + 1, "\(graph.executions)")
+_ = graph.render(chain(ev: 0.5, kelvin: 8000, sharpen: 0.8), input: source)
+let afterWB = graph.executions
+check("T4 WB drag re-runs WB, tone, sharpen, not exposure",
+      afterWB["exposure"] == base["exposure"]
+      && afterWB["whitebalance"] == base["whitebalance"]! + 1
+      && afterWB["tone"] == base["tone"]! + 1
+      && afterWB["sharpen"] == base["sharpen"]! + 2)
+let fresh = StageGraph(stageCount: 5).render(chain(ev: 0.5, kelvin: 6500, sharpen: 0.8), input: source)
+check("T4 cached render equals fresh render", zip(afterSharpen, fresh).allSatisfy { near($0, $1, 1e-12) })
+
+// display transform: white to white, black to black, output stays in 0...1, and monotone
+check("display: scene white maps to display white", near(DisplayTransform.apply(white), white, 1e-6),
+      "\(DisplayTransform.apply(white))")
+check("display: black maps to black", near(DisplayTransform.apply(SIMD3(0, 0, 0)), SIMD3(0, 0, 0), 1e-12))
+var displayOK = true, lastDisplay = -1.0
+for i in 0...400 {
+    let v = DisplayTransform.apply(SIMD3(repeating: 0.001 * pow(1.03, Double(i))))
+    if v.x < lastDisplay || v.x < 0 || v.x > 1 { displayOK = false }
+    lastDisplay = v.x
+}
+check("display: monotone and within 0...1", displayOK)
+
+// tint: positive adds green (lower red and blue gain against green); zero is neutral
+let tintUp = WhiteBalance.gains(kelvin: 6500, tint: 50)
+let tintDown = WhiteBalance.gains(kelvin: 6500, tint: -50)
+check("tint +50 gives green relative to magenta", tintUp.x < 1 && tintUp.z < 1 && tintUp.y == 1, "\(tintUp)")
+check("tint -50 gives magenta relative to green", tintDown.x > tintUp.x, "\(tintDown)")
+check("tint 0 is neutral at 6500 K", near(WhiteBalance.gains(kelvin: 6500, tint: 0), SIMD3(1, 1, 1), 1e-9))
+
 print(failures == 0 ? "\nall checks passed" : "\n\(failures) failed")
 exit(failures == 0 ? 0 : 1)

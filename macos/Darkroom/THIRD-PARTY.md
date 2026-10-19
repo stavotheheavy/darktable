@@ -11,6 +11,7 @@ We take the MIT option for the files below.
 |---|---|---|
 | `Sources/DarkroomCore/ToneMap.swift` | `ToneMap::hdr`, crates/pipeline/src/tone.rs | Rewritten in Swift, Double table, scene-referred path only |
 | `Sources/DarkroomCore/ColorMath.swift` | structure of crates/color (working space, OkLab built from it, derived matrices) | Rewritten in Swift; primaries-derived matrices; no code lines copied |
+| `Sources/DarkroomCore/WhiteBalance.swift` (`clipNeutral`) | the idea of `clip_neutral`, crates/raw/src/highlight.rs | Idea only, rewritten from its doc comment. Rebuilding partly clipped channels is not ported |
 
 MIT licence text (LightCraft's LICENSE-MIT): permission is granted, free of charge, to use, copy, modify, merge, publish, distribute,
 sublicense and sell copies, provided the copyright notice and this permission notice are included. The software is provided "as is",
@@ -18,6 +19,9 @@ without warranty of any kind.
 
 ## Published specifications (no licence needed, cited in code)
 - OkLab: Bjorn Ottosson, "A perceptual color space for image processing", 2020.
+- Colour temperature to RGB (`WhiteBalance.blackbody`): the curve fit published by Tanner Helland, 2012 (tannerhelland.com,
+  "How to convert temperature (K) to RGB"). Only the published formula is used; the code is written here. Approximate, not a
+  colorimetric blackbody; tint is our own mapping.
 - sRGB (IEC 61966-2-1), BT.2020, SMPTE ST 2084 (PQ), ITU-R BT.2100 (HLG), CIE D65.
 
 ## Not taken, on purpose
