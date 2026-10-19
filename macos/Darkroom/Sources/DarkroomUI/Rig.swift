@@ -2,6 +2,7 @@ import AppKit
 import DarktableKit
 import Foundation
 import Network
+import ObjectiveC
 import SwiftUI
 
 /// The test rig's way into the running app. Off unless DARKROOM_RIG=<port> is set; then a
@@ -31,7 +32,16 @@ public final class Rig {
         guard let p = ProcessInfo.processInfo.environment["DARKROOM_RIG"], let port = UInt16(p), shared == nil else { return }
         let rig = Rig(model: model, library: library, screen: screen, go: go, open: open)
         shared = rig
+        silenceUnhandledKeys()
         rig.listen(port: port)
+    }
+
+    /// A key the app does not handle makes AppKit beep. A test script sends hundreds, so in rig runs
+    /// the beep is switched off (a person's real keystrokes in a normal run still get it).
+    private static func silenceUnhandledKeys() {
+        guard let m = class_getInstanceMethod(NSResponder.self, #selector(NSResponder.noResponder(for:))) else { return }
+        let quiet: @convention(block) (AnyObject, Selector) -> Void = { _, _ in }
+        method_setImplementation(m, imp_implementationWithBlock(quiet))
     }
 
     private init(model: DarkroomModel, library: LibraryModel, screen: @escaping () -> Screen,
