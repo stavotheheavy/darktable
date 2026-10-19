@@ -48,6 +48,7 @@ func describe(_ stack: [StackEntry]) -> String {
 struct SelfTest {
     @MainActor
     static func main() async {
+        Allocator.releaseFreedBlocksToTheSystem()
         setvbuf(stdout, nil, _IOLBF, 0)
         var args = Array(CommandLine.arguments.dropFirst())
         func take(_ flag: String) -> String? {
@@ -550,6 +551,74 @@ struct SelfTest {
         check(abs(luma(model) - base) < 0.5, "jump to step 0 shows the original")
         model.jump(to: model.history.count - 1)
         await model.settle()
+
+        print("cancel")
+        func bytes(_ image: CGImage?) -> Data? { image?.dataProvider?.data as Data? }
+        if let diffuse = module(model, "diffuse") {
+            model.select(diffuse)
+            for _ in 0..<50 where model.schema(for: diffuse) == nil { try await Task.sleep(for: .milliseconds(20)) }
+            if let it = field(model, diffuse, "iterations") {
+                let before = bytes(model.frame)
+                let canceled = model.canceledRenders
+                // tens of seconds when left to finish
+                model.setParam(diffuse, it, to: .number((it.min + (it.max - it.min) * 0.75).rounded()))
+                try await Task.sleep(for: .milliseconds(400))
+                let t = ContinuousClock.now
+                model.undo()
+                await model.settle()
+                let ms = Int((ContinuousClock.now - t) / .milliseconds(1))
+                check(model.canceledRenders > canceled, "the superseded diffuse render was canceled, not finished")
+                check(ms < 2000, "undo during a slow diffuse render shows its frame in \(ms) ms")
+                if ProcessInfo.processInfo.environment["DTB_TIME_UNCANCELED"] != nil {
+                    let t1 = ContinuousClock.now
+                    model.redo()
+                    await model.settle()
+                    print("        the same render left to finish: \(Int((ContinuousClock.now - t1) / .milliseconds(1))) ms")
+                    model.undo()
+                    await model.settle()
+                }
+                check(before != nil && bytes(model.frame) == before, "the frame after a canceled render is byte-identical to the one before")
+            } else { check(false, "diffuse has an iterations field") }
+        } else { check(false, "diffuse is in the module list") }
+
+        print("drag")
+        if let blurs = module(model, "blurs") {
+            model.select(blurs)
+            for _ in 0..<50 where model.schema(for: blurs) == nil { try await Task.sleep(for: .milliseconds(20)) }
+            if let radius = field(model, blurs, "radius") {
+                let fullWidth = model.frame?.width ?? 0
+                let step = model.historyIndex
+                var drafts = 0, firstDraftMs: Int?, draftMs = 0.0
+                let t = ContinuousClock.now
+                model.setDragging(true)
+                // blurs cannot stop mid-module, so the first full render runs to its end
+                // before the drag can turn to drafts: keep moving until a few have shown
+                for i in 0..<200 where drafts < 3 {
+                    model.setParam(blurs, radius, to: .number((radius.min + (radius.max - radius.min) * (0.5 + 0.25 * Double(i % 20) / 20)).rounded()))
+                    for _ in 0..<8 {
+                        try await Task.sleep(for: .milliseconds(10))
+                        if model.frameIsDraft, (model.frame?.width ?? fullWidth) < fullWidth {
+                            drafts += 1
+                            draftMs = model.lastMilliseconds ?? 0
+                            if firstDraftMs == nil { firstDraftMs = Int((ContinuousClock.now - t) / .milliseconds(1)) }
+                        }
+                    }
+                }
+                // held still: the full frame follows without letting go
+                await model.settle()
+                let settled = bytes(model.frame)
+                check(drafts > 0, "a slow drag shows reduced-scale drafts (first after \(firstDraftMs ?? -1) ms, a draft \(Int(draftMs)) ms, full frame \(Int(model.lastMilliseconds ?? 0)) ms)")
+                check(!model.frameIsDraft && model.frame?.width == fullWidth, "holding the slider still settles to the full frame")
+                model.setDragging(false)
+                await model.settle()
+                check(bytes(model.frame) == settled, "letting go keeps the settled frame")
+                check(model.historyIndex == step + 1 && model.history.count == step + 2, "the drag is one history step")
+                model.undo(); await model.settle()
+                model.redo(); await model.settle()
+                check(settled != nil && bytes(model.frame) == settled, "the settled frame equals a single edit's frame, byte for byte")
+                model.undo(); await model.settle()
+            } else { check(false, "blurs has a radius field") }
+        } else { check(false, "blurs is in the module list") }
 
         print("save and reload")
         await model.flushSave()

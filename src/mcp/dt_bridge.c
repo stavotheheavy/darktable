@@ -954,6 +954,13 @@ static void _drop_scratch(dt_mcp_scratch_t *sc)
       sqlite3_step(st);
       sqlite3_finalize(st);
     }
+    // dt_image_remove() only drops the thumbnail levels (mipmap_cache.c:1330).
+    // the full raw and the preview buffer of a removed row can never be asked
+    // for again, yet they would sit in the mipmap cache until its quota (one
+    // or two buffers per worker thread, up to hundreds of MB each) pushes
+    // them out
+    dt_mipmap_cache_evict_at_size(imgid, DT_MIPMAP_FULL);
+    dt_mipmap_cache_evict_at_size(imgid, DT_MIPMAP_F);
     dt_image_remove(imgid);
   }
   g_list_free(sc->imgids);
@@ -1518,6 +1525,7 @@ struct dt_bridge_session_t
   int base_end;            // history_end of the imported state
   int max_w, max_h;
   gboolean have_dev, have_buf, have_pipe;
+  gboolean canceled;       // the last render was stopped by dt_bridge_session_cancel
 };
 
 static void _session_destroy(dt_bridge_session_t *s)
@@ -1575,6 +1583,17 @@ dt_bridge_session_t *dt_bridge_session_open(const char *path, int imgid_in, int 
   }
   s->have_pipe = TRUE;
 
+  // a darkroom display pipe may keep an eighth of the memory darktable
+  // budgets for itself in cachelines, gigabytes on a large machine, and the
+  // raw stage before demosaic caches full sensor resolution. a session needs
+  // little of that: an edit only reuses the line in front of the edited
+  // module and the lines it just made. sixteen working-size frames hold
+  // those, and least recently used lines (the raw stage first) go beyond
+  const size_t line = (size_t)4 * sizeof(float) * MAX(s->max_w, 1) * MAX(s->max_h, 1);
+  const size_t budget = MAX(16 * line, (size_t)256 * DT_MEGA);
+  s->pipe.cache.mem_fraction = MAX(s->pipe.cache.mem_fraction,
+                                   MIN(dt_get_available_mem() / budget, (size_t)1024));
+
   dt_ioppr_resync_modules_order(&s->dev);
   dt_dev_pixelpipe_set_input(&s->pipe, &s->dev, (float *)s->buf.buf,
                              s->buf.width, s->buf.height, s->buf.iscale);
@@ -1625,9 +1644,25 @@ static gboolean _session_process(dt_bridge_session_t *s, int x, int y, int w, in
                                  double scale, uint8_t **buf_out, int *stride_out,
                                  char **err)
 {
-  if(dt_dev_pixelpipe_process(&s->pipe, &s->dev, x, y, w, h, (float)scale, DT_DEVICE_NONE))
+  s->canceled = FALSE;
+  const gboolean failed =
+    dt_dev_pixelpipe_process(&s->pipe, &s->dev, x, y, w, h, (float)scale, DT_DEVICE_NONE);
+  // back to idle, as the darkroom does after a run (develop.c:888), so a cancel
+  // arriving between renders finds nothing to stop instead of hitting the next one
+  const dt_dev_pixelpipe_stopper_t stopper =
+    dt_atomic_exch_int(&s->pipe.shutdown, DT_DEV_PIXELPIPE_STOP_NO);
+  if(stopper > DT_DEV_PIXELPIPE_PROCESSING)
   {
-    _seterr(err, "the pipeline could not process this edit");
+    // the stopped module and everything after it lost their cachelines, so
+    // the next render recomputes them instead of reusing half-done output
+    s->canceled = TRUE;
+    _seterr(err, "render canceled");
+    return FALSE;
+  }
+  // backbuf still holds the previous frame after a failed run
+  if(failed)
+  {
+    _seterr(err, "the pipeline failed to process the image");
     return FALSE;
   }
 
@@ -1650,6 +1685,10 @@ static gboolean _session_process(dt_bridge_session_t *s, int x, int y, int w, in
   memcpy(copy, src, bytes);
   *buf_out = copy;
   *stride_out = stride;
+
+  // trim now rather than at the start of the next render, so an image left
+  // open does not hold the transient full-resolution lines of this one
+  dt_dev_pixelpipe_cache_checkmem(&s->pipe, FALSE);
   return TRUE;
 }
 
@@ -1811,6 +1850,20 @@ char *dt_bridge_session_modules_json(dt_bridge_session_t *s, char **err)
   char *out = _builder_to_string(b);
   g_object_unref(b);
   return out;
+}
+
+void dt_bridge_session_cancel(dt_bridge_session_t *s)
+{
+  // the piece mode rather than the darkroom's data mode: the data mode may be
+  // ignored based on the gui's develop object (pixelpipe_hb.c:1495), which a
+  // session does not use, and modules that poll for a stop inside their own
+  // loops (diffuse) switch to the piece mode anyway
+  if(s) dt_dev_pixelpipe_set_shutdown(&s->pipe, DT_DEV_PIXELPIPE_STOP_PIECE);
+}
+
+gboolean dt_bridge_session_canceled(const dt_bridge_session_t *s)
+{
+  return s && s->canceled;
 }
 
 void dt_bridge_session_close(dt_bridge_session_t *s)

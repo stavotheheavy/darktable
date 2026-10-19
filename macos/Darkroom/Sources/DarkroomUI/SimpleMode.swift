@@ -211,7 +211,7 @@ struct SimplePanel: View {
                             .font(.caption.monospacedDigit()).foregroundStyle(.secondary)
                     }
                     Slider(value: Binding(get: { model.simpleValue(c) }, set: { model.setSimple(c, to: $0) }),
-                           in: c.range, step: 1)
+                           in: c.range, step: 1, onEditingChanged: { model.setDragging($0) })
                         .tint(Theme.accent)
                         .frame(height: 36)
                         .accessibilityLabel(c.rawValue)

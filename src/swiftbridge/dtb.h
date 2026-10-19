@@ -68,9 +68,12 @@ typedef struct dtb_session dtb_session;
     (0 = unbounded). returns NULL with *err set on failure */
 dtb_session *dtb_session_open(const char *path, int imgid, int max_w, int max_h, char **err);
 
+/** returned by the session renders when dtb_session_cancel stopped them */
+#define DTB_CANCELED 2
+
 /** render with exactly `stack_json` applied on top of the imported state (the same
     JSON array dtb_render takes; NULL or "[]" is the unedited image).
-    returns 0 on success */
+    returns 0 on success, DTB_CANCELED when canceled */
 int dtb_session_render(dtb_session *session, const char *stack_json,
                        dtb_frame *out, char **err);
 
@@ -78,6 +81,12 @@ int dtb_session_render(dtb_session *session, const char *stack_json,
     x,y,w,h in that scaled image's pixels: what a zoomed or panned view needs */
 int dtb_session_render_region(dtb_session *session, const char *stack_json, double scale,
                               int x, int y, int w, int h, dtb_frame *out, char **err);
+
+/** stop the render `session` is running, if any, so a superseded edit is not
+    finished. the one call that may come from another thread while a render
+    holds the engine: it takes no lock and returns at once. the caller must
+    keep `session` from being closed during the call */
+void dtb_session_cancel(dtb_session *session);
 
 /** full-resolution output size, and the size of dtb_session_render frames */
 void dtb_session_info(dtb_session *session, int *processed_w, int *processed_h,

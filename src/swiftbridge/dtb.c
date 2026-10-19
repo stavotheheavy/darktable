@@ -222,6 +222,7 @@ int dtb_session_render(dtb_session *session, const char *stack_json, dtb_frame *
   char *gerr = NULL;
   const gboolean ok = _up
     && dt_bridge_session_render((dt_bridge_session_t *)session, stack, &buf, &w, &h, &stride, &gerr);
+  const gboolean canceled = !ok && dt_bridge_session_canceled((dt_bridge_session_t *)session);
   g_mutex_unlock(&_lock);
   if(parser) g_object_unref(parser);
 
@@ -229,7 +230,7 @@ int dtb_session_render(dtb_session *session, const char *stack_json, dtb_frame *
   {
     if(err) *err = gerr ? gerr : g_strdup("render failed");
     else g_free(gerr);
-    return 1;
+    return canceled ? DTB_CANCELED : 1;
   }
   g_free(gerr);
   out->pixels = buf;
@@ -273,6 +274,7 @@ int dtb_session_render_region(dtb_session *session, const char *stack_json, doub
   const gboolean ok = _up
     && dt_bridge_session_render_region((dt_bridge_session_t *)session, stack, scale,
                                        x, y, w, h, &buf, &stride, &gerr);
+  const gboolean canceled = !ok && dt_bridge_session_canceled((dt_bridge_session_t *)session);
   g_mutex_unlock(&_lock);
   if(parser) g_object_unref(parser);
 
@@ -280,7 +282,7 @@ int dtb_session_render_region(dtb_session *session, const char *stack_json, doub
   {
     if(err) *err = gerr ? gerr : g_strdup("render failed");
     else g_free(gerr);
-    return 1;
+    return canceled ? DTB_CANCELED : 1;
   }
   g_free(gerr);
   out->pixels = buf;
@@ -288,6 +290,12 @@ int dtb_session_render_region(dtb_session *session, const char *stack_json, doub
   out->height = h;
   out->stride = stride;
   return 0;
+}
+
+void dtb_session_cancel(dtb_session *session)
+{
+  // no _lock: the render to stop is holding it
+  dt_bridge_session_cancel((dt_bridge_session_t *)session);
 }
 
 void dtb_session_info(dtb_session *session, int *processed_w, int *processed_h,

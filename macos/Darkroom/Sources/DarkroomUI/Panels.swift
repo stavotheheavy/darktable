@@ -451,9 +451,9 @@ struct ParamRow: View {
             Group {
                 // a zero step traps in SwiftUI, so only integers get one
                 if field.kind == .int, hi > lo {
-                    Slider(value: binding, in: lo...hi, step: 1)
+                    Slider(value: binding, in: lo...hi, step: 1, onEditingChanged: { model.setDragging($0) })
                 } else if hi > lo {
-                    Slider(value: binding, in: lo...hi)
+                    Slider(value: binding, in: lo...hi, onEditingChanged: { model.setDragging($0) })
                 }
             }
             .tint(Theme.accent)
@@ -631,7 +631,8 @@ struct BlendSection: View {
                             model.setBlend(module, "opacity", to: .number($0.rounded()),
                                            detail: "opacity: \(Int($0.rounded()))%")
                         }),
-                        in: 0...100
+                        in: 0...100,
+                        onEditingChanged: { model.setDragging($0) }
                     )
                     .tint(Theme.accent)
                     .accessibilityLabel("Opacity")

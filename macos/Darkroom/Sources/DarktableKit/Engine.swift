@@ -1,6 +1,7 @@
 import CDtBridge
 import CoreGraphics
 import Foundation
+import Synchronization
 
 public struct EngineError: Error, CustomStringConvertible, Sendable {
     public let description: String
@@ -25,6 +26,9 @@ public struct StackEntry: Sendable {
     }
 }
 
+/// A session render stopped by `Engine.cancelRender()` because a newer edit superseded it.
+public struct RenderCanceled: Error, Sendable {}
+
 public struct RenderedFrame: @unchecked Sendable {
     public let image: CGImage
     public let width: Int
@@ -41,8 +45,15 @@ public actor Engine {
     public nonisolated var unownedExecutor: UnownedSerialExecutor { queue.asUnownedSerialExecutor() }
 
     private var started = false
-    private var session: OpaquePointer?   // dtb_session*
+    private var session: OpaquePointer? {   // dtb_session*
+        didSet { live.withLock { $0 = session.map(SessionRef.init) } }
+    }
     private var sessionMaxSide = 0
+
+    private struct SessionRef: @unchecked Sendable { let pointer: OpaquePointer }
+    /// The open session as seen from outside the engine queue. Closing goes through
+    /// `session`'s didSet first, so a cancel never reaches a session being closed.
+    private let live = Mutex<SessionRef?>(nil)
 
     public init() {}
 
@@ -88,21 +99,38 @@ public actor Engine {
     }
 
     public func closeSession() {
-        if let s = session { dtb_session_close(s) }
-        session = nil
+        guard let s = session else { return }
+        session = nil   // unpublished before it is freed
+        dtb_session_close(s)
     }
 
     public var hasSession: Bool { session != nil }
 
-    /// Render the open image with exactly `stack` applied.
-    public func sessionRender(stack: [StackEntry] = []) throws -> RenderedFrame {
+    /// Stop the session render in progress, if any, so a newer edit does not wait for a
+    /// superseded one to finish; that render throws `RenderCanceled`. Called from any
+    /// thread: the render it stops is what keeps the engine queue busy.
+    public nonisolated func cancelRender() {
+        live.withLock { if let s = $0 { dtb_session_cancel(s.pointer) } }
+    }
+
+    /// Render the open image with exactly `stack` applied. A `scale` below 1 renders the
+    /// whole frame at that fraction of the working size: a cheap draft while a slider moves.
+    public func sessionRender(stack: [StackEntry] = [], scale: Double = 1) throws -> RenderedFrame {
         guard let session else { throw EngineError("no image is open") }
+        if scale < 1, let i = sessionInfo(), i.processedWidth > 0, i.processedHeight > 0 {
+            let s = Double(i.workWidth) / Double(i.processedWidth) * scale
+            return try sessionRenderRegion(
+                stack: stack, scale: s, x: 0, y: 0,
+                width: max(1, Int(Double(i.processedWidth) * s)),
+                height: max(1, Int(Double(i.processedHeight) * s)))
+        }
         let stackJSON: String? = stack.isEmpty ? nil : try Self.json(stack)
         let t0 = DispatchTime.now().uptimeNanoseconds
 
         var frame = dtb_frame()
         var err: UnsafeMutablePointer<CChar>?
         let rc = dtb_session_render(session, stackJSON, &frame, &err)
+        if rc == DTB_CANCELED { _ = Self.take(err); throw RenderCanceled() }
         if rc != 0 { throw EngineError(Self.take(err) ?? "render failed (\(rc))") }
         defer { dtb_frame_free(&frame) }
 
@@ -151,6 +179,7 @@ public actor Engine {
         var err: UnsafeMutablePointer<CChar>?
         let rc = dtb_session_render_region(session, stackJSON, scale, Int32(x), Int32(y),
                                            Int32(width), Int32(height), &frame, &err)
+        if rc == DTB_CANCELED { _ = Self.take(err); throw RenderCanceled() }
         if rc != 0 { throw EngineError(Self.take(err) ?? "render failed (\(rc))") }
         defer { dtb_frame_free(&frame) }
 
