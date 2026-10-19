@@ -1464,6 +1464,14 @@ void dt_dev_add_history_item_ext(dt_develop_t *dev,
   _dev_add_history_item_ext(dev, module, enable, FALSE, no_image, FALSE, TRUE);
 }
 
+void dt_dev_add_new_history_item_ext(dt_develop_t *dev,
+                                     dt_iop_module_t *module,
+                                     const gboolean enable,
+                                     const int no_image)
+{
+  _dev_add_history_item_ext(dev, module, enable, TRUE, no_image, FALSE, TRUE);
+}
+
 static gboolean _dev_undo_start_record_target(dt_develop_t *dev, gpointer target)
 {
   const double this_time = dt_get_wtime();

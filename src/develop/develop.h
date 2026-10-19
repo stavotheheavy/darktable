@@ -421,6 +421,12 @@ void dt_dev_add_history_item_ext(dt_develop_t *dev,
                                  struct dt_iop_module_t *module,
                                  const gboolean enable,
                                  const gboolean no_image);
+// like dt_dev_add_history_item_ext() but always pushes a new item, never
+// merging into the one at history_end - 1
+void dt_dev_add_new_history_item_ext(dt_develop_t *dev,
+                                     struct dt_iop_module_t *module,
+                                     const gboolean enable,
+                                     const gboolean no_image);
 void dt_dev_add_history_item(dt_develop_t *dev,
                              struct dt_iop_module_t *module,
                              const gboolean enable);

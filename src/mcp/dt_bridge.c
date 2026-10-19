@@ -1211,7 +1211,9 @@ static gboolean _apply_entry(dt_develop_t *dev, JsonObject *entry, char **err)
   }
 
   mod->enabled = enabled;
-  dt_dev_add_history_item_ext(dev, mod, enabled, TRUE);
+  // a new item even when the last imported one is this module: merging would
+  // overwrite the imported state that every later render pops back to
+  dt_dev_add_new_history_item_ext(dev, mod, enabled, TRUE);
   return TRUE;
 }
 
@@ -1589,6 +1591,17 @@ static gboolean _session_apply(dt_bridge_session_t *s, JsonArray *stack, char **
   // declarative: a slider put back to neutral is simply absent, and modules
   // whose params did not change keep the same hash and are served from cache
   dt_dev_pop_history_items_ext(&s->dev, s->base_end);
+  // drop the previous render's items: left above history_end, an always-on
+  // module's item survives the next add (develop.c _dev_add_history_item_ext)
+  // and leaks into every later stack
+  GList *stale = g_list_nth(s->dev.history, s->base_end);
+  if(stale)
+  {
+    if(stale->prev) stale->prev->next = NULL;
+    else s->dev.history = NULL;
+    stale->prev = NULL;
+    g_list_free_full(stale, dt_dev_free_history_item);
+  }
   const guint n = stack ? json_array_get_length(stack) : 0;
   for(guint i = 0; i < n; i++)
   {
