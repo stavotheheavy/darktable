@@ -93,6 +93,15 @@ void dt_bridge_session_info(dt_bridge_session_t *s, int *processed_w, int *proce
     values are the imported state, which a stack is applied on top of */
 char *dt_bridge_session_modules_json(dt_bridge_session_t *s, char **err);
 
+/** ask a render in progress to stop at the next module boundary (or the next
+    poll inside a module that has one). only an atomic flag is touched, so this
+    may be called from any thread while another one renders; with no render
+    running it does nothing */
+void dt_bridge_session_cancel(dt_bridge_session_t *s);
+
+/** TRUE when the last render failed because it was canceled */
+gboolean dt_bridge_session_canceled(const dt_bridge_session_t *s);
+
 void dt_bridge_session_close(dt_bridge_session_t *s);
 
 /** like render, but returns per-channel statistics as JSON instead of a PNG */

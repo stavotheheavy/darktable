@@ -92,6 +92,14 @@ public final class DarkroomModel {
     private let engine: Engine
     private var rendering = false
     private var wantsRender = false
+    private var renderGeneration = 0
+    private var renderStarted = ContinuousClock.now
+    private var cancelScheduled = false
+    /// Renders stopped because a newer edit superseded them; for the self-test.
+    public private(set) var canceledRenders = 0
+    /// A superseded render that would finish within this is let through, so a drag keeps
+    /// showing frames; one that runs longer is stopped so the newest edit goes next.
+    static let cancelAfter: Duration = .milliseconds(100)
     private var scopeGeneration = 0
     private var scopeJobs = 0
     private var saveTask: Task<Void, Never>?
@@ -410,8 +418,28 @@ public final class DarkroomModel {
 
     public func requestRender() {
         wantsRender = true
-        guard !rendering else { return }
+        guard !rendering else { supersede(); return }
         Task { await renderLoop() }
+    }
+
+    /// The render in flight is stale: stop it once it has run `cancelAfter`.
+    private func supersede() {
+        guard !cancelScheduled else { return }
+        let ran = ContinuousClock.now - renderStarted
+        if ran >= Self.cancelAfter {
+            engine.cancelRender()
+            return
+        }
+        cancelScheduled = true
+        let gen = renderGeneration
+        Task { [weak self] in
+            try? await Task.sleep(for: Self.cancelAfter - ran)
+            guard let self else { return }
+            self.cancelScheduled = false
+            guard self.rendering, self.wantsRender else { return }
+            // a newer render started meanwhile and is itself superseded: time that one
+            if self.renderGeneration == gen { self.engine.cancelRender() } else { self.supersede() }
+        }
     }
 
     /// Returns once no render is running or queued. For headless callers and tests.
@@ -428,6 +456,8 @@ public final class DarkroomModel {
             wantsRender = false
             guard filePath != nil else { return }
             let entries = stack(for: shownEdits)
+            renderGeneration += 1
+            renderStarted = ContinuousClock.now
             do {
                 let result: RenderedFrame
                 if zoom == .fit || info == nil {
@@ -441,6 +471,9 @@ public final class DarkroomModel {
                 lastMilliseconds = result.milliseconds
                 status = "\(result.width) x \(result.height)"
                 if !showingOriginal { measureScopes(result.image) }
+            } catch is RenderCanceled {
+                // superseded: wantsRender is set and the loop renders the newest edit
+                canceledRenders += 1
             } catch {
                 status = "\(error)"
             }

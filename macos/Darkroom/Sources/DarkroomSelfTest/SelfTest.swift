@@ -487,6 +487,35 @@ struct SelfTest {
         model.jump(to: model.history.count - 1)
         await model.settle()
 
+        print("cancel")
+        func bytes(_ image: CGImage?) -> Data? { image?.dataProvider?.data as Data? }
+        if let diffuse = module(model, "diffuse") {
+            model.select(diffuse)
+            for _ in 0..<50 where model.schema(for: diffuse) == nil { try await Task.sleep(for: .milliseconds(20)) }
+            if let it = field(model, diffuse, "iterations") {
+                let before = bytes(model.frame)
+                let canceled = model.canceledRenders
+                // tens of seconds when left to finish
+                model.setParam(diffuse, it, to: .number((it.min + (it.max - it.min) * 0.75).rounded()))
+                try await Task.sleep(for: .milliseconds(400))
+                let t = ContinuousClock.now
+                model.undo()
+                await model.settle()
+                let ms = Int((ContinuousClock.now - t) / .milliseconds(1))
+                check(model.canceledRenders > canceled, "the superseded diffuse render was canceled, not finished")
+                check(ms < 2000, "undo during a slow diffuse render shows its frame in \(ms) ms")
+                if ProcessInfo.processInfo.environment["DTB_TIME_UNCANCELED"] != nil {
+                    let t1 = ContinuousClock.now
+                    model.redo()
+                    await model.settle()
+                    print("        the same render left to finish: \(Int((ContinuousClock.now - t1) / .milliseconds(1))) ms")
+                    model.undo()
+                    await model.settle()
+                }
+                check(before != nil && bytes(model.frame) == before, "the frame after a canceled render is byte-identical to the one before")
+            } else { check(false, "diffuse has an iterations field") }
+        } else { check(false, "diffuse is in the module list") }
+
         print("save and reload")
         await model.flushSave()
         check(FileManager.default.fileExists(atPath: copy.path + ".darkroom.json"), "sidecar written next to the raw")

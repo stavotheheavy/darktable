@@ -1493,6 +1493,7 @@ struct dt_bridge_session_t
   int base_end;            // history_end of the imported state
   int max_w, max_h;
   gboolean have_dev, have_buf, have_pipe;
+  gboolean canceled;       // the last render was stopped by dt_bridge_session_cancel
 };
 
 static void _session_destroy(dt_bridge_session_t *s)
@@ -1589,7 +1590,27 @@ static gboolean _session_process(dt_bridge_session_t *s, int x, int y, int w, in
                                  double scale, uint8_t **buf_out, int *stride_out,
                                  char **err)
 {
-  dt_dev_pixelpipe_process(&s->pipe, &s->dev, x, y, w, h, (float)scale, DT_DEVICE_NONE);
+  s->canceled = FALSE;
+  const gboolean failed =
+    dt_dev_pixelpipe_process(&s->pipe, &s->dev, x, y, w, h, (float)scale, DT_DEVICE_NONE);
+  // back to idle, as the darkroom does after a run (develop.c:888), so a cancel
+  // arriving between renders finds nothing to stop instead of hitting the next one
+  const dt_dev_pixelpipe_stopper_t stopper =
+    dt_atomic_exch_int(&s->pipe.shutdown, DT_DEV_PIXELPIPE_STOP_NO);
+  if(stopper > DT_DEV_PIXELPIPE_PROCESSING)
+  {
+    // the stopped module and everything after it lost their cachelines, so
+    // the next render recomputes them instead of reusing half-done output
+    s->canceled = TRUE;
+    _seterr(err, "render canceled");
+    return FALSE;
+  }
+  // backbuf still holds the previous frame after a failed run
+  if(failed)
+  {
+    _seterr(err, "the pipeline failed to process the image");
+    return FALSE;
+  }
 
   const uint8_t *src = s->pipe.backbuf;
   if(!src)
@@ -1765,6 +1786,20 @@ char *dt_bridge_session_modules_json(dt_bridge_session_t *s, char **err)
   char *out = _builder_to_string(b);
   g_object_unref(b);
   return out;
+}
+
+void dt_bridge_session_cancel(dt_bridge_session_t *s)
+{
+  // the piece mode rather than the darkroom's data mode: the data mode may be
+  // ignored based on the gui's develop object (pixelpipe_hb.c:1495), which a
+  // session does not use, and modules that poll for a stop inside their own
+  // loops (diffuse) switch to the piece mode anyway
+  if(s) dt_dev_pixelpipe_set_shutdown(&s->pipe, DT_DEV_PIXELPIPE_STOP_PIECE);
+}
+
+gboolean dt_bridge_session_canceled(const dt_bridge_session_t *s)
+{
+  return s && s->canceled;
 }
 
 void dt_bridge_session_close(dt_bridge_session_t *s)
