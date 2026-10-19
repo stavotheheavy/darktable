@@ -63,7 +63,13 @@ public final class LibraryModel {
     /// Files the engine could not develop; they still count as handled, so the status can finish.
     public private(set) var failed = 0
     public var handled: Int { scored + failed }
-    public var paused = false
+    /// Thumbnails share the engine, so they wait while a photo is open for editing.
+    public var paused = false {
+        didSet {
+            if paused { status = "Thumbnails paused while you edit (\(handled) of \(items.count))" }
+            else if handled < items.count { status = "Scoring \(handled) of \(items.count)" }
+        }
+    }
     /// Grid columns as drawn, so up and down arrows move a row.
     public var columns = 5
 
@@ -241,7 +247,7 @@ public struct LibraryView: View {
     @Bindable var library: LibraryModel
     let open: (String) -> Void
     @State private var choosing = false
-    @State private var comparing: String?
+    @State private var comparing: String? { didSet { Rig.comparing = comparing != nil } }
     @FocusState private var focused: Bool
 
     public init(library: LibraryModel, open: @escaping (String) -> Void) {
@@ -258,7 +264,7 @@ public struct LibraryView: View {
             } else {
                 ScrollViewReader { proxy in
                 ScrollView {
-                    LazyVGrid(columns: [GridItem(.adaptive(minimum: 170), spacing: 12)], spacing: 12) {
+                    LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 12), count: library.columns), spacing: 12) {
                         ForEach(library.shown) { item in
                             Cell(library: library, item: item, open: open)
                         }
@@ -291,7 +297,15 @@ public struct LibraryView: View {
         .focusable()
         .focused($focused)
         .focusEffectDisabled()
-        .onAppear { focused = true }
+        .onAppear {
+            focused = true
+            if Rig.enabled {
+                Rig.compareHook = {
+                    guard let sel = library.items.first(where: { $0.path == library.selected }), sel.stack != nil else { return false }
+                    comparing = sel.path; return true
+                }
+            }
+        }
         .onKeyPress(.return) {
             guard let sel = library.selected else { return .ignored }
             open(sel); return .handled
@@ -437,7 +451,7 @@ private struct Cell: View {
         .contentShape(Rectangle())
         .id(item.path)
         .onTapGesture(count: 2) { open(item.path) }
-        .onTapGesture { library.selected = item.path }
+        .simultaneousGesture(TapGesture().onEnded { library.selected = item.path })
         .accessibilityElement(children: .combine)
         .accessibilityLabel(item.name)
         .rig("cell-\(item.name)")

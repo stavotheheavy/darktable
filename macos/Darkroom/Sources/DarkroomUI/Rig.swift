@@ -19,6 +19,11 @@ public final class Rig {
     private let currentScreen: () -> Screen
     private var listener: NWListener?
     private var clicks = 0
+    /// Set by the library view so the rig can tell whether the compare view is showing.
+    static var comparing = false
+    /// Registered by the library view: opens the compare view for the selected photo.
+    static var compareHook: (() -> Bool)?
+    private var comparingNow: (() -> Bool)? { { Self.comparing } }
 
     public static func startIfRequested(model: DarkroomModel, library: LibraryModel,
                                         screen: @escaping () -> Screen, go: @escaping (Screen) -> Void,
@@ -134,7 +139,8 @@ public final class Rig {
             "zoom": model.zoom.rawValue,
             "rssMB": Int(Self.rssMB()),
             "clicks": clicks,
-            "library": ["items": library.items.count, "scored": library.scored, "failed": library.failed,
+            "library": ["order": library.shown.prefix(6).map { "\($0.name):\(Int($0.sharpness ?? -1))" }, "comparing": library.items.isEmpty ? false : (comparingNow?() ?? false),
+                        "items": library.items.count, "scored": library.scored, "failed": library.failed,
                         "selected": library.selected ?? "", "status": library.status],
         ]
     }
@@ -233,7 +239,13 @@ public final class Rig {
     }
 
     private func click(_ p: CGPoint, count: Int = 1) async {
+        // a window of an inactive app ignores clicks, as it would for a person
+        NSApp.activate()
         window?.makeKeyAndOrderFront(nil)
+        try? await Task.sleep(for: .milliseconds(120))
+        // move the pointer there first: SwiftUI controls only press after the pointer has entered them
+        mouse(.mouseMoved, at: p)
+        try? await Task.sleep(for: .milliseconds(80))
         for i in 1...count {
             mouse(.leftMouseDown, at: p, n: i)
             try? await Task.sleep(for: .milliseconds(40))
@@ -267,6 +279,19 @@ public final class Rig {
             result = ["ok": true, "clicked": key, "enabled": e.enabled, "at": [Int(c.x), Int(c.y)]]
         } else if let xy = o["clickAt"] as? [Double], xy.count == 2 {
             await click(CGPoint(x: xy[0], y: xy[1])); result = ["ok": true]
+        } else if let lib = o["library"] as? String {
+            // model-level library actions: select:<path>, sort, stacks, compare, rate:<n>, reject
+            let parts = lib.split(separator: ":", maxSplits: 1).map(String.init)
+            switch parts[0] {
+            case "select": if parts.count > 1 { library.selected = library.items.first { $0.path == parts[1] || $0.name == parts[1] }?.path ?? library.selected }
+            case "sort": library.sharpestFirst.toggle()
+            case "stacks": library.groupStacks.toggle()
+            case "compare": result = ["ok": Self.compareHook?() ?? false]; return result
+            case "rate": if parts.count > 1, let n = Int(parts[1]), let sel = library.selected { library.setRating(n, for: sel) }
+            case "reject": if let sel = library.selected { library.toggleReject(sel) }
+            default: return ["ok": false, "error": "unknown library action"]
+            }
+            result = ["ok": true, "selected": library.selected ?? ""]
         } else if let id = o["select"] as? String {
             guard let m = model.modules.first(where: { $0.id == id || $0.operation == id }) else { return ["ok": false, "error": "no module \(id)"] }
             model.select(m); result = ["ok": true, "selected": m.id]
@@ -298,7 +323,14 @@ public final class Rig {
             }
             result = ["ok": true, "key": k]
         } else if let p = o["open"] as? String {
-            openPhoto(p); result = ["ok": true]
+            // waits for the photo to be developed, so a script can time open to first frame honestly
+            let t0 = Date()
+            library.selected = p
+            go(.darkroom)
+            await model.open(path: p)
+            await model.settle()
+            result = ["ok": true, "openMs": Int(Date().timeIntervalSince(t0) * 1000), "lastRenderMs": model.lastMilliseconds ?? -1,
+                      "hasFrame": model.frame != nil]
         } else if let s = o["screen"] as? String {
             go(s == "library" ? .library : .darkroom); result = ["ok": true]
         } else if let m = o["mode"] as? String {
@@ -310,7 +342,9 @@ public final class Rig {
         } else if o["redo"] != nil {
             model.redo(); result = ["ok": true]
         } else if o["settle"] != nil {
-            await model.settle(); result = ["ok": true, "lastRenderMs": model.lastMilliseconds ?? -1]
+            let t0 = Date()
+            await model.settle()
+            result = ["ok": true, "lastRenderMs": model.lastMilliseconds ?? -1, "waitedMs": Int(Date().timeIntervalSince(t0) * 1000), "hasFrame": model.frame != nil]
         } else if let key = o["folder"] as? String {
             library.load(folder: URL(fileURLWithPath: key)); result = ["ok": true]
         } else {
