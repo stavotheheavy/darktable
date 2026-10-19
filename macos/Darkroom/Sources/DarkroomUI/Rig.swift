@@ -291,6 +291,17 @@ public final class Rig {
             result = ["ok": true, "clicked": key, "enabled": e.enabled, "at": [Int(c.x), Int(c.y)]]
         } else if let xy = o["clickAt"] as? [Double], xy.count == 2 {
             await click(CGPoint(x: xy[0], y: xy[1])); result = ["ok": true]
+        } else if let ui = o["ui"] as? String {
+            // header toggles at model level (synthetic single clicks are dropped by SwiftUI controls)
+            switch ui {
+            case "hide": model.uiHidden.toggle()
+            case "original": if model.history.count > 1 { model.showingOriginal.toggle() }
+            case "back": go(.library); library.paused = false
+            default:
+                if ui.hasPrefix("zoom:"), let z = ZoomMode.allCases.first(where: { $0.rawValue == String(ui.dropFirst(5)) }) { model.zoom = z }
+                else { return ["ok": false, "error": "unknown ui action"] }
+            }
+            result = ["ok": true]
         } else if let lib = o["library"] as? String {
             // model-level library actions: select:<path>, sort, stacks, compare, rate:<n>, reject
             let parts = lib.split(separator: ":", maxSplits: 1).map(String.init)
