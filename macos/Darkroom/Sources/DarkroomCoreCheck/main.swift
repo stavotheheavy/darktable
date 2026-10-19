@@ -154,5 +154,21 @@ do {
     check("A2 pixels outside the patch are unchanged", warm[0] == SIMD3(0.7, 0.4, 0.25))
 }
 
+// A3 partly clipped: a 3 by 3 patch whose red has blown (1.0, 0.9, 0.5) inside a warm field
+do {
+    let n = 41
+    func partial(_ field: SIMD3<Double>) -> [SIMD3<Double>] {
+        var img = [SIMD3<Double>](repeating: field, count: n * n)
+        for y in 19...21 { for x in 19...21 { img[y * n + x] = SIMD3(1.0, 0.9, 0.5) } }
+        return img
+    }
+    let warm = HighlightRebuild.rebuild(partial(SIMD3(0.7, 0.4, 0.25)), width: n, height: n)
+    let w = warm[20 * n + 20]
+    check("A3 blown red in a warm field rebuilds above clip", w.x > 1.2, "\(w)")
+    check("A3 unclipped green and blue keep their values", w.y == 0.9 && w.z == 0.5, "\(w)")
+    let dark = HighlightRebuild.rebuild(partial(SIMD3(repeating: 0.05)), width: n, height: n)
+    check("A3 with no support the blown red stays at clip", dark[20 * n + 20].x == 1.0, "\(dark[20 * n + 20])")
+}
+
 print(failures == 0 ? "\nall checks passed" : "\n\(failures) failed")
 exit(failures == 0 ? 0 : 1)

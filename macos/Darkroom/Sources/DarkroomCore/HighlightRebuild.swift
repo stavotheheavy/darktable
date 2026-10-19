@@ -27,12 +27,35 @@ public enum HighlightRebuild {
         for y in 0..<height {
             for x in 0..<width {
                 let i = y * width + x
-                guard pixels[i].x >= clip && pixels[i].y >= clip && pixels[i].z >= clip else { continue }
+                let p = pixels[i]
+                let clipped = [p.x >= clip, p.y >= clip, p.z >= clip]
+                let lost = clipped.filter { $0 }.count
+                guard lost > 0 else { continue }
                 let (chroma, support) = estimate(pixels, weights, width: width, height: height, x: x, y: y)
                 let f = HighlightSources.ramp(support, from: 0, to: supportFull)
-                let neutral = SIMD3(repeating: clip)
-                out[i] = neutral + (chroma * clip - neutral) * f
+                if lost == 3 {
+                    let neutral = SIMD3(repeating: clip)
+                    out[i] = neutral + (chroma * clip - neutral) * f
+                } else {
+                    out[i] = partlyClipped(p, clipped: clipped, chroma: chroma, fade: f, clip: clip)
+                }
             }
+        }
+        return out
+    }
+
+    /// A partly clipped pixel (A3). Unclipped channels keep their values. Each clipped channel takes
+    /// the level the estimated colour gives it, read off the unclipped channels, never below clip,
+    /// and scaled by `fade` (support), so with no support the clipped channels stay at clip.
+    static func partlyClipped(_ p: SIMD3<Double>, clipped: [Bool], chroma: SIMD3<Double>, fade: Double, clip: Double) -> SIMD3<Double> {
+        let keep = (0..<3).filter { !clipped[$0] }
+        let lost = (0..<3).filter { clipped[$0] }
+        let level = keep.map { p[$0] }.reduce(0, +) / Double(keep.count)
+        let eMean = keep.map { chroma[$0] }.reduce(0, +) / Double(keep.count)
+        var out = p
+        for c in lost {
+            let candidate = eMean > 0 ? level * chroma[c] / eMean : clip
+            out[c] = clip + max(candidate - clip, 0) * fade
         }
         return out
     }
