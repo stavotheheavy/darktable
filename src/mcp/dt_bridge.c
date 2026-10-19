@@ -954,6 +954,13 @@ static void _drop_scratch(dt_mcp_scratch_t *sc)
       sqlite3_step(st);
       sqlite3_finalize(st);
     }
+    // dt_image_remove() only drops the thumbnail levels (mipmap_cache.c:1330).
+    // the full raw and the preview buffer of a removed row can never be asked
+    // for again, yet they would sit in the mipmap cache until its quota (one
+    // or two buffers per worker thread, up to hundreds of MB each) pushes
+    // them out
+    dt_mipmap_cache_evict_at_size(imgid, DT_MIPMAP_FULL);
+    dt_mipmap_cache_evict_at_size(imgid, DT_MIPMAP_F);
     dt_image_remove(imgid);
   }
   g_list_free(sc->imgids);
@@ -1551,6 +1558,17 @@ dt_bridge_session_t *dt_bridge_session_open(const char *path, int imgid_in, int 
   }
   s->have_pipe = TRUE;
 
+  // a darkroom display pipe may keep an eighth of the memory darktable
+  // budgets for itself in cachelines, gigabytes on a large machine, and the
+  // raw stage before demosaic caches full sensor resolution. a session needs
+  // little of that: an edit only reuses the line in front of the edited
+  // module and the lines it just made. sixteen working-size frames hold
+  // those, and least recently used lines (the raw stage first) go beyond
+  const size_t line = (size_t)4 * sizeof(float) * MAX(s->max_w, 1) * MAX(s->max_h, 1);
+  const size_t budget = MAX(16 * line, (size_t)256 * DT_MEGA);
+  s->pipe.cache.mem_fraction = MAX(s->pipe.cache.mem_fraction,
+                                   MIN(dt_get_available_mem() / budget, (size_t)1024));
+
   dt_ioppr_resync_modules_order(&s->dev);
   dt_dev_pixelpipe_set_input(&s->pipe, &s->dev, (float *)s->buf.buf,
                              s->buf.width, s->buf.height, s->buf.iscale);
@@ -1629,6 +1647,10 @@ static gboolean _session_process(dt_bridge_session_t *s, int x, int y, int w, in
   memcpy(copy, src, bytes);
   *buf_out = copy;
   *stride_out = stride;
+
+  // trim now rather than at the start of the next render, so an image left
+  // open does not hold the transient full-resolution lines of this one
+  dt_dev_pixelpipe_cache_checkmem(&s->pipe, FALSE);
   return TRUE;
 }
 

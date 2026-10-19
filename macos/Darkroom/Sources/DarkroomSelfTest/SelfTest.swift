@@ -47,6 +47,7 @@ func describe(_ stack: [StackEntry]) -> String {
 struct SelfTest {
     @MainActor
     static func main() async {
+        Allocator.releaseFreedBlocksToTheSystem()
         setvbuf(stdout, nil, _IOLBF, 0)
         var args = Array(CommandLine.arguments.dropFirst())
         func take(_ flag: String) -> String? {

@@ -1,10 +1,12 @@
 import AppKit
 import DarkroomUI
+import DarktableKit
 import SwiftUI
 
 @main
 struct DarkroomApp: App {
     init() {
+        Allocator.releaseFreedBlocksToTheSystem()
         // started from a terminal, a SwiftPM executable is not a regular app until told so;
         // without this the window opens behind everything and takes no keyboard focus
         NSApplication.shared.setActivationPolicy(.regular)

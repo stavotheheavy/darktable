@@ -26,6 +26,8 @@ cat > "$APP/Contents/Info.plist" <<'PLIST'
   <key>LSMinimumSystemVersion</key><string>26.0</string>
   <key>NSHighResolutionCapable</key><true/>
   <key>NSPrincipalClass</key><string>NSApplication</string>
+  <key>LSEnvironment</key>
+  <dict><key>MallocLargeCache</key><string>0</string></dict>
   <key>CFBundleDocumentTypes</key>
   <array><dict>
     <key>CFBundleTypeName</key><string>Raw image</string>
