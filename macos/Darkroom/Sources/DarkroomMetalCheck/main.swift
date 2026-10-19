@@ -137,20 +137,41 @@ do {
         let x = Float(i % w) / Float(w), y = Float(i / w) / Float(h)
         return SIMD4(0.02 + 2.5 * x, 0.1 + 0.8 * y, 0.3 + 0.5 * (1 - x), 1)
     }
-    var times: [Double] = []
+    let chain: MetalChain
+    do {
+        chain = try MetalChain()
+    } catch {
+        print("FAIL  no chain: \(error)")
+        exit(1)
+    }
+    // one command buffer must match the three kernels run one after another
+    let once = chain.run(frame, scale: SIMD3(repeating: 0.9), columns: columns, amount: 0.6)
+    let stepwise = sharpenKernel.run(toneKernel.run(kernel.run(frame, scale: SIMD3(repeating: 0.9)),
+                                                    tone: toneMap, columns: columns), amount: 0.6)
+    var worstChain: Float = 0
+    for i in 0..<min(once.count, stepwise.count) {
+        let d = once[i] - stepwise[i]
+        worstChain = Swift.max(worstChain, Swift.max(Swift.abs(d.x), Swift.abs(d.y), Swift.abs(d.z)))
+    }
+    check("chain in one command buffer matches the stepwise kernels", once.count == stepwise.count && worstChain < 1e-6,
+          "worst \(worstChain)")
+
+    var times: [Double] = [], gpuTimes: [Double] = []
     for _ in 0..<30 {
         let t0 = DispatchTime.now().uptimeNanoseconds
-        let a = kernel.run(frame, scale: SIMD3(repeating: 0.9))
-        let b = toneKernel.run(a, tone: toneMap, columns: columns)
-        let c = sharpenKernel.run(b, amount: 0.6)
+        let out = chain.run(frame, scale: SIMD3(repeating: 0.9), columns: columns, amount: 0.6)
         let t1 = DispatchTime.now().uptimeNanoseconds
-        precondition(c.count == frame.count)
+        precondition(out.count == frame.count)
         times.append(Double(t1 - t0) / 1_000_000)
+        gpuTimes.append(chain.lastGPUMilliseconds)
     }
     times.sort()
+    gpuTimes.sort()
     let p50 = times[times.count / 2], p95 = times[Int(Double(times.count) * 0.95) - 1]
-    print("      viewport 2560x1440 GPU chain (exposure, tone+display, sharpen), 30 runs: p50 \(String(format: "%.1f", p50)) ms, p95 \(String(format: "%.1f", p95)) ms, budget 16 ms")
-    check("T5 first GPU numbers recorded (budget 16 ms at p95, not yet a pass)", p95 > 0)
+    let g95 = gpuTimes[Int(Double(gpuTimes.count) * 0.95) - 1]
+    print("      viewport 2560x1440 GPU chain in one command buffer, 30 runs: p50 \(String(format: "%.1f", p50)) ms, p95 \(String(format: "%.1f", p95)) ms, budget 16 ms")
+    print("      of which GPU execution p95 \(String(format: "%.1f", g95)) ms (copies in and out excluded)")
+    check("T5 viewport p95 under 16 ms (exposure, tone+display, sharpen)", p95 < 16, "p95 \(p95) ms")
 }
 
 print(failures == 0 ? "\nall Metal checks passed" : "\n\(failures) failed")
