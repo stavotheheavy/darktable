@@ -97,6 +97,22 @@ public final class DarkroomModel {
     private var cancelScheduled = false
     /// Renders stopped because a newer edit superseded them; for the self-test.
     public private(set) var canceledRenders = 0
+
+    /// A slider is held. While it moves, an edit whose full render is slow is shown as a
+    /// reduced-scale draft; releasing it, or holding it still for `settleAfter`, renders
+    /// the full frame the same way a single edit would.
+    public private(set) var dragging = false
+    /// The frame on screen is a draft, not the exact render of the current edits.
+    public private(set) var frameIsDraft = false
+    static let draftScale = 0.5
+    static let settleAfter: Duration = .milliseconds(150)
+    /// Below this a full render keeps up with a drag, and a draft would cost more than it
+    /// saves: the first one at a new scale recomputes the whole pipe.
+    static let slowRender: Duration = cancelAfter
+    private var lastEdit = ContinuousClock.now
+    private var lastFullRender: Duration = .zero
+    private var settleScheduled = false
+    private var renderIsDraft = false
     /// A superseded render that would finish within this is let through, so a drag keeps
     /// showing frames; one that runs longer is stopped so the newest edit goes next.
     static let cancelAfter: Duration = .milliseconds(100)
@@ -406,6 +422,7 @@ public final class DarkroomModel {
     public func buildStack() -> [StackEntry] { stack(for: edits) }
 
     private func changed() {
+        lastEdit = ContinuousClock.now
         requestRender()
         scheduleSave()
     }
@@ -422,9 +439,35 @@ public final class DarkroomModel {
         Task { await renderLoop() }
     }
 
-    /// The render in flight is stale: stop it once it has run `cancelAfter`.
+    /// Called by sliders as they are grabbed and let go.
+    public func setDragging(_ on: Bool) {
+        guard on != dragging else { return }
+        dragging = on
+        if !on, frameIsDraft { requestRender() }
+    }
+
+    private var wantsDraft: Bool {
+        dragging && zoom == .fit && info != nil && lastFullRender >= Self.slowRender
+            && ContinuousClock.now - lastEdit < Self.settleAfter
+    }
+
+    /// After a draft, render the full frame once the slider has been still for `settleAfter`.
+    private func scheduleSettle() {
+        guard !settleScheduled else { return }
+        settleScheduled = true
+        Task { [weak self] in
+            try? await Task.sleep(for: Self.settleAfter)
+            guard let self else { return }
+            self.settleScheduled = false
+            guard self.frameIsDraft, !self.rendering, !self.wantsRender else { return }
+            if ContinuousClock.now - self.lastEdit >= Self.settleAfter { self.requestRender() } else { self.scheduleSettle() }
+        }
+    }
+
+    /// The render in flight is stale: stop it once it has run `cancelAfter`. A draft is
+    /// let through, as it is the frame a drag gets to see.
     private func supersede() {
-        guard !cancelScheduled else { return }
+        guard !cancelScheduled, !renderIsDraft else { return }
         let ran = ContinuousClock.now - renderStarted
         if ran >= Self.cancelAfter {
             engine.cancelRender()
@@ -444,7 +487,7 @@ public final class DarkroomModel {
 
     /// Returns once no render is running or queued. For headless callers and tests.
     public func settle() async {
-        while rendering || wantsRender || scopeJobs > 0 { try? await Task.sleep(for: .milliseconds(10)) }
+        while rendering || wantsRender || settleScheduled || scopeJobs > 0 { try? await Task.sleep(for: .milliseconds(10)) }
     }
 
     private func renderLoop() async {
@@ -458,22 +501,32 @@ public final class DarkroomModel {
             let entries = stack(for: shownEdits)
             renderGeneration += 1
             renderStarted = ContinuousClock.now
+            let draft = wantsDraft
+            renderIsDraft = draft
             do {
                 let result: RenderedFrame
                 if zoom == .fit || info == nil {
-                    result = try await engine.sessionRender(stack: entries)
+                    result = try await engine.sessionRender(stack: entries, scale: draft ? Self.draftScale : 1)
                 } else {
                     let r = region()
                     result = try await engine.sessionRenderRegion(
                         stack: entries, scale: r.scale, x: r.x, y: r.y, width: r.w, height: r.h)
                 }
                 frame = result.image
+                frameIsDraft = draft
                 lastMilliseconds = result.milliseconds
-                status = "\(result.width) x \(result.height)"
-                if !showingOriginal { measureScopes(result.image) }
+                if draft {
+                    scheduleSettle()
+                } else {
+                    lastFullRender = .milliseconds(result.milliseconds)
+                    status = "\(result.width) x \(result.height)"
+                    if !showingOriginal { measureScopes(result.image) }
+                }
             } catch is RenderCanceled {
                 // superseded: wantsRender is set and the loop renders the newest edit
                 canceledRenders += 1
+                // a full render cut short already ran long enough to call it slow
+                if !draft { lastFullRender = max(lastFullRender, ContinuousClock.now - renderStarted) }
             } catch {
                 status = "\(error)"
             }

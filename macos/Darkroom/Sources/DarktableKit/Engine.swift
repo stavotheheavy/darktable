@@ -113,9 +113,17 @@ public actor Engine {
         live.withLock { if let s = $0 { dtb_session_cancel(s.pointer) } }
     }
 
-    /// Render the open image with exactly `stack` applied.
-    public func sessionRender(stack: [StackEntry] = []) throws -> RenderedFrame {
+    /// Render the open image with exactly `stack` applied. A `scale` below 1 renders the
+    /// whole frame at that fraction of the working size: a cheap draft while a slider moves.
+    public func sessionRender(stack: [StackEntry] = [], scale: Double = 1) throws -> RenderedFrame {
         guard let session else { throw EngineError("no image is open") }
+        if scale < 1, let i = sessionInfo(), i.processedWidth > 0, i.processedHeight > 0 {
+            let s = Double(i.workWidth) / Double(i.processedWidth) * scale
+            return try sessionRenderRegion(
+                stack: stack, scale: s, x: 0, y: 0,
+                width: max(1, Int(Double(i.processedWidth) * s)),
+                height: max(1, Int(Double(i.processedHeight) * s)))
+        }
         let stackJSON: String? = stack.isEmpty ? nil : try Self.json(stack)
         let t0 = DispatchTime.now().uptimeNanoseconds
 
