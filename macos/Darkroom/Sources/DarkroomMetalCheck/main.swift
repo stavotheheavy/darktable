@@ -129,5 +129,29 @@ check("B3 sharpen on Metal matches the CPU oracle within 1/255 (display)",
       worstSharpDisplay <= 1.0 / 255, "worst display error \(worstSharpDisplay)")
 print("      worst sharpen display error \(worstSharpDisplay)")
 
+// T5 first numbers (not the full test): the Metal chain exposure, tone + display, sharpen on a 2560 by 1440
+// viewport, timed from input to output over 30 runs. Excludes decode, the app, and the 24 MP frame.
+do {
+    let w = 2560, h = 1440
+    let frame = (0..<(w * h)).map { i -> SIMD4<Float> in
+        let x = Float(i % w) / Float(w), y = Float(i / w) / Float(h)
+        return SIMD4(0.02 + 2.5 * x, 0.1 + 0.8 * y, 0.3 + 0.5 * (1 - x), 1)
+    }
+    var times: [Double] = []
+    for _ in 0..<30 {
+        let t0 = DispatchTime.now().uptimeNanoseconds
+        let a = kernel.run(frame, scale: SIMD3(repeating: 0.9))
+        let b = toneKernel.run(a, tone: toneMap, columns: columns)
+        let c = sharpenKernel.run(b, amount: 0.6)
+        let t1 = DispatchTime.now().uptimeNanoseconds
+        precondition(c.count == frame.count)
+        times.append(Double(t1 - t0) / 1_000_000)
+    }
+    times.sort()
+    let p50 = times[times.count / 2], p95 = times[Int(Double(times.count) * 0.95) - 1]
+    print("      viewport 2560x1440 GPU chain (exposure, tone+display, sharpen), 30 runs: p50 \(String(format: "%.1f", p50)) ms, p95 \(String(format: "%.1f", p95)) ms, budget 16 ms")
+    check("T5 first GPU numbers recorded (budget 16 ms at p95, not yet a pass)", p95 > 0)
+}
+
 print(failures == 0 ? "\nall Metal checks passed" : "\n\(failures) failed")
 exit(failures == 0 ? 0 : 1)
