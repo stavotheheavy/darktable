@@ -15,6 +15,8 @@ let package = Package(
         .library(name: "DarkroomUI", targets: ["DarkroomUI"]),
         .library(name: "DarkroomCore", targets: ["DarkroomCore"]),
         .executable(name: "darkroom-core-check", targets: ["DarkroomCoreCheck"]),
+        .library(name: "DarkroomMetal", targets: ["DarkroomMetal"]),
+        .executable(name: "darkroom-metal-check", targets: ["DarkroomMetalCheck"]),
         .executable(name: "Darkroom", targets: ["Darkroom"]),
         .executable(name: "dtb-selftest", targets: ["DarkroomSelfTest"]),
     ],
@@ -36,6 +38,10 @@ let package = Package(
 
         // chart checks for DarkroomCore (T-series from the engine roadmap)
         .executableTarget(name: "DarkroomCoreCheck", dependencies: ["DarkroomCore"]),
+
+        // Metal kernels for the clean engine, each checked against the DarkroomCore oracle (L3)
+        .target(name: "DarkroomMetal", dependencies: ["DarkroomCore"]),
+        .executableTarget(name: "DarkroomMetalCheck", dependencies: ["DarkroomMetal", "DarkroomCore"]),
 
         // model + SwiftUI views, a library so the self-test can render them offscreen
         .target(
