@@ -2343,6 +2343,15 @@ static gboolean _dev_pixelpipe_process_rec(dt_dev_pixelpipe_t *pipe,
 
   // get region of interest which is needed in input
   module->modify_roi_in(module, piece, roi_out, &roi_in);
+
+  // a module fed parameters it cannot honor can produce an empty or negative
+  // region; processing that (tiling.c sizes its buffers from it) writes out of bounds
+  if(roi_in.width < 1 || roi_in.height < 1 || roi_out->width < 1 || roi_out->height < 1)
+  {
+    dt_print_pipe(DT_DEBUG_ALWAYS, "invalid roi",
+                  pipe, module, DT_DEVICE_NONE, &roi_in, roi_out, "refusing to process");
+    return TRUE;
+  }
   if((darktable.unmuted & DT_DEBUG_PIPE) && dt_iop_module_modifies_roi_in(module))
   {
     const gboolean modified = memcmp(roi_out, &roi_in, sizeof(dt_iop_roi_t));

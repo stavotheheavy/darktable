@@ -1066,6 +1066,27 @@ static void _apply_blend(dt_develop_blend_params_t *bp, JsonObject *o)
     bp->brightness = (float)json_object_get_double_member(o, "brightness");
 }
 
+// rawprepare refuses a crop unless left + right stays under half the width and
+// top + bottom under half the height (rawprepare.c _image_set_rawcrops), so a
+// slider pushed past that is held at the largest crop it would accept
+static void _clamp_raw_crops(dt_develop_t *dev, dt_iop_module_t *mod)
+{
+  const int half_w = dev->image_storage.width / 2 - 1;
+  const int half_h = dev->image_storage.height / 2 - 1;
+  if(half_w < 0 || half_h < 0 || !mod->so->get_p) return;
+
+  int32_t *left = mod->so->get_p(mod->params, "left");
+  int32_t *right = mod->so->get_p(mod->params, "right");
+  int32_t *top = mod->so->get_p(mod->params, "top");
+  int32_t *bottom = mod->so->get_p(mod->params, "bottom");
+  if(!left || !right || !top || !bottom) return;
+
+  *left = CLAMP(*left, 0, half_w);
+  *right = CLAMP(*right, 0, half_w - *left);
+  *top = CLAMP(*top, 0, half_h);
+  *bottom = CLAMP(*bottom, 0, half_h - *top);
+}
+
 // apply one stack entry to a module instance in dev and snapshot it to history
 static gboolean _apply_entry(dt_develop_t *dev, JsonObject *entry, char **err)
 {
@@ -1172,6 +1193,8 @@ static gboolean _apply_entry(dt_develop_t *dev, JsonObject *entry, char **err)
   memcpy(mod->params, blob, size);
   g_free(blob);
 
+  if(!g_strcmp0(op, "rawprepare")) _clamp_raw_crops(dev, mod);
+
   // optional blending: "blend": { mask_mode, blend_mode, reverse, opacity, ... }
   if(json_object_has_member(entry, "blend"))
   {
@@ -1188,7 +1211,9 @@ static gboolean _apply_entry(dt_develop_t *dev, JsonObject *entry, char **err)
   }
 
   mod->enabled = enabled;
-  dt_dev_add_history_item_ext(dev, mod, enabled, TRUE);
+  // a new item even when the last imported one is this module: merging would
+  // overwrite the imported state that every later render pops back to
+  dt_dev_add_new_history_item_ext(dev, mod, enabled, TRUE);
   return TRUE;
 }
 
@@ -1566,6 +1591,17 @@ static gboolean _session_apply(dt_bridge_session_t *s, JsonArray *stack, char **
   // declarative: a slider put back to neutral is simply absent, and modules
   // whose params did not change keep the same hash and are served from cache
   dt_dev_pop_history_items_ext(&s->dev, s->base_end);
+  // drop the previous render's items: left above history_end, an always-on
+  // module's item survives the next add (develop.c _dev_add_history_item_ext)
+  // and leaks into every later stack
+  GList *stale = g_list_nth(s->dev.history, s->base_end);
+  if(stale)
+  {
+    if(stale->prev) stale->prev->next = NULL;
+    else s->dev.history = NULL;
+    stale->prev = NULL;
+    g_list_free_full(stale, dt_dev_free_history_item);
+  }
   const guint n = stack ? json_array_get_length(stack) : 0;
   for(guint i = 0; i < n; i++)
   {
@@ -1589,10 +1625,16 @@ static gboolean _session_process(dt_bridge_session_t *s, int x, int y, int w, in
                                  double scale, uint8_t **buf_out, int *stride_out,
                                  char **err)
 {
-  dt_dev_pixelpipe_process(&s->pipe, &s->dev, x, y, w, h, (float)scale, DT_DEVICE_NONE);
+  if(dt_dev_pixelpipe_process(&s->pipe, &s->dev, x, y, w, h, (float)scale, DT_DEVICE_NONE))
+  {
+    _seterr(err, "the pipeline could not process this edit");
+    return FALSE;
+  }
 
+  // backbuf can still hold an earlier frame of another size, and the copy below
+  // trusts w and h
   const uint8_t *src = s->pipe.backbuf;
-  if(!src)
+  if(!src || s->pipe.backbuf_width != w || s->pipe.backbuf_height != h)
   {
     _seterr(err, "no output buffer after processing");
     return FALSE;
@@ -1724,6 +1766,10 @@ char *dt_bridge_session_modules_json(dt_bridge_session_t *s, char **err)
     json_builder_add_int_value(b, m->multi_priority);
     json_builder_set_member_name(b, "multi_name");
     json_builder_add_string_value(b, m->multi_name);
+    // auto-applied presets label an instance too (develop.c _dev_auto_module_label),
+    // so a non-empty name alone does not mean the user typed it
+    json_builder_set_member_name(b, "multi_name_hand_edited");
+    json_builder_add_boolean_value(b, m->multi_name_hand_edited);
     json_builder_set_member_name(b, "name");
     json_builder_add_string_value(b, m->name());
     json_builder_set_member_name(b, "iop_order");

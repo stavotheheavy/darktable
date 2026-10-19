@@ -9,6 +9,7 @@ import UniformTypeIdentifiers
 // Headless checks that the Swift side really drives darktable's engine.
 //   dtb-selftest <image> [--max 1400] [--out frame.png]      engine round trip + timings
 //   dtb-selftest <image> --ui                                the real model: sliders -> stack -> pixels
+//   dtb-selftest <raw> --crop-abuse                          raw crops past the frame must not crash a render
 //
 // What this cannot check is how the Liquid Glass views look: SwiftUI draws through the window
 // server, so offscreen snapshots come out blank or flat. That needs the app on screen.
@@ -66,6 +67,7 @@ struct SelfTest {
         let listModules = has("--list-modules")
         let bench = has("--bench")
         let effects = has("--effects")
+        let cropAbuse = has("--crop-abuse")
         let fromModule = take("--from")
         guard let path = args.first else {
             print("usage: dtb-selftest <image> [--max 1400] [--out frame.png] [--ui]")
@@ -85,7 +87,9 @@ struct SelfTest {
                 cacheDir: env["DARKROOM_CACHE_DIR"].map { URL(fileURLWithPath: $0) } ?? home.appending(path: ".cache/darktable-fork"))
             print(String(format: "engine start: %.0f ms", Date().timeIntervalSince(t0) * 1000))
 
-            if effects {
+            if cropAbuse {
+                try await runCropAbuse(engine: engine, path: path)
+            } else if effects {
                 try await runEffects(engine: engine, path: path, from: fromModule)
             } else if bench {
                 try await runBench(engine: engine, folder: path)
@@ -224,6 +228,63 @@ struct SelfTest {
         if !badUndo.isEmpty { print("undo failures: " + badUndo.prefix(40).joined(separator: ", ")) }
         print("no visible effect on \(still.count) controls (often a disabled mask, a hidden mode, or a guard); see \(tsvPath)")
         try? handle?.close()
+    }
+
+    // MARK: crop abuse
+
+    /// Sets every raw crop of `raw black/white point` to 80% of its range, which is far past the
+    /// frame, then renders at fit, at 100% and again after another edit. The bad crops used to
+    /// reach tiling as a negative size and crash; now each render must come back with a frame.
+    @MainActor
+    static func runCropAbuse(engine: Engine, path: String) async throws {
+        var failures: [String] = []
+        func check(_ ok: Bool, _ what: String) {
+            print((ok ? "  ok    " : "  FAIL  ") + what)
+            if !ok { failures.append(what) }
+        }
+        let fm = FileManager.default
+        let farm = URL(fileURLWithPath: NSTemporaryDirectory()).appending(path: "darkroom-crop-abuse")
+        try? fm.removeItem(at: farm)
+        try fm.createDirectory(at: farm, withIntermediateDirectories: true)
+        let link = farm.appending(path: URL(fileURLWithPath: path).lastPathComponent)
+        try fm.createSymbolicLink(at: link, withDestinationURL: URL(fileURLWithPath: path))
+
+        let model = DarkroomModel(engine: engine)
+        await model.open(path: link.path)
+        await model.settle()
+        guard let f0 = model.frame else { throw EngineError("no base frame") }
+        let size = (f0.width, f0.height)
+        check(true, "base frame \(size.0)x\(size.1)")
+        guard let raw = model.modules.first(where: { $0.operation == "rawprepare" }) else { throw EngineError("no rawprepare") }
+        model.select(raw)
+        for _ in 0..<40 where model.schema(for: raw) == nil { try await Task.sleep(for: .milliseconds(50)) }
+        guard let schema = model.schema(for: raw) else { throw EngineError("no rawprepare schema") }
+
+        for name in ["left", "top", "right", "bottom"] {
+            guard let f = schema.fields.first(where: { $0.name == name }) else { continue }
+            let v = (f.min + (f.max - f.min) * 0.8).rounded()
+            model.setParam(raw, f, to: .number(v))
+            await model.settle()
+            check(model.frame != nil, "crop \(name) = \(Int(v)): frame \(model.frame.map { "\($0.width)x\($0.height)" } ?? "none")")
+        }
+        model.zoom = .actual
+        await model.settle()
+        check(model.frame != nil, "100% view renders")
+        if let exposure = model.modules.first(where: { $0.operation == "exposure" }) {
+            model.select(exposure)
+            for _ in 0..<40 where model.schema(for: exposure) == nil { try await Task.sleep(for: .milliseconds(50)) }
+            if let ev = model.schema(for: exposure)?.fields.first(where: { $0.name == "exposure" }) {
+                model.setParam(exposure, ev, to: .number(1))
+                await model.settle()
+                check(model.frame != nil, "later edit renders")
+            }
+        }
+        model.zoom = .fit
+        model.undo(); model.undo(); model.undo(); model.undo(); model.undo()
+        await model.settle()
+        check(model.frame.map { ($0.width, $0.height) } ?? (0, 0) == size, "undo brings back \(size.0)x\(size.1)")
+        print(failures.isEmpty ? "CROP ABUSE: ALL CHECKS PASSED" : "CROP ABUSE: \(failures.count) FAILED")
+        if !failures.isEmpty { exit(1) }
     }
 
     // MARK: bench
@@ -382,6 +443,9 @@ struct SelfTest {
         let base = luma(model)
         check(model.scopes != nil, "scopes measured")
         check(model.selectedModule?.operation == "exposure", "exposure is selected first")
+        // auto-applied presets name the instance `_builtin_...`; only a name the user typed belongs in the title
+        let title = model.selectedModule?.title ?? ""
+        check(!title.contains("_builtin_") && title.hasPrefix(model.selectedModule?.name ?? "?"), "inspector title is '\(title)'")
 
         print("inspector from introspection")
         guard let exposure = module(model, "exposure") else { throw EngineError("no exposure module") }

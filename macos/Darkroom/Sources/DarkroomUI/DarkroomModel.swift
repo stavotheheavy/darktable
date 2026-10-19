@@ -24,9 +24,7 @@ public struct ModuleRow: Identifiable, Equatable {
     public let stage: Stage
     public let enabled: Bool
     public let edited: Bool
-    public var title: String {
-        module.multiName.isEmpty ? module.name : "\(module.name) · \(module.multiName)"
-    }
+    public var title: String { module.title }
 }
 
 /// Everything the darkroom shows and does.
@@ -239,9 +237,7 @@ public final class DarkroomModel {
     }
 
     /// The label a step gets: "exposure", or "color balance rgb · skin".
-    private func title(_ m: ModuleInfo) -> String {
-        m.multiName.isEmpty ? m.name : "\(m.name) · \(m.multiName)"
-    }
+    private func title(_ m: ModuleInfo) -> String { m.title }
 
     public func setParam(_ m: ModuleInfo, _ f: FieldSchema, to v: ParamValue) {
         var value = v

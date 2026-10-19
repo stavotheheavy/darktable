@@ -351,7 +351,7 @@ struct InspectorCard: View {
             .accessibilityLabel("Enable \(m.name)")
             .rig("inspector-enable")
 
-            Text(m.multiName.isEmpty ? m.name : "\(m.name) · \(m.multiName)")
+            Text(m.title)
                 .font(.headline)
                 .lineLimit(1)
                 .rig("inspector-title")
