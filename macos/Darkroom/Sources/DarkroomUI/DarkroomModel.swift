@@ -327,6 +327,28 @@ public final class DarkroomModel {
         changed()
     }
 
+    /// Folds every history step `body` makes into one, so a single action by the user (a look,
+    /// a Simple slider that writes two parameters) undoes in one press. Repeated drags of the same
+    /// `target` within 1.5 s merge into that one step, as a drag on a Pro slider does.
+    public func grouped(_ label: String, target: String, _ body: () -> Void) {
+        let start = historyIndex
+        let merging = start > 0 && start == history.count - 1 && history[start].target == target
+            && Date().timeIntervalSince(history[start].time) < 1.5
+        body()
+        guard historyIndex > start else { return }
+        let last = history[historyIndex]
+        history.removeSubrange((start + 1)...historyIndex)
+        if merging {
+            history[start].edits = last.edits
+            history[start].detail = last.detail
+            history[start].time = Date()
+            historyIndex = start
+        } else {
+            history.append(HistoryItem(label: label, detail: last.detail, edits: last.edits, target: target, time: Date()))
+            historyIndex = history.count - 1
+        }
+    }
+
     public var canUndo: Bool { historyIndex > 0 }
     public var canRedo: Bool { historyIndex < history.count - 1 }
 

@@ -105,6 +105,10 @@ extension DarkroomModel {
     }
 
     public func setSimple(_ c: SimpleControl, to v: Double) {
+        grouped(c.rawValue, target: "simple.\(c.rawValue)") { writeSimple(c, to: v) }
+    }
+
+    private func writeSimple(_ c: SimpleControl, to v: Double) {
         let v = min(max(v, c.range.lowerBound), c.range.upperBound)
         switch c {
         case .light:
@@ -133,7 +137,9 @@ extension DarkroomModel {
     }
 
     public func apply(_ look: SimpleLook) {
-        for c in SimpleControl.allCases { setSimple(c, to: look.values[c] ?? 0) }
+        grouped(look.name, target: "look.\(look.id)") {
+            for c in SimpleControl.allCases { writeSimple(c, to: look.values[c] ?? 0) }
+        }
     }
 
     /// True when something other than this slider has changed the module behind it, in Pro:

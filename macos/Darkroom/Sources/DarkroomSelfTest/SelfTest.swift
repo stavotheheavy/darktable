@@ -515,6 +515,17 @@ struct SelfTest {
         await simple.settle()
         check(abs(simple.simpleValue(.warmth) - 55) < 2, "a look sets Warmth to its value (\(String(format: "%.0f", simple.simpleValue(.warmth))))")
         check(simple.customEditCount == 0, "Simple edits alone leave no custom edits")
+        simple.jump(to: 0)
+        let steps0 = simple.historyIndex
+        simple.apply(SimpleLook.all[3])
+        check(simple.historyIndex == steps0 + 1, "a whole look is one history step (\(simple.historyIndex - steps0))")
+        simple.undo()
+        await simple.settle()
+        check(abs(luma(simple) - s0) < 0.5, "one undo returns the picture from before the look")
+        simple.setSimple(.warmth, to: 60)
+        check(simple.historyIndex == steps0 + 1, "warmth writes two parameters and is still one step")
+        simple.jump(to: 0)
+        simple.apply(SimpleLook.all[1])
         if let shadhi = module(simple, "shadhi") {
             simple.setEnabled(shadhi, true)
             check(simple.customEditCount == 1, "a Pro edit shows up as one custom edit")

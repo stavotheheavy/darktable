@@ -696,6 +696,7 @@ public struct DarkroomRoot: View {
     }
 
     private func openPhoto(_ path: String) {
+        library.selected = path   // back in the library, the photo you came from is the selected one
         screen = .darkroom
         library.paused = true   // thumbnails share the engine, so they wait while you edit
         Task { await model.open(path: path) }

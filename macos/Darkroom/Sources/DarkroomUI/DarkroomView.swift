@@ -190,13 +190,13 @@ struct TopBar: View {
     private var fileCapsule: some View {
         HStack(spacing: 10) {
             if let back = model.onBack {
-                Button(action: back) { Image(systemName: "chevron.left").frame(width: 30, height: 30) }
+                Button(action: back) { Image(systemName: "chevron.left").frame(width: 44, height: 44).contentShape(Rectangle()) }
                     .buttonStyle(.plain)
                     .accessibilityLabel("Back to the library")
                     .rig("back")
             }
             Button { choosing = true } label: {
-                Image(systemName: "photo.on.rectangle").frame(width: 30, height: 30)
+                Image(systemName: "photo.on.rectangle").frame(width: 44, height: 44).contentShape(Rectangle())
             }
             .buttonStyle(.plain)
             .accessibilityLabel("Open image")
@@ -235,10 +235,10 @@ struct TopBar: View {
             .accessibilityLabel("Snapshot")
             .rig("snapshot")
 
-            Button { model.undo() } label: { Image(systemName: "arrow.uturn.backward").frame(width: 40, height: 40) }
+            Button { model.undo() } label: { Image(systemName: "arrow.uturn.backward").frame(width: 44, height: 44).contentShape(Rectangle()) }
                 .buttonStyle(.plain).disabled(!model.canUndo)
                 .accessibilityLabel("Undo").rig("undo")
-            Button { model.redo() } label: { Image(systemName: "arrow.uturn.forward").frame(width: 40, height: 40) }
+            Button { model.redo() } label: { Image(systemName: "arrow.uturn.forward").frame(width: 44, height: 44).contentShape(Rectangle()) }
                 .buttonStyle(.plain).disabled(!model.canRedo)
                 .accessibilityLabel("Redo").rig("redo")
 

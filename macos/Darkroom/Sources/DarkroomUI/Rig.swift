@@ -197,12 +197,12 @@ public final class Rig {
         return cv.convert(local, to: nil)
     }
 
-    private func mouse(_ type: NSEvent.EventType, at p: CGPoint, n: Int = 1) {
+    private func mouse(_ type: NSEvent.EventType, at p: CGPoint, n: Int = 1, queued: Bool = false) {
         guard let win = window, let pt = point(p),
               let ev = NSEvent.mouseEvent(with: type, location: pt, modifierFlags: [], timestamp: ProcessInfo.processInfo.systemUptime,
                                           windowNumber: win.windowNumber, context: nil, eventNumber: 0, clickCount: n, pressure: 1) else { return }
-        // queued, not sent: a slider's tracking loop reads the event queue, not sendEvent
-        NSApp.postEvent(ev, atStart: false)
+        // clicks are sent straight to the window; a drag is queued because a slider's tracking loop reads the queue
+        if queued { NSApp.postEvent(ev, atStart: false) } else { win.sendEvent(ev) }
     }
 
     /// A point in root coordinates as a screen point in CGEvent's space (origin top left of the main display).
@@ -244,14 +244,14 @@ public final class Rig {
 
     private func drag(from a: CGPoint, to b: CGPoint) async {
         window?.makeKeyAndOrderFront(nil)
-        mouse(.leftMouseDown, at: a)
+        mouse(.leftMouseDown, at: a, queued: true)
         try? await Task.sleep(for: .milliseconds(60))
         for s in 1...10 {
             let t = CGFloat(s) / 10
-            mouse(.leftMouseDragged, at: CGPoint(x: a.x + (b.x - a.x) * t, y: a.y + (b.y - a.y) * t))
+            mouse(.leftMouseDragged, at: CGPoint(x: a.x + (b.x - a.x) * t, y: a.y + (b.y - a.y) * t), queued: true)
             try? await Task.sleep(for: .milliseconds(40))
         }
-        mouse(.leftMouseUp, at: b)
+        mouse(.leftMouseUp, at: b, queued: true)
         try? await Task.sleep(for: .milliseconds(80))
     }
 
@@ -284,11 +284,16 @@ public final class Rig {
             var mods: NSEvent.ModifierFlags = []
             if (o["cmd"] as? Bool) == true { mods.insert(.command) }
             if (o["shift"] as? Bool) == true { mods.insert(.shift) }
+            // named keys carry the character and key code a real keyboard sends
+            let named: [String: (String, UInt16)] = [
+                "return": ("\r", 36), "escape": ("\u{1B}", 53), "tab": ("\t", 48), "space": (" ", 49),
+                "left": ("\u{F702}", 123), "right": ("\u{F703}", 124), "up": ("\u{F700}", 126), "down": ("\u{F701}", 125)]
+            let (chars, code) = named[k.lowercased()] ?? (k, 0)
             for type in [NSEvent.EventType.keyDown, .keyUp] {
-                if let ev = NSEvent.keyEvent(with: type, location: .zero, modifierFlags: mods, timestamp: 0,
-                                             windowNumber: win.windowNumber, context: nil, characters: k,
-                                             charactersIgnoringModifiers: k, isARepeat: false, keyCode: 0) {
-                    win.sendEvent(ev)
+                if let ev = NSEvent.keyEvent(with: type, location: .zero, modifierFlags: mods, timestamp: ProcessInfo.processInfo.systemUptime,
+                                             windowNumber: win.windowNumber, context: nil, characters: chars,
+                                             charactersIgnoringModifiers: chars, isARepeat: false, keyCode: code) {
+                    NSApp.postEvent(ev, atStart: false)
                 }
             }
             result = ["ok": true, "key": k]

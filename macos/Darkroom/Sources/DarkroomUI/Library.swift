@@ -64,6 +64,8 @@ public final class LibraryModel {
     public private(set) var failed = 0
     public var handled: Int { scored + failed }
     public var paused = false
+    /// Grid columns as drawn, so up and down arrows move a row.
+    public var columns = 5
 
     private let engine: Engine
     private var store = RatingStore.load()
@@ -172,6 +174,14 @@ public final class LibraryModel {
         try? await engine.render(path: path, maxSide: 1400).image
     }
 
+    /// Arrow keys: move the selection through the photos in the order shown.
+    public func moveSelection(by d: Int) {
+        let list = shown
+        guard !list.isEmpty else { return }
+        let cur = list.firstIndex { $0.path == selected } ?? 0
+        selected = list[min(list.count - 1, max(0, cur + d))].path
+    }
+
     public func setRating(_ r: Int, for path: String) {
         guard let i = items.firstIndex(where: { $0.path == path }) else { return }
         items[i].rating = items[i].rating == r ? 0 : r
@@ -246,6 +256,7 @@ public struct LibraryView: View {
             if library.items.isEmpty {
                 EmptyLibrary(choose: { choosing = true }, restore: library.restoredFolder.map { f in { library.load(folder: f) } })
             } else {
+                ScrollViewReader { proxy in
                 ScrollView {
                     LazyVGrid(columns: [GridItem(.adaptive(minimum: 170), spacing: 12)], spacing: 12) {
                         ForEach(library.shown) { item in
@@ -255,6 +266,13 @@ public struct LibraryView: View {
                     .padding(.horizontal, 14)
                     .padding(.top, 88)
                     .padding(.bottom, 96)
+                }
+                .onGeometryChange(for: CGFloat.self, of: { $0.size.width }) { w in
+                    library.columns = max(1, Int((w - 28 + 12) / (170 + 12)))
+                }
+                .onChange(of: library.selected) { _, new in
+                    if let new { withAnimation(.none) { proxy.scrollTo(new, anchor: .center) } }
+                }
                 }
             }
 
@@ -274,6 +292,14 @@ public struct LibraryView: View {
         .focused($focused)
         .focusEffectDisabled()
         .onAppear { focused = true }
+        .onKeyPress(.return) {
+            guard let sel = library.selected else { return .ignored }
+            open(sel); return .handled
+        }
+        .onKeyPress(.leftArrow) { library.moveSelection(by: -1); return .handled }
+        .onKeyPress(.rightArrow) { library.moveSelection(by: 1); return .handled }
+        .onKeyPress(.upArrow) { library.moveSelection(by: -library.columns); return .handled }
+        .onKeyPress(.downArrow) { library.moveSelection(by: library.columns); return .handled }
         .onKeyPress(characters: CharacterSet(charactersIn: "012345xX")) { press in
             guard let sel = library.selected, let c = press.characters.first else { return .ignored }
             if c == "x" || c == "X" { library.toggleReject(sel) } else if let n = Int(String(c)) { if n == 3, Rig.canary("deadstar") { return .handled }; library.setRating(n, for: sel) }
@@ -289,7 +315,7 @@ public struct LibraryView: View {
     private var header: some View {
         HStack(spacing: 12) {
             HStack(spacing: 10) {
-                Button { choosing = true } label: { Image(systemName: "folder").frame(width: 34, height: 34) }
+                Button { choosing = true } label: { Image(systemName: "folder").frame(width: 44, height: 44).contentShape(Rectangle()) }
                     .buttonStyle(.plain).accessibilityLabel("Choose a folder").rig("choose-folder")
                 VStack(alignment: .leading, spacing: 0) {
                     Text(library.folder?.lastPathComponent ?? "Library").font(.callout.weight(.medium))
@@ -304,6 +330,7 @@ public struct LibraryView: View {
             HStack(spacing: 8) {
                 Button { library.groupStacks.toggle() } label: { Label("Stacks", systemImage: "square.stack") }
                     .buttonStyle(FlatCapsuleStyle(on: library.groupStacks))
+                    .rig("stacks-toggle")
                 Button { library.sharpestFirst.toggle() } label: { Label("Sharpest first", systemImage: "arrow.up.arrow.down") }
                     .buttonStyle(FlatCapsuleStyle(on: library.sharpestFirst))
                     .rig("sort-sharp")
@@ -315,6 +342,9 @@ public struct LibraryView: View {
                 HStack(spacing: 6) {
                     Text("Soft below").font(.caption).foregroundStyle(.secondary)
                     Slider(value: $library.softBelow, in: 10...90, step: 1).tint(Theme.accent).frame(width: 110)
+                        .accessibilityLabel("Soft below")
+                        .rig("soft-below")
+                        .onAppear { if Rig.enabled { Rig.setters["soft-below"] = { library.softBelow = (10 + 80 * $0).rounded() } } }
                     Text("\(Int(library.softBelow))").font(.caption.monospacedDigit()).frame(width: 24)
                 }
             }
@@ -337,6 +367,7 @@ public struct LibraryView: View {
                         Image(systemName: n <= (sel?.rating ?? 0) ? "star.fill" : "star")
                             .foregroundStyle(n <= (sel?.rating ?? 0) ? Theme.accent : .secondary)
                             .frame(width: 36, height: 44)
+                            .contentShape(Rectangle())
                     }
                     .buttonStyle(.plain).accessibilityLabel("\(n) stars")
                 }
@@ -404,6 +435,7 @@ private struct Cell: View {
             Text(item.name).font(.caption.monospaced()).foregroundStyle(.secondary).lineLimit(1)
         }
         .contentShape(Rectangle())
+        .id(item.path)
         .onTapGesture(count: 2) { open(item.path) }
         .onTapGesture { library.selected = item.path }
         .accessibilityElement(children: .combine)
