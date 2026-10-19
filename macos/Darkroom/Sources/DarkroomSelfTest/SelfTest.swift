@@ -443,6 +443,9 @@ struct SelfTest {
         let base = luma(model)
         check(model.scopes != nil, "scopes measured")
         check(model.selectedModule?.operation == "exposure", "exposure is selected first")
+        // auto-applied presets name the instance `_builtin_...`; only a name the user typed belongs in the title
+        let title = model.selectedModule?.title ?? ""
+        check(!title.contains("_builtin_") && title.hasPrefix(model.selectedModule?.name ?? "?"), "inspector title is '\(title)'")
 
         print("inspector from introspection")
         guard let exposure = module(model, "exposure") else { throw EngineError("no exposure module") }

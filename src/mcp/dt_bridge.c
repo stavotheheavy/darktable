@@ -1766,6 +1766,10 @@ char *dt_bridge_session_modules_json(dt_bridge_session_t *s, char **err)
     json_builder_add_int_value(b, m->multi_priority);
     json_builder_set_member_name(b, "multi_name");
     json_builder_add_string_value(b, m->multi_name);
+    // auto-applied presets label an instance too (develop.c _dev_auto_module_label),
+    // so a non-empty name alone does not mean the user typed it
+    json_builder_set_member_name(b, "multi_name_hand_edited");
+    json_builder_add_boolean_value(b, m->multi_name_hand_edited);
     json_builder_set_member_name(b, "name");
     json_builder_add_string_value(b, m->name());
     json_builder_set_member_name(b, "iop_order");

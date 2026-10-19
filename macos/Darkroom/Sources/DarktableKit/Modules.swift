@@ -105,6 +105,8 @@ public struct ModuleInfo: Sendable, Identifiable, Equatable {
     public let operation: String
     public let multiPriority: Int
     public let multiName: String
+    /// True only for a name the user typed; presets label instances too, e.g. `_builtin_scene-referred default`.
+    public let multiNameHandEdited: Bool
     public let name: String
     public let iopOrder: Int
     public let enabled: Bool
@@ -118,6 +120,11 @@ public struct ModuleInfo: Sendable, Identifiable, Equatable {
     public let haveIntrospection: Bool
     public let params: [String: ParamValue]
     public let blend: BlendInfo?
+
+    /// "exposure", or "color balance rgb · skin" when the user named the instance.
+    public var title: String {
+        multiNameHandEdited && !multiName.isEmpty ? "\(name) · \(multiName)" : name
+    }
 
     static func parse(_ data: Data) throws -> [ModuleInfo] {
         guard let arr = try JSONSerialization.jsonObject(with: data) as? [[String: Any]] else {
@@ -134,6 +141,7 @@ public struct ModuleInfo: Sendable, Identifiable, Equatable {
                 operation: op,
                 multiPriority: (o["multi_priority"] as? NSNumber)?.intValue ?? 0,
                 multiName: o["multi_name"] as? String ?? "",
+                multiNameHandEdited: b("multi_name_hand_edited"),
                 name: o["name"] as? String ?? op,
                 iopOrder: (o["iop_order"] as? NSNumber)?.intValue ?? 0,
                 enabled: b("enabled"), defaultEnabled: b("default_enabled"),
