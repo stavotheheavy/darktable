@@ -3,7 +3,9 @@
 // DarkroomCore oracle within 1/255 after the sRGB encode. This is what "wired" means in the ledger.
 import DarkroomCI
 import DarkroomCore
+import CoreImage
 import DarkroomEngineAPI
+import DarkroomMetal
 import Foundation
 
 nonisolated(unsafe) var failures = 0
@@ -96,6 +98,43 @@ check("E6 exposure alone keeps the decoder's tone curve", !CIEngineProbe.wantsSc
 var off = chain[0]
 off.enabled = false
 check("E6 a disabled display keeps the decoder's tone curve", !CIEngineProbe.wantsSceneLinear([off]))
+
+// E7 the per-pixel card path: one source, a texture entry for the engine and a buffer entry for the checks
+let probeSource = """
+#include <metal_stdlib>
+using namespace metal;
+static float3 probe_apply(float3 c, constant float *u) { return c * u[0] + u[1]; }
+kernel void probeTex(texture2d<float, access::read> src [[texture(0)]], texture2d<float, access::write> dst [[texture(1)]],
+                     constant float *u [[buffer(0)]], uint2 gid [[thread_position_in_grid]]) {
+    if (gid.x >= dst.get_width() || gid.y >= dst.get_height()) { return; }
+    float4 c = src.read(gid);
+    dst.write(float4(probe_apply(c.rgb, u), c.a), gid);
+}
+kernel void probeBuf(device const float4 *src [[buffer(0)]], device float4 *dst [[buffer(1)]],
+                     constant float *u [[buffer(2)]], uint i [[thread_position_in_grid]]) {
+    dst[i] = float4(probe_apply(src[i].rgb, u), src[i].a);
+}
+"""
+let probeOracle = scene.map { $0 * 0.6 + 0.05 }
+do {
+    let buf = try MetalPerPixel.run(source: probeSource, function: "probeBuf", pixels: input, uniforms: [0.6, 0.05])
+    let e7a = worst(buf, probeOracle)
+    check("E7 per-pixel buffer path matches its oracle", e7a < tol, "\(e7a)")
+    let space = CGColorSpace(name: CGColorSpace.extendedLinearSRGB)!
+    let img = CIImage(bitmapData: input.withUnsafeBytes { Data($0) }, bytesPerRow: n * 16,
+                      size: CGSize(width: n, height: n), format: .RGBAf, colorSpace: space)
+    let out = try CIBridge.perPixel(img, source: probeSource, function: "probeTex", uniforms: [0.6, 0.05])
+    let ctx = CIContext(options: [.workingColorSpace: space, .workingFormat: CIFormat.RGBAf])
+    var px = [SIMD4<Float>](repeating: .zero, count: n * n)
+    px.withUnsafeMutableBytes { b in
+        ctx.render(out, toBitmap: b.baseAddress!, rowBytes: n * 16, bounds: CGRect(x: 0, y: 0, width: n, height: n),
+                   format: .RGBAf, colorSpace: space)
+    }
+    let e7b = worst(px, probeOracle)
+    check("E7 per-pixel texture path inside Core Image matches its oracle", e7b < tol, "\(e7b)")
+} catch {
+    check("E7 per-pixel path ran", false, "\(error)")
+}
 
 print(failures == 0 ? "\nall checks passed" : "\n\(failures) failed")
 exit(failures == 0 ? 0 : 1)

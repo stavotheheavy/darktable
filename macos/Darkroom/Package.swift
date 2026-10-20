@@ -48,7 +48,7 @@ let package = Package(
         .target(name: "DarkroomCI", dependencies: ["DarkroomEngineAPI", "DarkroomCore", "DarkroomMetal"]),
 
         // the engine path checked against the oracle: stack in, pixels out, compared within 1/255
-        .executableTarget(name: "DarkroomEngineCheck", dependencies: ["DarkroomCI", "DarkroomCore", "DarkroomEngineAPI"]),
+        .executableTarget(name: "DarkroomEngineCheck", dependencies: ["DarkroomCI", "DarkroomCore", "DarkroomEngineAPI", "DarkroomMetal"]),
 
         // Metal kernels for the clean engine, each checked against the DarkroomCore oracle (L3)
         .target(name: "DarkroomMetal", dependencies: ["DarkroomCore"]),

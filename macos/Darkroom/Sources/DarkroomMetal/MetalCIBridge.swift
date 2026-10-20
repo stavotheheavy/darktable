@@ -25,6 +25,9 @@ final class BridgeKernels: @unchecked Sendable {
     private var pipelines: [String: MTLComputePipelineState] = [:]
     private let lock = NSLock()
     private var toneTables: [Double: MTLBuffer] = [:]
+    /// Libraries compiled from a card's own source, keyed by that source.
+    private var cardLibraries: [String: MTLLibrary] = [:]
+    private var cardPipelines: [String: MTLComputePipelineState] = [:]
 
     static let textureSource = #"""
     // texture entry points; the per-pixel maths lives in the buffer kernels' shared functions above
@@ -71,6 +74,23 @@ final class BridgeKernels: @unchecked Sendable {
         return p
     }
 
+    /// A pipeline from a card's own Metal source (compiled once per source, then cached by function name).
+    func pipeline(_ name: String, source: String) throws -> MTLComputePipelineState {
+        lock.lock()
+        defer { lock.unlock() }
+        let key = "\(source.hashValue):\(name)"
+        if let p = cardPipelines[key] { return p }
+        let library: MTLLibrary
+        if let l = cardLibraries[source] { library = l } else {
+            library = try device.makeLibrary(source: source, options: nil)
+            cardLibraries[source] = library
+        }
+        guard let f = library.makeFunction(name: name) else { throw CIBridgeError.noKernel(name) }
+        let p = try device.makeComputePipelineState(function: f)
+        cardPipelines[key] = p
+        return p
+    }
+
     /// The ToneMap table for one contrast value, uploaded once and reused.
     func toneTable(contrast: Double) -> MTLBuffer? {
         lock.lock()
@@ -84,9 +104,9 @@ final class BridgeKernels: @unchecked Sendable {
     }
 
     /// Encodes `name` over the output texture with `bind` setting its buffers (textures 0 and 1 are set here).
-    func dispatch(_ name: String, input: CIImageProcessorInput, output: CIImageProcessorOutput,
+    func dispatch(_ name: String, source: String? = nil, input: CIImageProcessorInput, output: CIImageProcessorOutput,
                   bind: (MTLComputeCommandEncoder) throws -> Void) throws {
-        let p = try pipeline(name)
+        let p = try source.map { try pipeline(name, source: $0) } ?? pipeline(name)
         guard let cmd = output.metalCommandBuffer, let src = input.metalTexture, let dst = output.metalTexture,
               let enc = cmd.makeComputeCommandEncoder() else { throw CIBridgeError.badArguments }
         enc.setComputePipelineState(p)
@@ -138,6 +158,54 @@ final class ToneDisplayProcessor: CIImageProcessorKernel {
     }
 }
 
+/// Any per-pixel card kernel: `function` in `source` reads texture 0, writes texture 1, and takes the
+/// uniforms as `constant float *u [[buffer(0)]]`. See `MetalPerPixel` for the buffer twin the checks run.
+final class PerPixelProcessor: CIImageProcessorKernel {
+    override class var outputFormat: CIFormat { .RGBAf }
+    override class func formatForInput(at input: Int32) -> CIFormat { .RGBAf }
+
+    override class func process(with inputs: [CIImageProcessorInput]?, arguments: [String: Any]?,
+                                output: CIImageProcessorOutput) throws {
+        guard let input = inputs?.first, let source = arguments?["source"] as? String,
+              let function = arguments?["function"] as? String,
+              var uniforms = arguments?["uniforms"] as? [Float] else { throw CIBridgeError.badArguments }
+        if uniforms.isEmpty { uniforms = [0] }
+        try BridgeKernels.shared.get().dispatch(function, source: source, input: input, output: output) { enc in
+            enc.setBytes(&uniforms, length: uniforms.count * MemoryLayout<Float>.stride, index: 0)
+        }
+    }
+}
+
+/// The buffer twin of `PerPixelProcessor`, for darkroom-metal-check: `function` in `source` takes
+/// `device const float4 *src [[buffer(0)]]`, `device float4 *dst [[buffer(1)]]`,
+/// `constant float *u [[buffer(2)]]` and `uint i [[thread_position_in_grid]]`.
+public enum MetalPerPixel {
+    public static func run(source: String, function: String, pixels: [SIMD4<Float>], uniforms: [Float]) throws -> [SIMD4<Float>] {
+        guard !pixels.isEmpty else { return [] }
+        let kernels = try BridgeKernels.shared.get()
+        let p = try kernels.pipeline(function, source: source)
+        let length = pixels.count * MemoryLayout<SIMD4<Float>>.stride
+        var u = uniforms.isEmpty ? [Float(0)] : uniforms
+        guard let queue = kernels.device.makeCommandQueue(),
+              let src = kernels.device.makeBuffer(bytes: pixels, length: length, options: .storageModeShared),
+              let dst = kernels.device.makeBuffer(length: length, options: .storageModeShared),
+              let cmd = queue.makeCommandBuffer(), let enc = cmd.makeComputeCommandEncoder() else {
+            throw CIBridgeError.badArguments
+        }
+        enc.setComputePipelineState(p)
+        enc.setBuffer(src, offset: 0, index: 0)
+        enc.setBuffer(dst, offset: 0, index: 1)
+        enc.setBytes(&u, length: u.count * MemoryLayout<Float>.stride, index: 2)
+        enc.dispatchThreads(MTLSize(width: pixels.count, height: 1, depth: 1),
+                            threadsPerThreadgroup: MTLSize(width: p.threadExecutionWidth, height: 1, depth: 1))
+        enc.endEncoding()
+        cmd.commit()
+        cmd.waitUntilCompleted()
+        let out = dst.contents().bindMemory(to: SIMD4<Float>.self, capacity: pixels.count)
+        return Array(UnsafeBufferPointer(start: out, count: pixels.count))
+    }
+}
+
 /// What the engine calls. Each returns the image unchanged at identity settings, so a default stack
 /// never pays for a GPU pass.
 public enum CIBridge {
@@ -146,6 +214,12 @@ public enum CIBridge {
         if scale == SIMD3(1, 1, 1) { return image }
         return try GainProcessor.apply(withExtent: image.extent, inputs: [image],
                                        arguments: ["scale": CIVector(x: scale.x, y: scale.y, z: scale.z)])
+    }
+
+    /// Runs a card's per-pixel texture kernel (see `PerPixelProcessor`) over `image` in its working space.
+    public static func perPixel(_ image: CIImage, source: String, function: String, uniforms: [Float]) throws -> CIImage {
+        try PerPixelProcessor.apply(withExtent: image.extent, inputs: [image],
+                                    arguments: ["source": source, "function": function, "uniforms": uniforms])
     }
 
     /// Scene-linear working-space image in, display-linear sRGB (0...1) out: converts to linear Rec.2020,
