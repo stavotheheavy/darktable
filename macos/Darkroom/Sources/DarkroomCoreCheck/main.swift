@@ -205,9 +205,16 @@ let lvHigh = Levels.apply(1.4, black: 0, grey: 0.5, white: 0.9)
 let lvLow = Levels.apply(1.0, black: 0, grey: 0.5, white: 0.9)
 check("LV4 linear 1.4 stays above linear 1.0 when white is 0.9", lvHigh > lvLow, "\(lvHigh) vs \(lvLow)")
 
-// LV5 guards: white below black gives finite values across the ramp
+// LV5 guards: the guards must keep every output finite, and monotone where black equals white
 let lvGuarded = levelsRamp.allSatisfy { Levels.apply($0, black: 0.4, grey: 0.5, white: 0.3).isFinite }
 check("LV5 white below black gives finite outputs", lvGuarded)
+let lvEqual = levelsRamp.allSatisfy { Levels.apply($0, black: 0.5, grey: 0.5, white: 0.5).isFinite }
+check("LV5 black equal to white gives finite outputs", lvEqual)
+check("LV5 black equal to white is monotone", levelsMonotone(0.5, 0.5, 0.5))
+let lvGrey0 = levelsRamp.allSatisfy { Levels.apply($0, black: 0, grey: 0, white: 1).isFinite }
+check("LV5 grey 0 gives finite outputs", lvGrey0)
+let lvGrey1 = levelsRamp.allSatisfy { Levels.apply($0, black: 0, grey: 1, white: 1).isFinite }
+check("LV5 grey 1 gives finite outputs", lvGrey1)
 
 print(failures == 0 ? "\nall checks passed" : "\n\(failures) failed")
 exit(failures == 0 ? 0 : 1)
