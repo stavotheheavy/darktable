@@ -27,15 +27,30 @@ func encode(_ v: SIMD3<Double>) -> SIMD3<Double> {
     return SIMD3(e(v.x), e(v.y), e(v.z))
 }
 
-/// Worst channel difference after the sRGB encode, engine against oracle.
+/// Worst channel difference after the sRGB encode, engine against oracle. A non-finite engine value is an
+/// infinite error: `max(w, .nan)` would otherwise return `w` and let a NaN kernel pass.
 func worst(_ engine: [SIMD4<Float>], _ oracle: [SIMD3<Double>], oracleEncoded: Bool = false) -> Double {
     var w = 0.0
     for (i, o) in oracle.enumerated() where i < engine.count {
+        guard engine[i].x.isFinite, engine[i].y.isFinite, engine[i].z.isFinite else { return .infinity }
         let g = encode(SIMD3(Double(engine[i].x), Double(engine[i].y), Double(engine[i].z)))
         let d = g - (oracleEncoded ? o : encode(o))
         w = max(w, abs(d.x), abs(d.y), abs(d.z))
     }
     return engine.count == oracle.count ? w : .infinity
+}
+
+/// Worst relative difference on unclamped linear values: |engine - oracle| / max(1, |oracle|). For checks past
+/// white, where the encoded comparison above clamps everything to 0...1. Non-finite is an infinite error.
+func worstLinear(_ engine: [SIMD4<Float>], _ oracle: [SIMD3<Double>]) -> Double {
+    guard engine.count == oracle.count else { return .infinity }
+    var w = 0.0
+    for (e, o) in zip(engine, oracle) {
+        let g = SIMD3<Double>(Double(e.x), Double(e.y), Double(e.z))
+        guard g.x.isFinite, g.y.isFinite, g.z.isFinite else { return .infinity }
+        for c in 0..<3 { w = max(w, abs(g[c] - o[c]) / max(1, abs(o[c]))) }
+    }
+    return w
 }
 
 func run(_ stack: [StackEntry]) -> [SIMD4<Float>] {
@@ -98,6 +113,16 @@ check("E6 exposure alone keeps the decoder's tone curve", !CIEngineProbe.wantsSc
 var off = chain[0]
 off.enabled = false
 check("E6 a disabled display keeps the decoder's tone curve", !CIEngineProbe.wantsSceneLinear([off]))
+
+// E8 past white: exposure +2.5 EV takes the highlights to about 15; compared unclamped
+let hot = 2.5
+let e8 = worstLinear(run([StackEntry(operation: "exposure", params: ["exposure": .number(hot)])]), scene.map { $0 * Exposure.gain(ev: hot) })
+check("E8 exposure past white matches the oracle unclamped (relative 1e-5)", e8 < 1e-5, "\(e8)")
+// E9 the harness itself: a NaN from the engine must fail both comparisons
+var poisoned = identity
+if !poisoned.isEmpty { poisoned[7].y = .nan }
+check("E9 a NaN output fails worst()", worst(poisoned, scene) == .infinity)
+check("E9 a NaN output fails worstLinear()", worstLinear(poisoned, scene) == .infinity)
 
 // E7 the per-pixel card path: one source, a texture entry for the engine and a buffer entry for the checks
 let probeSource = """
