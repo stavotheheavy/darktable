@@ -567,10 +567,19 @@ struct SelfTest {
     @MainActor
     static func runUI(engine: any PhotoEngine, path: String) async throws {
         var failures: [String] = []
+        var notApplicable: [String] = []
         func check(_ ok: Bool, _ what: String) {
             print((ok ? "  ok    " : "  FAIL  ") + what)
             if !ok { failures.append(what) }
         }
+        /// A check whose premise does not hold on this engine: printed with the reason and counted on
+        /// its own, never as a pass.
+        func skip(_ what: String, _ why: String) {
+            print("  n/a   \(what): \(why)")
+            notApplicable.append(what)
+        }
+        // the clean engine's catalogue is its own, and its modules are fast; darktable's checks assume neither
+        let clean = engine is CIEngine
         func luma(_ m: DarkroomModel) -> Double { m.frame.map(meanLuma) ?? 0 }
         func module(_ m: DarkroomModel, _ op: String) -> ModuleInfo? { m.modules.first { $0.operation == op } }
         func field(_ m: DarkroomModel, _ mod: ModuleInfo, _ name: String) -> FieldSchema? {
@@ -591,7 +600,12 @@ struct SelfTest {
 
         print("open")
         check(model.frame != nil, "a frame is on screen")
-        check(model.modules.count > 40, "module list has \(model.modules.count) modules")
+        if clean {
+            let catalogue = try await engine.moduleNames().count
+            check(model.modules.count == catalogue, "module list shows the engine's whole catalogue (\(model.modules.count) of \(catalogue))")
+        } else {
+            check(model.modules.count > 40, "module list has \(model.modules.count) modules")
+        }
         check(model.info != nil, "output size known: \(model.info.map { "\($0.processedWidth)x\($0.processedHeight)" } ?? "?")")
         let base = luma(model)
         check(model.scopes != nil, "scopes measured")
@@ -605,7 +619,14 @@ struct SelfTest {
         for _ in 0..<50 where model.schema(for: exposure) == nil { try await Task.sleep(for: .milliseconds(20)) }
         let fields = model.schema(for: exposure)?.fields ?? []
         check(fields.contains { $0.name == "exposure" && $0.kind == .float }, "exposure schema has a float 'exposure' (\(fields.count) fields)")
-        check(fields.contains { $0.kind == .enumeration && $0.options.count >= 2 }, "exposure schema has an enum with labelled options")
+        if clean {
+            // the clean exposure is one float; its first enum is the flip module's orientation
+            let flipFields = (try? await engine.schema(for: "flip").fields) ?? []
+            check(flipFields.contains { $0.kind == .enumeration && $0.options.count >= 2 && $0.options.allSatisfy { !$0.label.isEmpty } },
+                  "flip schema has an enum with labelled options")
+        } else {
+            check(fields.contains { $0.kind == .enumeration && $0.options.count >= 2 }, "exposure schema has an enum with labelled options")
+        }
         if let mode = fields.first(where: { $0.kind == .enumeration }) {
             print("        enum \(mode.name): \(mode.options.map(\.label).joined(separator: ", "))")
         }
@@ -731,6 +752,8 @@ struct SelfTest {
                 }
                 check(before != nil && bytes(model.frame) == before, "the frame after a canceled render is byte-identical to the one before")
             } else { check(false, "diffuse has an iterations field") }
+        } else if clean {
+            skip("cancel of a slow render", "the clean engine has no slow module yet (no diffuse); test cancel again when M4 adds one")
         } else { check(false, "diffuse is in the module list") }
 
         print("drag")
@@ -759,7 +782,12 @@ struct SelfTest {
                 // held still: the full frame follows without letting go
                 await model.settle()
                 let settled = bytes(model.frame)
-                check(drafts > 0, "a slow drag shows reduced-scale drafts (first after \(firstDraftMs ?? -1) ms, a draft \(Int(draftMs)) ms, full frame \(Int(model.lastMilliseconds ?? 0)) ms)")
+                let fullMs = Int(model.lastMilliseconds ?? 0)
+                if clean && drafts == 0 && fullMs < 50 {
+                    skip("drafts during a slow drag", "full frames render in \(fullMs) ms, so the drag never needs a draft")
+                } else {
+                    check(drafts > 0, "a slow drag shows reduced-scale drafts (first after \(firstDraftMs ?? -1) ms, a draft \(Int(draftMs)) ms, full frame \(fullMs) ms)")
+                }
                 check(!model.frameIsDraft && model.frame?.width == fullWidth, "holding the slider still settles to the full frame")
                 model.setDragging(false)
                 await model.settle()
@@ -782,6 +810,42 @@ struct SelfTest {
         check(reopened.edits == saved && reopened.history.count == model.history.count,
               "a reopened image restores its edits and history")
         check(abs(luma(reopened) - dark) < 1.0, "and renders the same frame")
+
+        print("geometry")
+        if clean, let crop = module(model, "crop") {
+            model.select(crop)
+            for _ in 0..<50 where model.schema(for: crop) == nil { try await Task.sleep(for: .milliseconds(20)) }
+            if let right = field(model, crop, "cw") {
+                model.zoom = .fit
+                await model.settle()
+                let fullW = model.frame?.width ?? 0, fullH = model.frame?.height ?? 0
+                let step = model.historyIndex
+                model.setParam(crop, right, to: .number(0.5))
+                await model.settle()
+                let w = model.frame?.width ?? 0
+                check(abs(w - fullW / 2) <= 1 && model.frame?.height == fullH, "cropping to the left half halves the frame (\(fullW) to \(w))")
+                check(model.imageSize.map { Int($0.width) } == w, "the model's image size follows the crop")
+                // the far corner of the cropped image through a small viewport: with the uncropped size the
+                // region starts past the crop's right edge and the engine refuses it
+                let viewport = model.viewport
+                model.viewport = CGSize(width: 150, height: 150)
+                model.zoom = .actual
+                model.setCenter(CGPoint(x: 1, y: 1))
+                await model.settle()
+                let side = Int(150 * model.backingScale)
+                check(model.frame?.width == min(side, w) && !model.status.contains("outside"),
+                      "100% zoom at the crop's far corner renders a \(side)-pixel view (\(model.status))")
+                model.viewport = viewport
+                model.zoom = .fit
+                model.undo()
+                await model.settle()
+                check(model.historyIndex == step && model.frame?.width == fullW, "undo restores the uncropped frame")
+            } else { check(false, "crop has a 'cw' field") }
+        } else if clean {
+            check(false, "crop is in the module list")
+        } else {
+            skip("geometry", "the darktable engine's crop defaults come from its editor, not the stack")
+        }
 
         print("simple mode")
         let simple = reopened
@@ -871,6 +935,7 @@ struct SelfTest {
         await model.settle()
         check(model.frame != nil, "session still renders after export (\(Int(model.lastMilliseconds ?? 0)) ms)")
 
+        if !notApplicable.isEmpty { print("\n\(notApplicable.count) check(s) n/a on this engine: \(notApplicable.joined(separator: "; "))") }
         print(failures.isEmpty ? "\nALL CHECKS PASSED" : "\n\(failures.count) CHECK(S) FAILED")
         if !failures.isEmpty { exit(1) }
     }

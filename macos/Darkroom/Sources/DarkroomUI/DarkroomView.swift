@@ -128,13 +128,13 @@ struct PhotoView: View {
             .gesture(
                 DragGesture(minimumDistance: 2)
                     .onChanged { v in
-                        guard model.zoom != .fit, let info = model.info else { return }
+                        guard model.zoom != .fit, let image = model.imageSize else { return }
                         let d = CGSize(width: v.translation.width - lastDrag.width,
                                        height: v.translation.height - lastDrag.height)
                         lastDrag = v.translation
                         let scale = model.displayScale
-                        let imgW = Double(info.processedWidth) * scale / model.backingScale
-                        let imgH = Double(info.processedHeight) * scale / model.backingScale
+                        let imgW = Double(image.width) * scale / model.backingScale
+                        let imgH = Double(image.height) * scale / model.backingScale
                         model.pan(byFraction: CGSize(width: -d.width / imgW, height: -d.height / imgH))
                     }
                     .onEnded { _ in lastDrag = .zero }

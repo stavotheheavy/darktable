@@ -45,6 +45,14 @@ public final class DarkroomModel {
     public private(set) var status = "Open a raw to begin"
     public private(set) var lastMilliseconds: Double?
     public private(set) var info: SessionInfo?
+    /// The output size at scale 1 for the stack last rendered, from the engine when it can tell (crop,
+    /// straighten and flip change it); nil means `info`'s processed size holds.
+    public private(set) var outputSize: (width: Int, height: Int)?
+    /// The size zoom and pan work in: the output size when known, else the processed size.
+    public var imageSize: CGSize? {
+        if let o = outputSize { return CGSize(width: o.width, height: o.height) }
+        return info.map { CGSize(width: $0.processedWidth, height: $0.processedHeight) }
+    }
 
     // modules
     public private(set) var modules: [ModuleInfo] = []
@@ -175,6 +183,7 @@ public final class DarkroomModel {
             try await engine.openSession(path: path, maxSide: Self.workingSize)
             modules = try await engine.sessionModules()
             info = await engine.sessionInfo()
+            outputSize = nil
             // the embedded preview shows at once as a draft; the full render replaces it.
             // A missing preview is not an error: the open continues and waits for the render.
             if let preview = try? await engine.sessionPreview() {
@@ -523,6 +532,8 @@ public final class DarkroomModel {
             wantsRender = false
             guard filePath != nil else { return }
             let entries = stack(for: shownEdits)
+            // geometry changes the size the region maths below works in
+            outputSize = try? await engine.sessionOutputSize(stack: entries)
             renderGeneration += 1
             renderStarted = ContinuousClock.now
             let draft = wantsDraft
@@ -559,8 +570,8 @@ public final class DarkroomModel {
 
     private func region() -> (scale: Double, x: Int, y: Int, w: Int, h: Int) {
         let scale = displayScale
-        let imgW = Double(info?.processedWidth ?? 1) * scale
-        let imgH = Double(info?.processedHeight ?? 1) * scale
+        let imgW = Double(imageSize?.width ?? 1) * scale
+        let imgH = Double(imageSize?.height ?? 1) * scale
         let w = max(1, min(Int(viewport.width * backingScale), Int(imgW)))
         let h = max(1, min(Int(viewport.height * backingScale), Int(imgH)))
         let x = Int((center.x * imgW) - Double(w) / 2)
