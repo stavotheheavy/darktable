@@ -168,18 +168,19 @@ extension DarkroomModel {
 struct SimpleChrome: View {
     @Bindable var model: DarkroomModel
 
+    static let panelWidth: CGFloat = 316
+
     var body: some View {
-        ZStack {
+        GeometryReader { geo in
             HStack(alignment: .top) {
                 Spacer(minLength: 0)
-                SimplePanel(model: model).frame(width: 316)
+                // the looks live inside the panel, so nothing floats over the photo or the controls;
+                // past the window's height the controls scroll
+                SimplePanel(model: model, maxHeight: max(160, geo.size.height - 84 - 14))
+                    .frame(width: Self.panelWidth)
             }
             .padding(.top, 84)
             .frame(maxHeight: .infinity, alignment: .top)
-            VStack {
-                Spacer()
-                LooksStrip(model: model).padding(.bottom, 14)
-            }
         }
         .padding(12)
         .task(id: model.modules.count) { await model.prepareSimple() }
@@ -188,17 +189,48 @@ struct SimpleChrome: View {
 
 struct SimplePanel: View {
     @Bindable var model: DarkroomModel
+    /// The height the panel may take; past it the controls scroll.
+    var maxHeight: CGFloat = .infinity
+    /// Looks are an occasional starting point, not a constant control: folded away unless opened, and
+    /// the choice is remembered.
+    @AppStorage(SimplePanel.looksOpenKey) private var looksOpen = false
+    static let looksOpenKey = "darkroom.simple.looksOpen"
 
     var body: some View {
+        ViewThatFits(in: .vertical) {
+            controls
+            ScrollView(.vertical) { controls }.scrollIndicators(.visible)
+        }
+        .frame(maxHeight: maxHeight)
+        .padding(14)
+        .disabled(!model.simpleReady)
+        .opacity(model.simpleReady ? 1 : 0.5)
+        .glassEffect(.regular, in: .rect(cornerRadius: 28))
+    }
+
+    private var controls: some View {
         VStack(spacing: 4) {
-            HStack(spacing: 8) {
-                Button { if let a = SimpleLook.all.first { model.apply(a) } } label: {
-                    Label("Auto", systemImage: "sparkles").frame(maxWidth: .infinity)
+            Button { withAnimation(.snappy) { looksOpen.toggle() } } label: {
+                HStack {
+                    Text("Looks").font(.callout.weight(.medium))
+                    Spacer()
+                    Image(systemName: "chevron.down")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(.secondary)
+                        .rotationEffect(.degrees(looksOpen ? 0 : -90))
                 }
-                .buttonStyle(PrimaryCapsuleStyle())
-                .rig("simple-auto")
+                .frame(height: 32)
+                .contentShape(Rectangle())
             }
-            .padding(.bottom, 2)
+            .buttonStyle(.plain)
+            .accessibilityLabel(looksOpen ? "Hide looks" : "Show looks")
+            .rig("simple-looks")
+            if looksOpen {
+                LooksRow(model: model)
+                    .padding(.bottom, 4)
+                    .transition(.opacity.combined(with: .move(edge: .top)))
+            }
+            Divider().padding(.bottom, 4)
 
             ForEach(SimpleControl.allCases) { c in
                 VStack(spacing: 0) {
@@ -312,36 +344,36 @@ struct SimplePanel: View {
             .buttonStyle(.plain)
             .rig("simple-more")
         }
-        .padding(14)
-        .disabled(!model.simpleReady)
-        .opacity(model.simpleReady ? 1 : 0.5)
-        .glassEffect(.regular, in: .rect(cornerRadius: 28))
     }
 }
 
-struct LooksStrip: View {
+/// The six looks as one row at the top of the Simple panel (Auto first). A look is five slider
+/// positions, so tapping one is the same as dragging the five sliders.
+struct LooksRow: View {
     @Bindable var model: DarkroomModel
 
     var body: some View {
-        HStack(spacing: 6) {
+        HStack(spacing: 4) {
             ForEach(SimpleLook.all) { look in
                 Button { model.apply(look) } label: {
-                    VStack(spacing: 6) {
-                        RoundedRectangle(cornerRadius: 18)
+                    VStack(spacing: 4) {
+                        RoundedRectangle(cornerRadius: 12)
                             .fill(LinearGradient(colors: look.swatch, startPoint: .topLeading, endPoint: .bottomTrailing))
-                            .frame(width: 52, height: 52)
-                            .overlay(RoundedRectangle(cornerRadius: 18).strokeBorder(Color.white.opacity(0.2), lineWidth: 1))
-                        Text(look.name).font(.caption.weight(.medium))
+                            .frame(width: 40, height: 40)
+                            .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(Color.white.opacity(0.2), lineWidth: 1))
+                        Text(look.name)
+                            .font(.caption2.weight(.medium))
+                            .lineLimit(1)
+                            .minimumScaleFactor(0.8)
                     }
-                    .frame(width: 88, height: 84)
+                    .frame(maxWidth: .infinity)
+                    .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
-                .disabled(!model.simpleReady)
+                .accessibilityLabel("\(look.name) look")
                 .rig("look-\(look.id)")
             }
         }
-        .padding(8)
-        .glassEffect(.regular, in: .rect(cornerRadius: 36))
     }
 }
 

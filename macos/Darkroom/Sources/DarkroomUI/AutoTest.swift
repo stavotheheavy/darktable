@@ -11,6 +11,7 @@ import UniformTypeIdentifiers
 ///
 ///   DARKROOM_AUTOTEST=modules   select each module, switch it on, render, reset
 ///   DARKROOM_AUTOTEST=ui        tabs, scopes, zoom, snapshot, undo, backgrounds
+///   DARKROOM_AUTOTEST=simple    Simple mode's geometry controls, one screenshot per step (DARKROOM_SHOTS)
 @MainActor
 public enum AutoTest {
     private static func log(_ s: String) {
@@ -32,6 +33,7 @@ public enum AutoTest {
         case "modules": await modules(model)
         case "ui": await ui(model)
         case "shots": await shots(model)
+        case "simple": await simple(model)
         default:
             await modules(model)
             await ui(model)
@@ -95,6 +97,42 @@ public enum AutoTest {
             URL(fileURLWithPath: path) as CFURL, UTType.png.identifier as CFString, 1, nil) else { return false }
         CGImageDestinationAddImage(dest, image, nil)
         return CGImageDestinationFinalize(dest)
+    }
+
+    /// Simple mode before and after straighten, rotate and a 4:5 crop, then every step undone. The edit
+    /// mode the person had is put back, since setting it is remembered across launches.
+    private static func simple(_ model: DarkroomModel) async {
+        let dir = ProcessInfo.processInfo.environment["DARKROOM_SHOTS"] ?? NSTemporaryDirectory()
+        try? FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true)
+        func shot(_ name: String) async {
+            await model.settle()
+            try? await Task.sleep(for: .milliseconds(900))
+            let ok = capture(to: "\(dir)/\(name).png")
+            log("shot \(name): \(ok ? "written" : "FAILED") frame \(model.frame?.width ?? 0)x\(model.frame?.height ?? 0)")
+        }
+        let previousMode = model.mode
+        NSApp.activate()
+        model.mode = .simple
+        await model.prepareSimple()
+        log("simple geometry ready: \(model.simpleGeometryReady)")
+        let start = model.historyIndex
+        await shot("s1-simple")
+        model.setStraighten(6)
+        await shot("s2-straighten-6")
+        model.rotate90()
+        await shot("s3-rotated")
+        model.setAspect(.fourFive)
+        await shot("s4-aspect-4x5")
+        // the looks section opened (it is folded by default), then put back as the person had it
+        let looksKey = "darkroom.simple.looksOpen"
+        let looksWereOpen = UserDefaults.standard.object(forKey: looksKey) as? Bool
+        UserDefaults.standard.set(true, forKey: looksKey)
+        if let warm = SimpleLook.all.first(where: { $0.id == "warm" }) { model.apply(warm) }
+        await shot("s4b-warm-look")
+        if let open = looksWereOpen { UserDefaults.standard.set(open, forKey: looksKey) } else { UserDefaults.standard.removeObject(forKey: looksKey) }
+        while model.historyIndex > start { model.undo() }
+        await shot("s5-undone")
+        model.mode = previousMode
     }
 
     private static func shots(_ model: DarkroomModel) async {
