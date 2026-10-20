@@ -738,5 +738,99 @@ do {
     check("DC3 a negative new s gives black, not NaN", dark[1] == SIMD3(0, 0, 0), "\(dark[1])")
 }
 
+// SH: the 2-D unsharp mask on the square root of luminance (Sharpen2D)
+do {
+    let fw = 48, fh = 40
+    let fx = DetailCommon.fixture(width: fw, height: fh)
+    // the step: 40 wide, 16 high, grey, Y = 0.09 (s = 0.3) left of x = 20 and Y = 0.36 (s = 0.6) from there on
+    let sw = 40, sh = 16
+    let stepGrey: [SIMD3<Double>] = (0..<(sw * sh)).map { i in
+        let y = i % sw < 20 ? 0.09 : 0.36
+        return SIMD3(y, y, y)
+    }
+    // the largest relative difference, channel by channel, and infinite when a value is not finite or the counts differ
+    func relErr(_ a: [SIMD3<Double>], _ b: [SIMD3<Double>]) -> Double {
+        guard a.count == b.count else { return .infinity }
+        var w = 0.0
+        for (x, y) in zip(a, b) {
+            for c in 0..<3 {
+                guard x[c].isFinite else { return .infinity }
+                w = max(w, abs(x[c] - y[c]) / max(1, abs(y[c])))
+            }
+        }
+        return w
+    }
+
+    // SH1 amount 0 is the identity
+    let id1 = relErr(Sharpen2D.apply(fx, width: fw, height: fh, amount: 0, radius: 3), fx)
+    let id2 = relErr(Sharpen2D.apply(stepGrey, width: sw, height: sh, amount: 0, radius: 1), stepGrey)
+    check("SH1 amount 0 is the identity on the fixture and on the step (\(id1), \(id2))", id1 < 1e-12 && id2 < 1e-12, "\(id1), \(id2)")
+
+    // SH2 a flat colour stays flat at any amount and radius; black stays exactly black
+    let flat = [SIMD3<Double>](repeating: SIMD3(0.3, 0.2, 0.1), count: 16 * 16)
+    let flatOut = Sharpen2D.apply(flat, width: 16, height: 16, amount: 2, radius: 8)
+    let flatErr = relErr(flatOut, flat)
+    check("SH2 a flat colour is unchanged at amount 2, radius 8 (\(flatErr))", flatErr < 1e-12, "\(flatErr)")
+    let blackOut = Sharpen2D.apply([SIMD3<Double>](repeating: .zero, count: 16 * 16), width: 16, height: 16, amount: 2, radius: 8)
+    check("SH2 black stays exactly (0, 0, 0)", blackOut.allSatisfy { $0 == SIMD3(0, 0, 0) })
+
+    // SH3 the method: s' = s + amount (s - base) with base from three à trous smoothings, on every pixel with Y > 1e-6
+    let s = DetailCommon.sqrtLuminance(fx, width: fw, height: fh)
+    let base = Filters.atrousSmooth(Filters.atrousSmooth(Filters.atrousSmooth(s, level: 0), level: 1), level: 2)
+    let out3 = Sharpen2D.apply(fx, width: fw, height: fh, amount: 0.7, radius: 3)
+    var m3 = 0.0
+    for i in fx.indices where ColorCommon.luminance(fx[i]) > 1e-6 {
+        let want = max(s.values[i] + 0.7 * (s.values[i] - base.values[i]), 0)
+        m3 = max(m3, abs(sqrt(max(ColorCommon.luminance(out3[i]), 0)) - want))
+    }
+    check("SH3 sqrt(Y_out) equals s + 0.7 (s - base) with the three-level blur within 1e-9 (\(m3))", m3 < 1e-9, "\(m3)")
+
+    // SH4 edge overshoot on the step at radius 1.5 (level 1, reach 6): undershoot left of the edge, overshoot right,
+    // and the pixels beyond the reach are untouched
+    let out4 = Sharpen2D.apply(stepGrey, width: sw, height: sh, amount: 1, radius: 1.5)
+    let row = 8
+    let under = sqrt(ColorCommon.luminance(out4[row * sw + 19])), over = sqrt(ColorCommon.luminance(out4[row * sw + 20]))
+    check("SH4 the edge undershoots at x = 19 (\(under)) and overshoots at x = 20 (\(over))", under < 0.3 && over > 0.6, "\(under), \(over)")
+    var far = 0.0
+    for y in 0..<sh { for x in 0..<sw where x <= 13 || x >= 26 {
+        far = max(far, relErr([out4[y * sw + x]], [stepGrey[y * sw + x]]))
+    } }
+    check("SH4 pixels with x <= 13 or x >= 26 are unchanged within 1e-12 (\(far))", far < 1e-12, "\(far)")
+
+    // SH5 the amount is linear in s: s'(2) - s = 2 (s'(1) - s)
+    let out5a = Sharpen2D.apply(stepGrey, width: sw, height: sh, amount: 1, radius: 1.5)
+    let out5b = Sharpen2D.apply(stepGrey, width: sw, height: sh, amount: 2, radius: 1.5)
+    var lin = 0.0
+    for i in stepGrey.indices {
+        let s0 = sqrt(ColorCommon.luminance(stepGrey[i]))
+        let s1 = sqrt(ColorCommon.luminance(out5a[i])), s2 = sqrt(ColorCommon.luminance(out5b[i]))
+        lin = max(lin, abs((s2 - s0) - 2 * (s1 - s0)))
+    }
+    check("SH5 the change in s is linear in amount within 1e-9 (\(lin))", lin < 1e-9, "\(lin)")
+
+    // SH6 hue and chroma are untouched: each channel's gain is the same
+    let out6 = Sharpen2D.apply(fx, width: fw, height: fh, amount: 1.2, radius: 2)
+    var hue = 0.0
+    for i in fx.indices {
+        let r = out6[i].x / fx[i].x, g = out6[i].y / fx[i].y, b = out6[i].z / fx[i].z
+        hue = max(hue, abs(r - g) / max(1, abs(r)), abs(r - b) / max(1, abs(r)))
+    }
+    check("SH6 every channel gets the same gain (hue and chroma ratios stay) within 1e-9 (\(hue))", hue < 1e-9, "\(hue)")
+
+    // SH7 the radius picks the blur level, and the blur reaches as far as its level says
+    let levels: [(Double, Int)] = [(0.5, 0), (1.0, 0), (1.4, 0), (1.5, 1), (2.8, 1), (2.9, 2), (5.6, 2), (5.7, 3), (8, 3)]
+    check("SH7 the level map is 0, 1, 2, 3 at the radii the card gives", levels.allSatisfy { Sharpen2D.level(radius: $0.0) == $0.1 })
+    let near = Sharpen2D.apply(stepGrey, width: sw, height: sh, amount: 1, radius: 1)
+    let nearErr = relErr([near[8 * sw + 10]], [stepGrey[8 * sw + 10]])
+    check("SH7 at radius 1 the pixel ten from the edge is unchanged (\(nearErr))", nearErr < 1e-12, "\(nearErr)")
+    let wide = Sharpen2D.apply(stepGrey, width: sw, height: sh, amount: 1, radius: 8)
+    let wideMove = abs(sqrt(ColorCommon.luminance(wide[8 * sw + 10])) - 0.3)
+    check("SH7 at radius 8 the same pixel moves by more than 1e-3 in s (\(wideMove))", wideMove > 1e-3, "\(wideMove)")
+
+    // SH8 finite everywhere on the fixture (past white, pixels near black) at the strongest setting
+    let out8 = Sharpen2D.apply(fx, width: fw, height: fh, amount: 2, radius: 8)
+    check("SH8 finite everywhere at amount 2, radius 8", out8.allSatisfy { $0.x.isFinite && $0.y.isFinite && $0.z.isFinite })
+}
+
 print(failures == 0 ? "\nall checks passed" : "\n\(failures) failed")
 exit(failures == 0 ? 0 : 1)

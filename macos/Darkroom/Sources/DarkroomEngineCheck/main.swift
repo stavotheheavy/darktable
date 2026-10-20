@@ -421,5 +421,25 @@ do {
     check("E-DC2 replacing s by itself on the GPU gives the image back within 1e-5", r < 1e-5, "\(r)")
 }
 
+// E-SH the 2-D sharpen through the engine (Core Image blur chain, per-pixel combine) against Sharpen2D
+do {
+    let stack = [StackEntry(operation: "sharpen", params: ["amount": .number(0.9), "radius": .number(3)])]
+    let want = Sharpen2D.apply(detailImg, width: detailW, height: detailH, amount: 0.9, radius: 3)
+    let got = runDetail(stack)
+    let e = worst(got, want), el = worstLinear(got, want)
+    check("E-SH sharpen (amount 0.9, radius 3) matches the oracle within 1/255 and unclamped within 2e-4",
+          e < tol && el < 2e-4, "encoded \(e), linear \(el)")
+    let seam = detailSeams(stack, oracle: want)
+    check("E-SH-seam sharpen tiles match the full frame and the oracle (seam \(seam.seam), full vs oracle \(seam.fullVsOracle))",
+          seam.ok, "seam \(seam.seam), full vs oracle \(seam.fullVsOracle)")
+    // radius 1 is level 0: the level map has to reach the GPU as well
+    let stack0 = [StackEntry(operation: "sharpen", params: ["amount": .number(0.9), "radius": .number(1)])]
+    let want0 = Sharpen2D.apply(detailImg, width: detailW, height: detailH, amount: 0.9, radius: 1)
+    let got0 = runDetail(stack0)
+    let e0 = worst(got0, want0), el0 = worstLinear(got0, want0)
+    check("E-SH-L0 sharpen at radius 1 (level 0) matches the oracle within 1/255 and unclamped within 2e-4",
+          e0 < tol && el0 < 2e-4, "encoded \(e0), linear \(el0)")
+}
+
 print(failures == 0 ? "\nall checks passed" : "\n\(failures) failed")
 exit(failures == 0 ? 0 : 1)
