@@ -166,5 +166,12 @@ let eLV = worst(run([StackEntry(operation: "rgblevels", params: ["black": .numbe
                 scene.map { Levels.apply($0, black: 0.1, grey: 0.4, white: 0.9) })
 check("E-LV rgblevels matches the oracle within 1/255", eLV < tol, "\(eLV)")
 
+// E-TC tone curve: the S-curve through the engine (CIBridge.perPixel, tonecurveTex) against ToneCurve in DarkroomCore
+let toneYs = [0, 0.15, 0.5, 0.85, 1.0]
+let etc = worst(run([StackEntry(operation: "tonecurve", params: ["y0": .number(0), "y1": .number(0.15), "y2": .number(0.5),
+                                                                  "y3": .number(0.85), "y4": .number(1)])]),
+                scene.map { ToneCurve.apply($0, ys: toneYs) })
+check("E-TC tone curve S-curve matches the oracle within 1/255", etc < tol, "\(etc)")
+
 print(failures == 0 ? "\nall checks passed" : "\n\(failures) failed")
 exit(failures == 0 ? 0 : 1)

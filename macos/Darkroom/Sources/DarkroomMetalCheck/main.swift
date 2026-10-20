@@ -269,5 +269,57 @@ do {
     check("LV-M2 past white on Metal ran", false, "\(error)")
 }
 
+// C1 tone curve: the per-pixel buffer kernel (MetalToneCurve) on a 64 by 64 ramp from 0 to 1.5, against ToneCurve
+do {
+    let ys = [0, 0.15, 0.5, 0.85, 1.0]
+    let uniforms = (ys + ToneCurve.tangents(ys)).map { Float($0) }
+    let ramp = (0..<(n * n)).map { i -> SIMD4<Float> in
+        let v = Float(i) / Float(n * n - 1) * 1.5
+        return SIMD4(v, v, v, 1)
+    }
+    let out = try MetalPerPixel.run(source: MetalToneCurve.source, function: "tonecurveBuf", pixels: ramp, uniforms: uniforms)
+    // compare after the sRGB encode, clamped to 0...1 on both sides
+    func encodedClamp(_ p: SIMD3<Double>) -> SIMD3<Double> {
+        func e(_ x: Double) -> Double { min(max(Transfer.linearToSRGB(x), 0), 1) }
+        return SIMD3(e(p.x), e(p.y), e(p.z))
+    }
+    var worstCurve = 0.0
+    for (i, px) in ramp.enumerated() where i < out.count {
+        let want = ToneCurve.apply(SIMD3(Double(px.x), Double(px.y), Double(px.z)), ys: ys)
+        let got = SIMD3(Double(out[i].x), Double(out[i].y), Double(out[i].z))
+        let d = encodedClamp(want) - encodedClamp(got)
+        worstCurve = Swift.max(worstCurve, Swift.max(Swift.abs(d.x), Swift.abs(d.y), Swift.abs(d.z)))
+    }
+    check("C1 tone curve on Metal matches the CPU oracle within 1/255 (after sRGB encode)",
+          out.count == ramp.count && worstCurve <= 1.0 / 255, "worst encoded error \(worstCurve)")
+} catch {
+    check("C1 tone curve kernel ran", false, "\(error)")
+}
+
+// C2 tone curve extrapolation: channels span -0.2...4.0 linear, unclamped, with the asymmetric curve from TC6
+do {
+    let ys = [0.05, 0.3, 0.55, 0.7, 0.9]
+    let uniforms = (ys + ToneCurve.tangents(ys)).map { Float($0) }
+    let count = 4096
+    let pixels = (0..<count).map { i -> SIMD4<Float> in
+        let t = Double(i) / Double(count - 1)
+        return SIMD4(Float(-0.2 + 4.2 * t), Float(4.0 - 4.2 * t), Float(2 * t), 1)
+    }
+    let out = try MetalPerPixel.run(source: MetalToneCurve.source, function: "tonecurveBuf", pixels: pixels, uniforms: uniforms)
+    var worstRel = 0.0, allFinite = out.count == count
+    for (i, px) in pixels.enumerated() where i < out.count {
+        let cpu = ToneCurve.apply(SIMD3(Double(px.x), Double(px.y), Double(px.z)), ys: ys)
+        let gpu = SIMD3(Double(out[i].x), Double(out[i].y), Double(out[i].z))
+        for c in 0..<3 {
+            if !gpu[c].isFinite { allFinite = false }
+            worstRel = Swift.max(worstRel, Swift.abs(gpu[c] - cpu[c]) / Swift.max(1, Swift.abs(cpu[c])))
+        }
+    }
+    check("C2 tone curve extrapolation past white and below black matches the CPU oracle",
+          allFinite && worstRel < 1e-4, "finite \(allFinite), worst relative error \(worstRel)")
+} catch {
+    check("C2 tone curve extrapolation kernel ran", false, "\(error)")
+}
+
 print(failures == 0 ? "\nall Metal checks passed" : "\n\(failures) failed")
 exit(failures == 0 ? 0 : 1)

@@ -156,14 +156,12 @@ extension CIModule {
                 field("y0", 0, 1, 0), field("y1", 0, 1, 0.25), field("y2", 0, 1, 0.5),
                 field("y3", 0, 1, 0.75), field("y4", 0, 1, 1),
             ],
+            // DarkroomCore's ToneCurve on the oracle-checked per-pixel kernel (darkroom-engine-check E-TC)
             apply: { image, v in
-                image.applyingFilter("CIToneCurve", parameters: [
-                    "inputPoint0": CIVector(x: 0, y: v["y0"] ?? 0),
-                    "inputPoint1": CIVector(x: 0.25, y: v["y1"] ?? 0.25),
-                    "inputPoint2": CIVector(x: 0.5, y: v["y2"] ?? 0.5),
-                    "inputPoint3": CIVector(x: 0.75, y: v["y3"] ?? 0.75),
-                    "inputPoint4": CIVector(x: 1, y: v["y4"] ?? 1),
-                ])
+                let ys: [Double] = [v["y0"] ?? 0, v["y1"] ?? 0.25, v["y2"] ?? 0.5, v["y3"] ?? 0.75, v["y4"] ?? 1]
+                let tangents: [Double] = ToneCurve.tangents(ys)
+                let uniforms: [Float] = (ys + tangents).map { Float($0) }
+                return try CIBridge.perPixel(image, source: MetalToneCurve.source, function: "tonecurveTex", uniforms: uniforms)
             }),
 
         // Contrast, brightness and saturation, as darktable's contrast brightness saturation

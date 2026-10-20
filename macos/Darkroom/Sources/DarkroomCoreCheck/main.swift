@@ -286,5 +286,57 @@ check("LV5 grey 0 gives finite outputs", lvGrey0)
 let lvGrey1 = levelsRamp.allSatisfy { Levels.apply($0, black: 0, grey: 1, white: 1).isFinite }
 check("LV5 grey 1 gives finite outputs", lvGrey1)
 
+// tone curve: identity at the defaults, nodes hit, monotone, no overshoot, HDR keeps rising
+let identityYs = [0, 0.25, 0.5, 0.75, 1.0]
+let sYs = [0, 0.15, 0.5, 0.85, 1.0]
+
+// TC1 identity: default heights return the input over a 0...1.5 ramp
+var worstIdentity = 0.0
+for i in 0...4096 {
+    let v = 1.5 * Double(i) / 4096
+    worstIdentity = max(worstIdentity, abs(ToneCurve.apply(v, ys: identityYs) - v))
+}
+check("TC1 tone curve identity returns the input", worstIdentity < 1e-9, "\(worstIdentity)")
+
+// TC2 nodes: the S-curve passes through its nodes
+let sTan = ToneCurve.tangents(sYs)
+let nodeMid = ToneCurve.curve(0.5, ys: sYs, tangents: sTan)
+let nodeLow = ToneCurve.curve(0.25, ys: sYs, tangents: sTan)
+check("TC2 tone curve passes through the nodes", abs(nodeMid - sYs[2]) < 1e-12 && abs(nodeLow - sYs[1]) < 1e-12,
+      "\(nodeMid) \(nodeLow)")
+
+// TC3 monotone: the S-curve and a curve with a flat-then-rising shoulder never decrease over the ramp
+for ys in [sYs, [0, 0.4, 0.6, 0.65, 1.0]] {
+    var rising = true, last = -Double.infinity
+    for i in 0...4096 {
+        let o = ToneCurve.apply(1.5 * Double(i) / 4096, ys: ys)
+        if o < last - 1e-12 { rising = false }
+        last = o
+    }
+    check("TC3 tone curve \(ys) never decreases", rising)
+}
+
+// TC4 no overshoot: encoded output stays in 0...1 for encoded input in 0...1
+var encodedInRange = true
+for i in 0...1000 {
+    let c = ToneCurve.curve(Double(i) / 1000, ys: sYs, tangents: sTan)
+    if c < -1e-12 || c > 1 + 1e-12 { encodedInRange = false }
+}
+check("TC4 S-curve does not overshoot 0...1", encodedInRange)
+
+// TC5 HDR kept: the S-curve keeps rising past white
+let hdrAbove = ToneCurve.apply(1.2, ys: sYs) > ToneCurve.apply(1.0, ys: sYs)
+check("TC5 S-curve input 1.2 is above input 1.0", hdrAbove,
+      "\(ToneCurve.apply(1.2, ys: sYs)) vs \(ToneCurve.apply(1.0, ys: sYs))")
+
+// TC6 extrapolation: past white and below black each end extends linearly with its own tangent
+let asymYs = [0.05, 0.3, 0.55, 0.7, 0.9]
+let asymM = ToneCurve.tangents(asymYs)
+check("TC6 the two ends have different tangents", asymM[0] != asymM[4], "\(asymM[0]) \(asymM[4])")
+let tc6Hi = ToneCurve.curve(1.4, ys: asymYs, tangents: asymM)
+let tc6Lo = ToneCurve.curve(-0.3, ys: asymYs, tangents: asymM)
+check("TC6 above 1 extends from y4 with m4", abs(tc6Hi - (asymYs[4] + asymM[4] * 0.4)) < 1e-12, "\(tc6Hi)")
+check("TC6 below 0 extends from y0 with m0", abs(tc6Lo - (asymYs[0] + asymM[0] * -0.3)) < 1e-12, "\(tc6Lo)")
+
 print(failures == 0 ? "\nall checks passed" : "\n\(failures) failed")
 exit(failures == 0 ? 0 : 1)
