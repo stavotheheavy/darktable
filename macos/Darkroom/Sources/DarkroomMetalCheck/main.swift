@@ -214,5 +214,32 @@ do {
     check("T5 texture path p95 under 16 ms (no host copies)", tp95 < 16, "p95 \(tp95) ms")
 }
 
+// C1 tone curve: the per-pixel buffer kernel (MetalToneCurve) on a 64 by 64 ramp from 0 to 1.5, against ToneCurve
+do {
+    let ys = [0, 0.15, 0.5, 0.85, 1.0]
+    let uniforms = (ys + ToneCurve.tangents(ys)).map { Float($0) }
+    let ramp = (0..<(n * n)).map { i -> SIMD4<Float> in
+        let v = Float(i) / Float(n * n - 1) * 1.5
+        return SIMD4(v, v, v, 1)
+    }
+    let out = try MetalPerPixel.run(source: MetalToneCurve.source, function: "tonecurveBuf", pixels: ramp, uniforms: uniforms)
+    // compare after the sRGB encode, clamped to 0...1 on both sides
+    func encodedClamp(_ p: SIMD3<Double>) -> SIMD3<Double> {
+        func e(_ x: Double) -> Double { min(max(Transfer.linearToSRGB(x), 0), 1) }
+        return SIMD3(e(p.x), e(p.y), e(p.z))
+    }
+    var worstCurve = 0.0
+    for (i, px) in ramp.enumerated() where i < out.count {
+        let want = ToneCurve.apply(SIMD3(Double(px.x), Double(px.y), Double(px.z)), ys: ys)
+        let got = SIMD3(Double(out[i].x), Double(out[i].y), Double(out[i].z))
+        let d = encodedClamp(want) - encodedClamp(got)
+        worstCurve = Swift.max(worstCurve, Swift.max(Swift.abs(d.x), Swift.abs(d.y), Swift.abs(d.z)))
+    }
+    check("C1 tone curve on Metal matches the CPU oracle within 1/255 (after sRGB encode)",
+          out.count == ramp.count && worstCurve <= 1.0 / 255, "worst encoded error \(worstCurve)")
+} catch {
+    check("C1 tone curve kernel ran", false, "\(error)")
+}
+
 print(failures == 0 ? "\nall Metal checks passed" : "\n\(failures) failed")
 exit(failures == 0 ? 0 : 1)
