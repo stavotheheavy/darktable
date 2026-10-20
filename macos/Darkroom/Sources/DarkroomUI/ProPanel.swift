@@ -151,7 +151,7 @@ extension DarkroomModel {
         guard let m = proModule("tonecurve"), let fields = schemas["tonecurve"]?.fields else { return nil }
         func v(_ name: String) -> Double? { fields.first { $0.name == name }.flatMap { value(m, $0).double } }
         guard v("y0") != nil else { return nil }
-        let n = Int((v("n") ?? 0).rounded())
+        let n = (v("n") ?? 0).clampedInt
         let xs: [Double], ys: [Double]
         if n >= 2 {
             let count = min(n, ToneCurve.maxPoints)

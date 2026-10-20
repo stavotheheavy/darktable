@@ -53,3 +53,9 @@ public enum MaskKind: Int, CaseIterable, Sendable {
 public enum MaskCommon {
     public static let refine = MaskControl(key: "mask_refine", label: "edge refine", range: 0...50, defaultValue: 0, unit: " px", decimals: 0)
 }
+
+public extension Double {
+    /// This number as an Int, safe for values that came from a saved file: NaN and infinity are 0, and anything past ±1e9 is held
+    /// there (`Int(.nan)` and `Int(1e300)` trap). Use it wherever an edit's number becomes a count, an index or a label.
+    var clampedInt: Int { isFinite ? Int(min(max(rounded(), -1e9), 1e9)) : 0 }
+}

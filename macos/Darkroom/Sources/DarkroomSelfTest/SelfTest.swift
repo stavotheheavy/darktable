@@ -1605,6 +1605,16 @@ struct SelfTest {
                           "PP21 an old five-height edit shows as five points and renders exactly like the new format")
                 }
                 check(drawn != nil, "PP21 the edited curve rendered")
+                // a saved edit with NaN or infinity where a count belongs must not crash the panel (Int(.nan) traps)
+                if let m = model.modules.first(where: { $0.operation == "tonecurve" }), let schema = model.schema(for: m), let nField = schema.fields.first(where: { $0.name == "n" }) {
+                    var survived = true
+                    for bad in [Double.nan, .infinity, -.infinity, 1e300] {
+                        model.setParam(m, nField, to: .number(bad))
+                        survived = survived && (model.curvePoints?.count ?? 0) >= 2
+                    }
+                    check(survived && Double.nan.clampedInt == 0 && (1e300).clampedInt == 1_000_000_000 && (-1e300).clampedInt == -1_000_000_000 && (2.6).clampedInt == 3,
+                          "PP21 NaN, infinity or 1e300 where the curve's point count belongs is read safely")
+                }
                 while model.historyIndex > start { model.undo() }
                 await model.settle()
             } else { check(false, "PP21 the tone curve has points") }

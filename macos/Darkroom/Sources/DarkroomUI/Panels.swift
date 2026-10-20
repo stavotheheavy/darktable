@@ -583,18 +583,18 @@ struct BlendSection: View {
         ("lightness", 0x10), ("chromaticity", 0x11), ("difference", 0x17), ("add", 0x06), ("subtract", 0x07),
     ]
 
-    private var maskMode: Int { Int(model.blendValue(module, "mask_mode")?.double ?? 0) }
-    private var kind: MaskKind? { MaskKind(rawValue: Int(model.blendValue(module, "mask_kind")?.double ?? 0)) }
+    private var maskMode: Int { (model.blendValue(module, "mask_mode")?.double ?? 0).clampedInt }
+    private var kind: MaskKind? { MaskKind(rawValue: (model.blendValue(module, "mask_kind")?.double ?? 0).clampedInt) }
     private var opacity: Double { model.blendValue(module, "opacity")?.double ?? 100 }
 
-    private var isRaster: Bool { Int(model.blendValue(module, "mask_kind")?.double ?? 0) == 5 }
+    private var isRaster: Bool { (model.blendValue(module, "mask_kind")?.double ?? 0).clampedInt == 5 }
     private var layer: MaskLayer? { isRaster ? model.maskLayer(for: module) : nil }
 
     private var summary: String {
         switch maskMode {
         case 0: return "off"
-        case 2 where model.localMasks: return "\(isRaster ? (layer?.name ?? "missing") : (kind?.title ?? "mask")) · \(Int(opacity.rounded()))%"
-        default: return "uniform · \(Int(opacity.rounded()))%"
+        case 2 where model.localMasks: return "\(isRaster ? (layer?.name ?? "missing") : (kind?.title ?? "mask")) · \(opacity.clampedInt)%"
+        default: return "uniform · \(opacity.clampedInt)%"
         }
     }
 
@@ -718,7 +718,7 @@ struct BlendSection: View {
                 Text("Blend mode").font(.footnote).foregroundStyle(.secondary)
                 Spacer()
                 Picker("Blend mode", selection: Binding(
-                    get: { Int(model.blendValue(module, "blend_mode")?.double ?? 0x18) },
+                    get: { (model.blendValue(module, "blend_mode")?.double ?? 0x18).clampedInt },
                     set: { v in
                         let name = Self.modes.first { $0.1 == v }?.0 ?? "\(v)"
                         model.setBlend(module, "blend_mode", to: .number(Double(v)), detail: "blend mode: \(name)")
@@ -745,7 +745,7 @@ struct BlendSection: View {
         HStack {
             Text("Opacity").font(.footnote).foregroundStyle(.secondary)
             Spacer()
-            Text("\(Int(opacity.rounded()))%").font(.footnote.monospacedDigit())
+            Text("\(opacity.clampedInt)%").font(.footnote.monospacedDigit())
         }
         Slider(
             value: Binding(get: { opacity }, set: {
