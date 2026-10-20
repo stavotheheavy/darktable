@@ -570,5 +570,25 @@ do {
     check("E-M7 an absurd radius renders like the maximum radius (50)", same(lc(1e18), lc(50)))
 }
 
+// GR: linear gradient mask (card maskgradient)
+do {
+    let grBlend: [String: ParamValue] = ["mask_mode": .number(2), "mask_kind": .number(1), "mask_angle": .number(30),
+                                         "mask_position": .number(0.4), "mask_feather": .number(0.3)]
+    let grSpec = Mask.spec(from: grBlend.compactMapValues { $0.double })!
+    let grSpec2 = Mask.spec(from: ["mask_mode": 2, "mask_kind": 1, "mask_angle": 200, "mask_position": 0.6, "mask_feather": 0.5])!
+    let m1 = maskMatteError(grSpec), m2 = maskMatteError(grSpec2)
+    check("E-GR-matte GPU matte equals Mask.plane (two specs)", m1 < 1e-4 && m2 < 1e-4, "\(m1) \(m2)")
+    let gs = runDetail([maskedExposure(grBlend)]), go = maskedExposureOracle(grSpec)
+    let gw = worst(gs, go), gl = worstLinear(gs, go)
+    check("E-GR-stack masked exposure matches the oracle", gw < tol && gl < 2e-4, "\(gw) \(gl)")
+    let sm = detailSeams([maskedExposure(grBlend)], oracle: go)
+    check("E-GR-seam regions rendered alone equal the full frame", sm.ok, "\(sm)")
+    var grInv = grBlend; grInv["mask_invert"] = .number(1)
+    var invSpec = grSpec; invSpec.invert = true
+    let iv = runDetail([maskedExposure(grInv)]), io = maskedExposureOracle(invSpec)
+    let iw = worst(iv, io), il = worstLinear(iv, io)
+    check("E-GR-invert inverted mask matches the inverted oracle", iw < tol && il < 2e-4, "\(iw) \(il)")
+}
+
 print(failures == 0 ? "\nall checks passed" : "\n\(failures) failed")
 exit(failures == 0 ? 0 : 1)
