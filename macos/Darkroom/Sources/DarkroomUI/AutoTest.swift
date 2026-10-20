@@ -12,6 +12,7 @@ import UniformTypeIdentifiers
 ///   DARKROOM_AUTOTEST=modules   select each module, switch it on, render, reset
 ///   DARKROOM_AUTOTEST=ui        tabs, scopes, zoom, snapshot, undo, backgrounds
 ///   DARKROOM_AUTOTEST=simple    Simple mode's geometry controls, one screenshot per step (DARKROOM_SHOTS)
+///   DARKROOM_AUTOTEST=pro       Pro mode's panel: default, curve edited, modules added, a section off, at two window sizes
 @MainActor
 public enum AutoTest {
     private static func log(_ s: String) {
@@ -34,6 +35,7 @@ public enum AutoTest {
         case "ui": await ui(model)
         case "shots": await shots(model)
         case "simple": await simple(model)
+        case "pro": await pro(model)
         default:
             await modules(model)
             await ui(model)
@@ -132,6 +134,44 @@ public enum AutoTest {
         if let open = looksWereOpen { UserDefaults.standard.set(open, forKey: looksKey) } else { UserDefaults.standard.removeObject(forKey: looksKey) }
         while model.historyIndex > start { model.undo() }
         await shot("s5-undone")
+        model.mode = previousMode
+    }
+
+    /// Pro mode at a small and a large window: the four basics, an edited curve, added modules, a section switched
+    /// off. The edit mode and the window frame are put back afterwards.
+    private static func pro(_ model: DarkroomModel) async {
+        let dir = ProcessInfo.processInfo.environment["DARKROOM_SHOTS"] ?? NSTemporaryDirectory()
+        try? FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true)
+        func shot(_ name: String) async {
+            await model.settle()
+            try? await Task.sleep(for: .milliseconds(900))
+            let ok = capture(to: "\(dir)/\(name).png")
+            log("shot \(name): \(ok ? "written" : "FAILED") panel \(model.proPanelEntries.map(\.name).joined(separator: ", "))")
+        }
+        let previousMode = model.mode
+        guard let win = NSApp.windows.first(where: { $0.contentView != nil && $0.frame.width > 400 }) else { log("no window"); return }
+        let previousFrame = win.frame
+        NSApp.activate()
+        model.mode = .pro
+        let start = model.historyIndex
+        for (label, size) in [("small", CGSize(width: 900, height: 689)), ("large", CGSize(width: 1440, height: 900))] {
+            win.setFrame(CGRect(origin: win.frame.origin, size: size), display: true)
+            while model.historyIndex > start { model.undo() }
+            await model.preparePro()
+            await shot("p1-\(label)-basics")
+            model.setCurveNode(1, 0.18)
+            model.setCurveNode(3, 0.84)
+            await shot("p2-\(label)-curve")
+            for op in ["shadhi", "vignette"] {
+                if let e = model.proMenu.flatMap(\.entries).first(where: { $0.modules[0].operation == op }) { model.addToPanel(e) }
+            }
+            await model.preparePro()
+            await shot("p3-\(label)-added")
+            if let curve = model.proPanelEntries.first(where: { $0.modules[0].operation == "tonecurve" }) { model.toggleProEffect(curve) }
+            await shot("p4-\(label)-curve-off")
+        }
+        while model.historyIndex > start { model.undo() }
+        win.setFrame(previousFrame, display: true)
         model.mode = previousMode
     }
 
