@@ -872,8 +872,102 @@ struct SelfTest {
             await model.settle()
             check(model.frame?.width == w0 && model.frame?.height == h0, "undo restores the original frame")
             model.mode = .pro
+
+            print("simple geometry")
+            model.mode = .simple
+            model.zoom = .fit
+            await model.settle()
+            // the smoke block above already names w0, h0 and step0 in this scope
+            let sw0 = model.frame?.width ?? 0, sh0 = model.frame?.height ?? 0
+            let sstep0 = model.historyIndex
+            func backToStart() async {
+                while model.historyIndex > sstep0 { model.undo() }
+                await model.settle()
+            }
+            func frameSize() -> (w: Int, h: Int) { (model.frame?.width ?? 0, model.frame?.height ?? 0) }
+            func longOverShort() -> Double {
+                let (w, h) = frameSize()
+                return Double(max(w, h)) / Double(max(min(w, h), 1))
+            }
+
+            // straighten is a slider: a drag of five values is one history step
+            for d in [1.0, 2, 3, 4, 5] { model.setStraighten(d) }
+            await model.settle()
+            check(model.historyIndex == sstep0 + 1 && abs(model.simpleStraighten - 5) < 1e-9,
+                  "SG1 a straighten drag is one step (\(model.historyIndex - sstep0) for 5 values, straighten \(model.simpleStraighten))")
+            await backToStart()
+
+            model.setStraighten(80)
+            let high = model.simpleStraighten
+            model.setStraighten(-80)
+            let low = model.simpleStraighten
+            model.setStraighten(3.14159)
+            let rounded = model.simpleStraighten
+            check(abs(high - 45) < 1e-9 && abs(low + 45) < 1e-9 && abs(rounded - 3.1) < 1e-9,
+                  "SG2 straighten clamps to plus or minus 45 and rounds to 0.1 (80 reads \(high), -80 reads \(low), 3.14159 reads \(rounded))")
+            await backToStart()
+
+            model.setStraighten(0)
+            await model.settle()
+            check(frameSize() == (sw0, sh0), "SG3 straighten 0 is the full frame again (\(frameSize().w)x\(frameSize().h), was \(sw0)x\(sh0))")
+
+            model.setAspect(.fourFive)
+            await model.settle()
+            model.setStraighten(8)
+            await model.settle()
+            let (w4, h4) = frameSize()
+            check(model.simpleAspect == .fourFive && abs(longOverShort() - 1.25) / 1.25 < 0.01 && h4 > w4,
+                  "SG4 a 4:5 preset survives straighten (\(w4)x\(h4), ratio \(longOverShort()), preset \(String(describing: model.simpleAspect)))")
+
+            model.rotate90()
+            await model.settle()
+            let (w5, h5) = frameSize()
+            check(model.simpleAspect == .fourFive && abs(longOverShort() - 1.25) / 1.25 < 0.01 && w5 > h5,
+                  "SG5 a 4:5 preset survives rotate and turns landscape (\(w5)x\(h5), ratio \(longOverShort()), preset \(String(describing: model.simpleAspect)))")
+
+            // a button: every tap is its own step, unlike a slider's drag
+            await backToStart()
+            model.rotate90()
+            model.rotate90()
+            await model.settle()
+            check(model.historyIndex == sstep0 + 2, "SG6 each rotate tap is its own step (\(model.historyIndex - sstep0) for 2)")
+
+            await backToStart()
+            var turns: [(w: Int, h: Int)] = []
+            for _ in 0..<4 {
+                model.rotate90()
+                await model.settle()
+                turns.append(frameSize())
+            }
+            let alternates = turns.enumerated().allSatisfy { i, s in (s.w > s.h) == (i % 2 == 0) }
+            check(alternates && frameSize() == (sw0, sh0),
+                  "SG7 four rotations are the identity (\(turns.map { "\($0.w)x\($0.h)" }.joined(separator: ", ")), was \(sw0)x\(sh0))")
+
+            await backToStart()
+            model.rotate90()
+            await model.settle()
+            check(frameSize() == (sh0, sw0), "SG8 one rotate to an explicit none shows the sensor frame (\(frameSize().w)x\(frameSize().h), expected \(sh0)x\(sw0))")
+
+            await backToStart()
+            if let crop = module(model, "crop"), let right = field(model, crop, "cw") {
+                model.setParam(crop, right, to: .number(0.7))
+                await model.settle()
+                check(model.simpleAspect == nil, "SG9 a Pro crop is no preset (preset \(String(describing: model.simpleAspect)))")
+            } else {
+                check(false, "crop has a 'cw' field for a Pro crop")
+            }
+
+            await backToStart()
+            model.setAspect(.square)
+            model.setAspect(.original)
+            await model.settle()
+            check(frameSize() == (sw0, sh0) && model.simpleAspect == .original,
+                  "SG10 Original removes the crop (\(frameSize().w)x\(frameSize().h), preset \(String(describing: model.simpleAspect)))")
+
+            await backToStart()
+            model.mode = .pro
         } else {
-            skip("simple geometry", "needs sessionOutputSize and the camera orientation, which the darktable engine does not report")
+            skip("simple geometry","needs sessionOutputSize and the camera orientation, which the darktable engine does not report")
         }
 
         print("simple mode")
