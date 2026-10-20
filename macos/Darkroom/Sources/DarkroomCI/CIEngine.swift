@@ -10,8 +10,8 @@ import UniformTypeIdentifiers
 /// The clean engine: Apple's RAW decoder through Core Image. Written from Apple's Core
 /// Image documentation only; it does not use darktable code (see THIRD-PARTY.md).
 ///
-/// M0 scope: decode, viewport render, region render, one-shot render and export. Edits
-/// are not implemented yet, so a non-empty stack is refused rather than silently ignored.
+/// Decode, viewport render, region render, one-shot render, export, and the modules in
+/// `CIModule.catalogue` applied as a stack. An operation outside the catalogue is refused.
 ///
 /// Scales follow `Engine`: `sessionInfo().processedWidth` is the working frame, and a
 /// scale of 1.0 is that frame's size. Region coordinates are in the scaled frame's
@@ -66,20 +66,18 @@ public actor CIEngine: PhotoEngine {
 
     public func sessionRender(stack: [StackEntry], scale: Double) async throws -> RenderedFrame {
         let s = try openedSession()
-        try Self.refuseEdits(stack)
         cancelFlag.withLock { $0 = false }
         let started = ContinuousClock.now
-        let image = try decode(s, scale: s.fit * scale)
+        let image = try edited(try decode(s, scale: s.fit * scale), stack)
         return try frame(image, crop: nil, since: started)
     }
 
     public func sessionRenderRegion(stack: [StackEntry], scale: Double, x: Int, y: Int,
                                     width: Int, height: Int) async throws -> RenderedFrame {
         let s = try openedSession()
-        try Self.refuseEdits(stack)
         cancelFlag.withLock { $0 = false }
         let started = ContinuousClock.now
-        let image = try decode(s, scale: s.fit * scale)
+        let image = try edited(try decode(s, scale: s.fit * scale), stack)
         let ext = image.extent.integral
         // Core Image's origin is bottom left; the region is given top left.
         let wanted = CGRect(x: ext.minX + CGFloat(x), y: ext.maxY - CGFloat(y) - CGFloat(height),
@@ -135,11 +133,14 @@ public actor CIEngine: PhotoEngine {
 
     public func sessionModules() async throws -> [ModuleInfo] {
         _ = try openedSession()
-        return []   // modules arrive with M1
+        return CIModule.catalogue.map { m in
+            ModuleInfo(operation: m.operation, name: m.name, iopOrder: m.iopOrder,
+                       enabled: m.defaultEnabled, defaultEnabled: m.defaultEnabled,
+                       params: Dictionary(uniqueKeysWithValues: m.fields.map { ($0.name, $0.defaultValue) }))
+        }
     }
 
     public func exportRender(path: String, maxSide: Int, stack: [StackEntry]) async throws -> RenderedFrame {
-        try Self.refuseEdits(stack)
         return try await render(path: path, maxSide: maxSide, stack: stack)
     }
 
@@ -147,23 +148,29 @@ public actor CIEngine: PhotoEngine {
 
     public func render(path: String, maxSide: Int, stack: [StackEntry]) async throws -> RenderedFrame {
         guard context != nil else { throw EngineError("engine not started") }
-        try Self.refuseEdits(stack)
         let s = try Self.makeSession(path: path, maxSide: maxSide)
         cancelFlag.withLock { $0 = false }
         let started = ContinuousClock.now
-        let image = try decode(s, scale: s.fit)
+        let image = try edited(try decode(s, scale: s.fit), stack)
         return try frame(image, crop: nil, since: started)
     }
 
     // MARK: modules (none in M0)
 
-    public func moduleNames() async throws -> [String] { [] }
-
-    public func schema(for operation: String) async throws -> ModuleSchema {
-        throw EngineError("the clean engine has no module \(operation) yet")
+    public func moduleNames() async throws -> [String] {
+        CIModule.catalogue.map(\.operation)
     }
 
-    public func defaultValue(operation: String, field: String) async throws -> Double? { nil }
+    public func schema(for operation: String) async throws -> ModuleSchema {
+        guard let m = CIModule.named(operation) else {
+            throw EngineError("the clean engine has no module \(operation) yet")
+        }
+        return ModuleSchema(operation: m.operation, fields: m.fields)
+    }
+
+    public func defaultValue(operation: String, field: String) async throws -> Double? {
+        CIModule.named(operation)?.defaultValue(field)
+    }
 
     // MARK: helpers
 
@@ -173,10 +180,36 @@ public actor CIEngine: PhotoEngine {
         return session
     }
 
-    private static func refuseEdits(_ stack: [StackEntry]) throws {
-        guard stack.isEmpty else {
-            throw EngineError("the clean engine does not apply edits yet (M1)")
+    /// Applies the enabled stack entries in pipeline order. An operation the clean engine
+    /// does not have is an error, never a silent skip.
+    private func edited(_ image: CIImage, _ stack: [StackEntry]) throws -> CIImage {
+        let ordered = try stack.filter(\.enabled).map { entry -> (CIModule, StackEntry) in
+            guard let m = CIModule.named(entry.operation) else {
+                throw EngineError("the clean engine has no module \(entry.operation) yet")
+            }
+            return (m, entry)
         }
+        .sorted { $0.0.iopOrder < $1.0.iopOrder }
+
+        var out = image
+        for (m, entry) in ordered {
+            // only uniform blending exists here; drawn and parametric masks are not built yet
+            let maskMode = entry.blend["mask_mode"]?.double ?? 0
+            guard maskMode == 0 || maskMode == 1 else {
+                throw EngineError("the clean engine has no masks yet (mask mode \(Int(maskMode)))")
+            }
+            let before = out
+            out = m.apply(out, m.values(from: entry.params))
+            // opacity is a percentage: mix the module's output back over its input
+            let opacity = min(max(entry.blend["opacity"]?.double ?? 100, 0), 100) / 100
+            if opacity < 1 {
+                let faded = out.applyingFilter("CIColorMatrix", parameters: [
+                    "inputAVector": CIVector(x: 0, y: 0, z: 0, w: CGFloat(opacity)),
+                ])
+                out = faded.composited(over: before)
+            }
+        }
+        return out
     }
 
     private static func makeSession(path: String, maxSide: Int) throws -> Session {

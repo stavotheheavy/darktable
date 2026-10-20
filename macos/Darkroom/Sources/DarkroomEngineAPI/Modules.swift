@@ -121,6 +121,31 @@ public struct ModuleInfo: Sendable, Identifiable, Equatable {
     public let params: [String: ParamValue]
     public let blend: BlendInfo?
 
+    public init(operation: String, multiPriority: Int = 0, multiName: String = "",
+                multiNameHandEdited: Bool = false, name: String, iopOrder: Int,
+                enabled: Bool, defaultEnabled: Bool, hideEnableButton: Bool = false,
+                deprecated: Bool = false, oneInstance: Bool = true, supportsBlending: Bool = false,
+                noMasks: Bool = true, group: Int = 0, haveIntrospection: Bool = true,
+                params: [String: ParamValue], blend: BlendInfo? = nil) {
+        self.operation = operation
+        self.multiPriority = multiPriority
+        self.multiName = multiName
+        self.multiNameHandEdited = multiNameHandEdited
+        self.name = name
+        self.iopOrder = iopOrder
+        self.enabled = enabled
+        self.defaultEnabled = defaultEnabled
+        self.hideEnableButton = hideEnableButton
+        self.deprecated = deprecated
+        self.oneInstance = oneInstance
+        self.supportsBlending = supportsBlending
+        self.noMasks = noMasks
+        self.group = group
+        self.haveIntrospection = haveIntrospection
+        self.params = params
+        self.blend = blend
+    }
+
     /// "exposure", or "color balance rgb · skin" when the user named the instance.
     public var title: String {
         multiNameHandEdited && !multiName.isEmpty ? "\(name) · \(multiName)" : name
@@ -175,6 +200,17 @@ public struct FieldSchema: Sendable, Identifiable, Hashable {
     public let defaultValue: ParamValue
     public let options: [EnumOption]
 
+    public init(name: String, description: String, kind: Kind, min: Double, max: Double,
+                defaultValue: ParamValue, options: [EnumOption]) {
+        self.name = name
+        self.description = description
+        self.kind = kind
+        self.min = min
+        self.max = max
+        self.defaultValue = defaultValue
+        self.options = options
+    }
+
     /// A label a person would read: darktable's own description, else the field name.
     public var label: String {
         if !description.isEmpty { return description }
@@ -190,6 +226,11 @@ public struct FieldSchema: Sendable, Identifiable, Hashable {
 public struct ModuleSchema: Sendable {
     public let operation: String
     public let fields: [FieldSchema]
+
+    public init(operation: String, fields: [FieldSchema]) {
+        self.operation = operation
+        self.fields = fields
+    }
 
     public static func parse(_ data: Data) throws -> ModuleSchema {
         guard
