@@ -43,6 +43,9 @@ let package = Package(
         // chart checks for DarkroomCore (T-series from the engine roadmap)
         .executableTarget(name: "DarkroomCoreCheck", dependencies: ["DarkroomCore"]),
 
+        // the clean engine's decode and render: Apple's Core Image, behind PhotoEngine
+        .target(name: "DarkroomCI", dependencies: ["DarkroomEngineAPI"]),
+
         // Metal kernels for the clean engine, each checked against the DarkroomCore oracle (L3)
         .target(name: "DarkroomMetal", dependencies: ["DarkroomCore"]),
         .executableTarget(name: "DarkroomMetalCheck", dependencies: ["DarkroomMetal", "DarkroomCore"]),
@@ -50,13 +53,13 @@ let package = Package(
         // model + SwiftUI views, a library so the self-test can render them offscreen
         .target(
             name: "DarkroomUI",
-            dependencies: ["DarktableKit"]
+            dependencies: ["DarktableKit", "DarkroomCI"]
         ),
 
         // headless check: start the engine, render, time it, write PNGs
         .executableTarget(
             name: "DarkroomSelfTest",
-            dependencies: ["DarktableKit", "DarkroomUI"]
+            dependencies: ["DarktableKit", "DarkroomUI", "DarkroomCI"]
         ),
 
         // the SwiftUI app

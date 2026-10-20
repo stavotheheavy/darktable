@@ -5,6 +5,7 @@ import DarktableKit
 import Foundation
 import ImageIO
 import UniformTypeIdentifiers
+import DarkroomCI
 
 // Headless checks that the Swift side really drives darktable's engine.
 //   dtb-selftest <image> [--max 1400] [--out frame.png]      engine round trip + timings
@@ -70,6 +71,8 @@ struct SelfTest {
         let effects = has("--effects")
         let cropAbuse = has("--crop-abuse")
         let fromModule = take("--from")
+        // darktable is the default; `ci` runs the clean engine (only --bench supports it so far)
+        let engineName = take("--engine") ?? "darktable"
         guard let path = args.first else {
             print("usage: dtb-selftest <image> [--max 1400] [--out frame.png] [--ui]")
             exit(2)
@@ -78,7 +81,7 @@ struct SelfTest {
         let env = ProcessInfo.processInfo.environment
         let prefix = URL(fileURLWithPath: env["DT_PREFIX"] ?? "/Users/Chief/darktable/build/install")
         let home = FileManager.default.homeDirectoryForCurrentUser
-        let engine = Engine()
+        let engine: any PhotoEngine = engineName == "ci" ? CIEngine() : Engine()
 
         do {
             let t0 = Date()
@@ -93,7 +96,11 @@ struct SelfTest {
             } else if effects {
                 try await runEffects(engine: engine, path: path, from: fromModule)
             } else if bench {
-                try await runBench(engine: engine, folder: path)
+                if engineName == "ci" {
+                    try await runDecodeBench(engine: engine, folder: path)
+                } else {
+                    try await runBench(engine: engine, folder: path)
+                }
             } else if listModules {
                 try await engine.openSession(path: path, maxSide: 400)
                 for m in try await engine.sessionModules() {
@@ -137,7 +144,7 @@ struct SelfTest {
     /// not), undo, check it is byte-identical to the start, redo, check it is byte-identical to the
     /// edit. One line per control goes to a tsv as it happens, so a crash names its culprit.
     @MainActor
-    static func runEffects(engine: Engine, path: String, from: String?) async throws {
+    static func runEffects(engine: any PhotoEngine, path: String, from: String?) async throws {
         let fm = FileManager.default
         let farm = URL(fileURLWithPath: NSTemporaryDirectory()).appending(path: "darkroom-rig-effects")
         try? fm.removeItem(at: farm)
@@ -237,7 +244,7 @@ struct SelfTest {
     /// frame, then renders at fit, at 100% and again after another edit. The bad crops used to
     /// reach tiling as a negative size and crash; now each render must come back with a frame.
     @MainActor
-    static func runCropAbuse(engine: Engine, path: String) async throws {
+    static func runCropAbuse(engine: any PhotoEngine, path: String) async throws {
         var failures: [String] = []
         func check(_ ok: Bool, _ what: String) {
             print((ok ? "  ok    " : "  FAIL  ") + what)
@@ -310,7 +317,7 @@ struct SelfTest {
     /// Speed and memory over a folder of real raws, per format. Originals are never opened
     /// in place: a symlink farm takes the sidecars, so the folder stays untouched.
     @MainActor
-    static func runBench(engine: Engine, folder: String) async throws {
+    static func runBench(engine: any PhotoEngine, folder: String) async throws {
         let fm = FileManager.default
         let farm = URL(fileURLWithPath: NSTemporaryDirectory()).appending(path: "darkroom-rig-photos")
         try? fm.removeItem(at: farm)
@@ -383,7 +390,78 @@ struct SelfTest {
         print("wrote ~/Documents/plans/2026-10-18-darkroom-bench.md")
     }
 
-    static func runEngine(engine: Engine, path: String, maxSide: Int, out: String?) async throws {
+    /// Open-to-first-frame over every raw in a folder, for an engine that cannot edit yet
+    /// (the clean engine in M0). Each raw is opened, rendered once at the working size and
+    /// timed; RSS is sampled after the 10th raw and after the last one.
+    @MainActor
+    static func runDecodeBench(engine: any PhotoEngine, folder: String) async throws {
+        let fm = FileManager.default
+        let names = ((try? fm.contentsOfDirectory(atPath: folder)) ?? []).sorted()
+        var byFormat: [String: [String]] = [:]
+        for n in names {
+            let ext = (n as NSString).pathExtension.lowercased()
+            guard ["nef", "arw", "cr2", "cr3", "dng", "raf"].contains(ext) else { continue }
+            byFormat[ext.uppercased(), default: []].append(n)
+        }
+        let total = byFormat.values.reduce(0) { $0 + $1.count }
+        print("decode bench: \(total) raws in \(folder)")
+
+        var table = ["| format | photos | open to first frame (ms, p50 / p95) | failed |", "|---|---|---|---|"]
+        var all: [Double] = []
+        var failures: [String] = []
+        var decoders = Set<String>()
+        var rssAfterTen: Double?
+        var p50ByFormat: [String: Double] = [:]
+        for (fmt, files) in byFormat.sorted(by: { $0.key < $1.key }) {
+            var opens: [Double] = []
+            var failed = 0
+            for n in files {
+                let path = URL(fileURLWithPath: folder).appending(path: n).path
+                let t0 = Date()
+                do {
+                    try await engine.openSession(path: path, maxSide: 1600)
+                    _ = try await engine.sessionRender(stack: [], scale: 1)
+                    if let ci = engine as? CIEngine, let v = await ci.decoderVersion() { decoders.insert(v) }
+                    await engine.closeSession()
+                    let ms = Date().timeIntervalSince(t0) * 1000
+                    opens.append(ms)
+                    all.append(ms)
+                } catch {
+                    failed += 1
+                    failures.append("\(n): \(error)")
+                    await engine.closeSession()
+                }
+                if all.count + failures.count == 10 { rssAfterTen = rssMB() }
+            }
+            p50ByFormat[fmt] = percentile(opens, 0.5)
+            table.append(String(format: "| %@ | %d | %.0f / %.0f | %d |", fmt, files.count,
+                                percentile(opens, 0.5), percentile(opens, 0.95), failed))
+            print(table.last!)
+        }
+
+        let p50 = percentile(all, 0.5)
+        let rssEnd = rssMB()
+        let rssStart = rssAfterTen ?? 0
+        let drift = rssStart > 0 ? (rssEnd / rssStart - 1) * 100 : 0
+        // the gate is every format's p50 under 150 ms, not the pooled p50
+        let failing = p50ByFormat.filter { $0.value >= 150 }.keys.sorted()
+        let gate = failing.isEmpty ? "PASS" : "FAIL (\(failing.joined(separator: ", ")) at or over 150 ms)"
+        let summary = String(format: "all %d raws: open to first frame p50 %.0f ms, p95 %.0f ms; gate (each format p50 under 150 ms): %@. RSS after 10: %.0f MB, after all: %.0f MB (%+.0f%%, gate within 20%%).",
+                             all.count, p50, percentile(all, 0.95), gate, rssStart, rssEnd, drift)
+        let decoderLine = "decoder versions used: " + (decoders.isEmpty ? "none reported" : decoders.sorted().joined(separator: ", "))
+        print(summary)
+        print(decoderLine)
+
+        let header = "# Clean engine M0 bench\n\nFolder: \(folder)\nEngine: CIEngine (Core Image, CIRAWFilter), working frame 1600 px\n\n"
+        let body = table.joined(separator: "\n") + "\n\n" + summary + "\n\n" + decoderLine + "\n"
+        let failureList = failures.map { "- \($0)" }.joined(separator: "\n")
+        let report: String = header + body + (failures.isEmpty ? "" : "\nFailures:\n" + failureList + "\n")
+        let out = NSHomeDirectory() + "/Documents/plans/2026-10-20-ci-engine-m0-bench.md"
+        try? report.write(toFile: out, atomically: true, encoding: .utf8)
+        print("wrote \(out)")
+    }
+
+    static func runEngine(engine: any PhotoEngine, path: String, maxSide: Int, out: String?) async throws {
         let modules = try await engine.moduleNames()
         let defExp = try await engine.defaultValue(operation: "exposure", field: "exposure")
         print("modules known: \(modules.count); exposure default: \(defExp.map { String($0) } ?? "n/a")")
@@ -413,7 +491,7 @@ struct SelfTest {
 
     /// Drives the real DarkroomModel the way the controls do, and checks what comes out.
     @MainActor
-    static func runUI(engine: Engine, path: String) async throws {
+    static func runUI(engine: any PhotoEngine, path: String) async throws {
         var failures: [String] = []
         func check(_ ok: Bool, _ what: String) {
             print((ok ? "  ok    " : "  FAIL  ") + what)

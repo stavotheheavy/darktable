@@ -658,7 +658,7 @@ public struct DarkroomRoot: View {
     @State private var welcomed: Bool
 
     @MainActor public init() {
-        let engine = Engine()
+        let engine = EngineChoice.make()
         _model = State(initialValue: DarkroomModel(engine: engine))
         _library = State(initialValue: LibraryModel(engine: engine))
         // a launch file (DARKROOM_OPEN or --open=) goes straight to the darkroom
