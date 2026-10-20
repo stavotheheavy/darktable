@@ -50,6 +50,11 @@ public final class DarkroomModel {
     /// straighten and flip change it); nil means `info`'s processed size holds.
     public private(set) var outputSize: (width: Int, height: Int)?
     /// The size zoom and pan work in: the output size when known, else the processed size.
+    /// Pro's panel: modules added from the Modules menu, modules taken out, and unfolded sections (by module id).
+    /// Reset when a photo opens; see ProPanel.swift.
+    var proAdded: Set<String> = []
+    var proRemoved: Set<String> = []
+    public var proOpen: Set<String> = []
     /// The sensor frame at scale 1 and the camera's orientation, for Simple's geometry controls; nil when
     /// the engine cannot report them (see `simpleGeometryReady`).
     var geometryBase: (sensor: SIMD2<Double>, camera: Orientation)?
@@ -188,6 +193,9 @@ public final class DarkroomModel {
             modules = try await engine.sessionModules()
             info = await engine.sessionInfo()
             outputSize = nil
+            proAdded = []
+            proRemoved = []
+            proOpen = Set(modules.filter { $0.operation == "tonecurve" }.map(\.id))
             // an explicit flip to "none" shows the sensor frame, so its size is the sensor's
             let sensorStack = [StackEntry(operation: "flip", params: ["orientation": .option("ORIENTATION_NONE")])]
             if let s = try? await engine.sessionOutputSize(stack: sensorStack), let camera = info?.cameraOrientation {

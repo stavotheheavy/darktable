@@ -1015,6 +1015,49 @@ struct SelfTest {
             skip("simple geometry", "needs sessionOutputSize and the camera orientation, which the darktable engine does not report")
         }
 
+        print("pro panel (smoke)")
+        if clean {
+            model.mode = .pro
+            model.zoom = .fit
+            await model.settle()
+            let names = model.proPanelEntries.map { $0.modules[0].operation }
+            check(Set(names) == Set(DarkroomModel.proBasics), "a new photo's panel holds the four basics (\(names.joined(separator: ", ")))")
+            if let shadhi = model.proMenu.flatMap(\.entries).first(where: { $0.modules[0].operation == "colorbalancergb" }) {
+                let before = bytes(model.frame), step = model.historyIndex
+                // colour balance is a basic: give it a visible setting so on/off shows in the frame
+                await model.preparePro()
+                if let m = shadhi.modules.first, let f = model.schema(for: m)?.fields.first(where: { $0.name == "saturation_global" }) {
+                    model.setParam(m, f, to: .number(-1))
+                }
+                await model.settle()
+                let edited = bytes(model.frame)
+                check(edited != before, "a colour balance edit changes the frame")
+                model.toggleProEffect(shadhi)
+                await model.settle()
+                check(model.inProPanel(shadhi) && bytes(model.frame) == before, "the power button keeps the section and turns its effect off")
+                model.toggleProEffect(shadhi)
+                await model.settle()
+                check(bytes(model.frame) == edited, "and back on restores the edit")
+                model.removeFromPanel(shadhi)
+                await model.settle()
+                check(!model.inProPanel(shadhi) && bytes(model.frame) == before, "the menu switch takes it out of the panel and stops applying it")
+                model.undo()
+                await model.settle()
+                check(model.inProPanel(shadhi) && bytes(model.frame) == edited, "undo brings it back, edit and all")
+                while model.historyIndex > step { model.undo() }
+                await model.settle()
+            } else { check(false, "colour balance is in the Modules menu") }
+            if let sh = model.proMenu.flatMap(\.entries).first(where: { $0.modules[0].operation == "shadhi" }) {
+                model.addToPanel(sh)
+                check(model.inProPanel(sh), "switching shadows and highlights on in the menu adds it to the panel")
+                model.removeFromPanel(sh)
+                check(!model.inProPanel(sh), "and switching it off takes it out")
+            }
+            model.mode = .simple
+        } else {
+            skip("pro panel", "the basics and their fields are the clean engine's")
+        }
+
         print("simple mode")
         let simple = reopened
         simple.mode = .simple

@@ -23,11 +23,10 @@ public struct DarkroomView: View {
             VStack(spacing: 0) {
                 TopBar(model: model, choosing: $choosing)
                 if model.mode == .pro {
+                    // modules come from the header's Modules menu; the panel holds the ones in use
                     HStack(alignment: .top, spacing: 0) {
-                        LeftPanel(model: model)
-                            .frame(width: Self.panelWidth)
                         Spacer(minLength: 0)
-                        RightColumn(model: model)
+                        ProPanel(model: model)
                             .frame(width: Self.panelWidth)
                     }
                     .padding(.top, 12)
@@ -189,6 +188,7 @@ struct TopBar: View {
         HStack(spacing: 12) {
             fileCapsule.chrome(hidden: model.uiHidden)
             ModeSwitch(model: model).chrome(hidden: model.uiHidden)
+            if model.mode == .pro { ProMenus(model: model).chrome(hidden: model.uiHidden) }
             Spacer(minLength: 8)
             toolsCapsule(compact: compact).chrome(hidden: model.uiHidden)
             Spacer(minLength: 8)
