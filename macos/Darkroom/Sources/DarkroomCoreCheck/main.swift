@@ -738,5 +738,124 @@ do {
     check("DC3 a negative new s gives black, not NaN", dark[1] == SIMD3(0, 0, 0), "\(dark[1])")
 }
 
+// NR: wavelet noise reduction. Each fixture's signs come from a 64-bit LCG started at state 1, one draw per sign.
+do {
+    func signs(_ count: Int) -> [Double] {
+        var state: UInt64 = 1
+        return (0..<count).map { _ in
+            state = state &* 6364136223846793005 &+ 1442695040888963407
+            return state >> 63 == 1 ? 1 : -1
+        }
+    }
+    /// The largest per-channel difference; a non-finite value or a length mismatch is an infinite error.
+    func maxDiff(_ a: [SIMD3<Double>], _ b: [SIMD3<Double>]) -> Double {
+        guard a.count == b.count else { return .infinity }
+        var m = 0.0
+        for (p, q) in zip(a, b) {
+            for c in 0..<3 {
+                let d = abs(p[c] - q[c])
+                guard d.isFinite else { return .infinity }
+                m = max(m, d)
+            }
+        }
+        return m
+    }
+    func popStd(_ v: [Double]) -> Double {
+        let mean = v.reduce(0, +) / Double(v.count)
+        return (v.reduce(0) { $0 + ($1 - mean) * ($1 - mean) } / Double(v.count)).squareRoot()
+    }
+    let w = 48, h = 40
+    let img = DetailCommon.fixture(width: w, height: h)
+
+    // NR1 identity: both strengths 0 on the fixture; a flat colour at full strength is unchanged
+    let idZero = NoiseReduction.apply(img, width: w, height: h, luma: 0, chroma: 0)
+    check("NR1 luma 0 and chroma 0 return the fixture unchanged", maxDiff(idZero, img) < 1e-12, "\(maxDiff(idZero, img))")
+    let flat = [SIMD3<Double>](repeating: SIMD3(0.3, 0.2, 0.1), count: 16 * 16)
+    let flatOut = NoiseReduction.apply(flat, width: 16, height: 16, luma: 1, chroma: 1)
+    check("NR1 a flat colour at luma 1, chroma 1 is unchanged", maxDiff(flatOut, flat) < 1e-12, "\(maxDiff(flatOut, flat))")
+
+    // NR2 the band constants: 256 by 256 white noise, population std of bands 0...3 away from the edges
+    let n = 256
+    let white = Plane(width: n, height: n, values: signs(n * n))
+    let (bands, _) = Filters.atrous(white, levels: 4)
+    for j in 0..<4 {
+        var inner: [Double] = []
+        for y in 40..<(n - 40) { for x in 40..<(n - 40) { inner.append(bands[j].values[y * n + x]) } }
+        let sd = popStd(inner), want = NoiseReduction.bandNoise[j]
+        let rel = abs(sd - want) / want
+        check("NR2 band \(j) std of unit white noise is \(String(format: "%.4f", sd)), constant \(want), within 8%",
+              rel < 0.08, "\(sd)")
+    }
+
+    // the two fixtures of the card: lumaNoise is grey with s = 0.5 + 0.03 sign; chromaNoise is 0.25 (1 + 0.1 sign) per channel
+    let ln = 64
+    let lumaS = signs(ln * ln).map { 0.5 + 0.03 * $0 }
+    let lumaImg = lumaS.map { SIMD3<Double>(repeating: $0 * $0) }
+    let csigns = signs(3 * ln * ln)
+    let chromaImg = (0..<(ln * ln)).map { i in
+        SIMD3<Double>(0.25 * (1 + 0.1 * csigns[3 * i]), 0.25 * (1 + 0.1 * csigns[3 * i + 1]), 0.25 * (1 + 0.1 * csigns[3 * i + 2]))
+    }
+
+    // NR3 luminance noise goes and the grey stays grey
+    let lumaOut = NoiseReduction.apply(lumaImg, width: ln, height: ln, luma: 0.3, chroma: 0)
+    let sOut = lumaOut.map { ColorCommon.luminance($0).squareRoot() }
+    let sStd = popStd(sOut) / 0.03
+    check("NR3 output s has std \(String(format: "%.4f", sStd)) x the noise (under 0.1; the card expects 0.035)", sStd < 0.1, "\(sStd)")
+    let spread = lumaOut.map { max(abs($0.x - $0.y), abs($0.y - $0.z)) }.max() ?? .infinity
+    check("NR3 the grey stays grey (all channels equal within 1e-12)", spread < 1e-12, "\(spread)")
+
+    // NR4 shrinkage is bounded by the sum of the thresholds
+    let lumaOut1 = NoiseReduction.apply(lumaImg, width: ln, height: ln, luma: 0.1, chroma: 0)
+    var maxMove = 0.0
+    for (o, s) in zip(lumaOut1, lumaS) { maxMove = max(maxMove, abs(ColorCommon.luminance(o).squareRoot() - s)) }
+    let bound = 3 * 0.1 * 0.1 * (0.890 + 0.201 + 0.086 + 0.041) + 1e-9
+    check("NR4 the largest move of s is \(String(format: "%.5f", maxMove)), at most \(String(format: "%.5f", bound))",
+          maxMove <= bound, "\(maxMove)")
+
+    // NR5 colour noise goes and brightness stays
+    let chromaOut = NoiseReduction.apply(chromaImg, width: ln, height: ln, luma: 0, chroma: 1)
+    var lumaErr = 0.0
+    for (o, i) in zip(chromaOut, chromaImg) {
+        let yo = ColorCommon.luminance(o), yi = ColorCommon.luminance(i)
+        lumaErr = max(lumaErr, abs(yo - yi) / yi)
+    }
+    check("NR5 the output luminance equals the input luminance (relative error \(lumaErr))", lumaErr < 1e-9, "\(lumaErr)")
+    for c in 0..<3 {
+        let inRatio = chromaImg.map { $0[c] / ColorCommon.luminance($0) }
+        let outRatio = chromaOut.map { $0[c] / ColorCommon.luminance($0) }
+        let before = popStd(inRatio), after = popStd(outRatio)
+        check("NR5 channel \(c): the ratio std falls from \(String(format: "%.4f", before)) to \(String(format: "%.4f", after)) (under 0.1 times)",
+              after < 0.1 * before, "\(after)")
+    }
+
+    // NR6 the two stages do not leak into each other
+    let lumaChromaOnly = NoiseReduction.apply(lumaImg, width: ln, height: ln, luma: 0, chroma: 1)
+    check("NR6a grey with chroma only is unchanged (q = (1, 1, 1) everywhere)", maxDiff(lumaChromaOnly, lumaImg) < 1e-9,
+          "\(maxDiff(lumaChromaOnly, lumaImg))")
+    let lumaOnly = NoiseReduction.apply(chromaImg, width: ln, height: ln, luma: 1, chroma: 0)
+    var ratioErr = 0.0
+    for (o, i) in zip(lumaOnly, chromaImg) {
+        let yo = ColorCommon.luminance(o), yi = ColorCommon.luminance(i)
+        for c in 0..<3 { ratioErr = max(ratioErr, abs(o[c] / yo - i[c] / yi)) }
+    }
+    check("NR6b luma only keeps every pixel's ratios (out / Y equals in / Y)", ratioErr < 1e-9, "\(ratioErr)")
+
+    // NR7 the soft threshold
+    check("NR7 soft(0.5, 0.2) == 0.3", abs(NoiseReduction.soft(0.5, 0.2) - 0.3) < 1e-12)
+    check("NR7 soft(-0.5, 0.2) == -0.3", abs(NoiseReduction.soft(-0.5, 0.2) + 0.3) < 1e-12)
+    check("NR7 soft(0.1, 0.2) == 0 and soft(-0.1, 0.2) == 0",
+          NoiseReduction.soft(0.1, 0.2) == 0 && NoiseReduction.soft(-0.1, 0.2) == 0)
+    check("NR7 soft(0.3, 0) == 0.3", NoiseReduction.soft(0.3, 0) == 0.3)
+
+    // NR8 finite and non-negative at full strength on the fixture (past-white corner, a strong edge), black stays black
+    var blackImg = img
+    blackImg[0] = SIMD3(0, 0, 0)
+    let full = NoiseReduction.apply(blackImg, width: w, height: h, luma: 1, chroma: 1)
+    let finite = full.allSatisfy { $0.x.isFinite && $0.y.isFinite && $0.z.isFinite }
+    let nonNeg = full.allSatisfy { $0.x >= 0 && $0.y >= 0 && $0.z >= 0 }
+    check("NR8 the output is finite and non-negative at luma 1, chroma 1", finite && nonNeg)
+    check("NR8 black stays exactly black", full[0] == SIMD3(0, 0, 0), "\(full[0])")
+}
+
 print(failures == 0 ? "\nall checks passed" : "\n\(failures) failed")
 exit(failures == 0 ? 0 : 1)
