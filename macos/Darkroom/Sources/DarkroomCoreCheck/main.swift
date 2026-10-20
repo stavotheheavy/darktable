@@ -240,6 +240,51 @@ check("AW9 red gain clamped to exactly 0.25", clampGains.x == 0.25, "\(clampGain
 let edgeScene = patchScene(cast: castWB, replaced: [0: SIMD3(0.96, 0.5, 0.5), 32: SIMD3(0.96, 0.5, 0.5)])
 let edgeGains = AutoWhiteBalance.gains(edgeScene, width: 64, height: 64)
 check("AW10 pixels at 0.96 excluded, cast removed within 1e-6", withinCast(edgeGains, castWB, 1e-6), "\(edgeGains)")
+// LV levels: black, grey and white points on the sRGB-encoded value
+let levelsRamp = (0...4096).map { 1.5 * Double($0) / 4096 }
+
+// LV1 identity: the defaults leave every value unchanged
+let lvIdentity = levelsRamp.allSatisfy { abs(Levels.apply($0, black: 0, grey: 0.5, white: 1) - $0) < 1e-9 }
+check("LV1 levels at the defaults is the identity", lvIdentity)
+
+// LV2 points: encoded input 0.1 goes to 0, 0.9 goes to 1, and the grey point 0.1 + 0.4 * 0.8 goes to 0.5
+func levelsEncodedOut(_ e: Double) -> Double {
+    Transfer.linearToSRGB(Levels.apply(Transfer.srgbToLinear(e), black: 0.1, grey: 0.4, white: 0.9))
+}
+check("LV2 black point: encoded 0.1 goes to 0", abs(levelsEncodedOut(0.1)) < 1e-9, "\(levelsEncodedOut(0.1))")
+check("LV2 white point: encoded 0.9 goes to 1", abs(levelsEncodedOut(0.9) - 1) < 1e-9, "\(levelsEncodedOut(0.9))")
+let lvGrey = 0.1 + 0.4 * 0.8
+check("LV2 grey point: encoded \(lvGrey) goes to 0.5", abs(levelsEncodedOut(lvGrey) - 0.5) < 1e-9,
+      "\(levelsEncodedOut(lvGrey))")
+
+// LV3 monotone: the output never decreases over the ramp
+func levelsMonotone(_ black: Double, _ grey: Double, _ white: Double) -> Bool {
+    var previous = -Double.infinity
+    for v in levelsRamp {
+        let out = Levels.apply(v, black: black, grey: grey, white: white)
+        if out < previous { return false }
+        previous = out
+    }
+    return true
+}
+check("LV3 monotone for (0.1, 0.4, 0.9)", levelsMonotone(0.1, 0.4, 0.9))
+check("LV3 monotone for (0, 0.7, 1)", levelsMonotone(0, 0.7, 1))
+
+// LV4 HDR kept: above white, a brighter input stays brighter
+let lvHigh = Levels.apply(1.4, black: 0, grey: 0.5, white: 0.9)
+let lvLow = Levels.apply(1.0, black: 0, grey: 0.5, white: 0.9)
+check("LV4 linear 1.4 stays above linear 1.0 when white is 0.9", lvHigh > lvLow, "\(lvHigh) vs \(lvLow)")
+
+// LV5 guards: the guards must keep every output finite, and monotone where black equals white
+let lvGuarded = levelsRamp.allSatisfy { Levels.apply($0, black: 0.4, grey: 0.5, white: 0.3).isFinite }
+check("LV5 white below black gives finite outputs", lvGuarded)
+let lvEqual = levelsRamp.allSatisfy { Levels.apply($0, black: 0.5, grey: 0.5, white: 0.5).isFinite }
+check("LV5 black equal to white gives finite outputs", lvEqual)
+check("LV5 black equal to white is monotone", levelsMonotone(0.5, 0.5, 0.5))
+let lvGrey0 = levelsRamp.allSatisfy { Levels.apply($0, black: 0, grey: 0, white: 1).isFinite }
+check("LV5 grey 0 gives finite outputs", lvGrey0)
+let lvGrey1 = levelsRamp.allSatisfy { Levels.apply($0, black: 0, grey: 1, white: 1).isFinite }
+check("LV5 grey 1 gives finite outputs", lvGrey1)
 
 print(failures == 0 ? "\nall checks passed" : "\n\(failures) failed")
 exit(failures == 0 ? 0 : 1)

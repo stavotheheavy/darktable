@@ -161,5 +161,10 @@ do {
     check("E7 per-pixel path ran", false, "\(error)")
 }
 
+// E-LV rgblevels: the levels kernel through the engine, black 0.1, grey 0.4, white 0.9
+let eLV = worst(run([StackEntry(operation: "rgblevels", params: ["black": .number(0.1), "grey": .number(0.4), "white": .number(0.9)])]),
+                scene.map { Levels.apply($0, black: 0.1, grey: 0.4, white: 0.9) })
+check("E-LV rgblevels matches the oracle within 1/255", eLV < tol, "\(eLV)")
+
 print(failures == 0 ? "\nall checks passed" : "\n\(failures) failed")
 exit(failures == 0 ? 0 : 1)
