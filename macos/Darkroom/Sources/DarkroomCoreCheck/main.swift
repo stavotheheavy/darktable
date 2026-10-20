@@ -482,6 +482,8 @@ let cbSweep: [SIMD3<Double>] = (0..<4096).map { i in
 var cb1Worst = 0.0
 for c in cbSweep {
     let o = ColorBalance.apply(c, contrast: 0, saturation: 0, vibrance: 0)
+    // max() drops NaN, so a non-finite output is an infinite error
+    guard o.x.isFinite, o.y.isFinite, o.z.isFinite else { cb1Worst = .infinity; continue }
     for k in 0..<3 { cb1Worst = max(cb1Worst, abs(o[k] - c[k]) / abs(c[k])) }
 }
 check("CB1 defaults are the identity on 4096 colours within 1e-9 relative", cb1Worst < 1e-9, "\(cb1Worst)")
@@ -507,18 +509,21 @@ check("CB4 saturation -1 gives OkLab chroma under 1e-6", hypot(cb4out.y, cb4out.
 check("CB4 saturation -1 keeps OkLab L within 1e-9", abs(cb4out.x - cb4in.x) < 1e-9, "\(cb4out.x - cb4in.x)")
 
 // CB5 (roadmap gate T6) saturation +0.5 is hue-safe: 36 hues at L 0.6, chroma 0.04
-var cb5Drift = 0.0, cb5Chroma = 0.0, cb5L = 0.0, cb5Min = Double.infinity
+var cb5Drift = 0.0, cb5Chroma = 0.0, cb5L = 0.0, cb5Min = Double.infinity, cb5Finite = true
 for i in 0..<36 {
     let h = Double(i) * 10 * .pi / 180
     let rgb = OkLab.toWorking(SIMD3(0.6, 0.04 * cos(h), 0.04 * sin(h)))
     let out = ColorBalance.apply(rgb, contrast: 0, saturation: 0.5, vibrance: 0)
+    // max() and min() drop NaN, so a non-finite output fails the finite check explicitly
+    if !(out.x.isFinite && out.y.isFinite && out.z.isFinite) { cb5Finite = false; continue }
     let before = OkLab.lch(OkLab.fromWorking(rgb)), after = OkLab.lch(OkLab.fromWorking(out))
     cb5Drift = max(cb5Drift, abs(ColorCommon.hueDifference(after.z, before.z)))
     cb5Chroma = max(cb5Chroma, abs(after.y - 0.06))
     cb5L = max(cb5L, abs(after.x - 0.6))
     cb5Min = min(cb5Min, out.min())
 }
-check("CB5 saturation +0.5 keeps every hue within 2 degrees", cb5Drift * 180 / .pi < 2, "\(cb5Drift * 180 / .pi) degrees")
+check("CB5 every output is finite", cb5Finite, "a non-finite output")
+check("CB5 saturation +0.5 keeps every hue within 2 degrees", cb5Finite && cb5Drift * 180 / .pi < 2, "\(cb5Drift * 180 / .pi) degrees")
 check("CB5 saturation +0.5 gives chroma 0.06 within 1e-9", cb5Chroma < 1e-9, "\(cb5Chroma)")
 check("CB5 saturation +0.5 keeps L within 1e-9", cb5L < 1e-9, "\(cb5L)")
 check("CB5 saturation +0.5 does not clip (every channel >= -1e-9)", cb5Min >= -1e-9, "\(cb5Min)")

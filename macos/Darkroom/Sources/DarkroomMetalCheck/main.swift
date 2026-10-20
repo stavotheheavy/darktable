@@ -393,5 +393,19 @@ do {
     check("CB colorbalanceBuf kernel ran", false, "\(error)")
 }
 
+// CB-M2 the black guard on the GPU: without `y > 0`, pow(0, -0.5) is infinite and 0 times infinity is NaN
+do {
+    let blackPixels: [SIMD4<Float>] = [SIMD4(0, 0, 0, 1), SIMD4(0.001, 0.002, 0.0005, 1), SIMD4(2, 1.5, 0.3, 1)]
+    let blackOut = try MetalPerPixel.run(source: MetalColorBalance.source, function: "colorbalanceBuf", pixels: blackPixels,
+                                         uniforms: [-0.5, 0, 0])
+    let exactBlack = blackOut[0].x == 0 && blackOut[0].y == 0 && blackOut[0].z == 0
+    let allFiniteBlack = blackOut.count == blackPixels.count
+        && blackOut.allSatisfy { $0.x.isFinite && $0.y.isFinite && $0.z.isFinite }
+    check("CB-M2 exact black stays exactly (0, 0, 0) at contrast -0.5 on Metal, every output finite",
+          exactBlack && allFiniteBlack, "black \(blackOut[0]), all finite \(allFiniteBlack)")
+} catch {
+    check("CB-M2 black guard kernel ran", false, "\(error)")
+}
+
 print(failures == 0 ? "\nall Metal checks passed" : "\n\(failures) failed")
 exit(failures == 0 ? 0 : 1)
