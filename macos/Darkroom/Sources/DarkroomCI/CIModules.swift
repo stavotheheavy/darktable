@@ -307,6 +307,136 @@ extension CIModule {
                     .cropped(to: image.extent)
                 return blurred
             }),
+
+        // Dither, approximate: posterizes the image to a number of levels.
+        CIModule(
+            operation: "dither", name: "dither or posterize (approximate)", iopOrder: 60,
+            defaultEnabled: false,
+            fields: [field("levels", 2, 64, 64)],
+            apply: { image, v in
+                image.applyingFilter("CIColorPosterize", parameters: ["inputLevels": v["levels"] ?? 64])
+            }),
+
+        // Censorize, approximate: pixelates the image; a larger size hides more detail.
+        CIModule(
+            operation: "censorize", name: "censorize (approximate)", iopOrder: 61, defaultEnabled: false,
+            fields: [field("pixelation", 1, 100, 1)],
+            apply: { image, v in
+                let size = v["pixelation"] ?? 1
+                guard size > 1 else { return image }
+                return image.applyingFilter("CIPixellate", parameters: [
+                    "inputScale": size,
+                    "inputCenter": CIVector(x: image.extent.midX, y: image.extent.midY),
+                ]).cropped(to: image.extent)
+            }),
+
+        // Soften, approximate: a blurred copy mixed back over the image.
+        CIModule(
+            operation: "soften", name: "soften (approximate)", iopOrder: 62, defaultEnabled: false,
+            fields: [field("strength", 0, 1, 0), field("radius", 1, 30, 4)],
+            apply: { image, v in
+                let strength = v["strength"] ?? 0
+                guard strength > 0 else { return image }
+                let blurred = image.clampedToExtent()
+                    .applyingFilter("CIGaussianBlur", parameters: [kCIInputRadiusKey: v["radius"] ?? 4])
+                    .cropped(to: image.extent)
+                let mixed = blurred.applyingFilter("CIColorMatrix", parameters: [
+                    "inputAVector": CIVector(x: 0, y: 0, z: 0, w: CGFloat(strength)),
+                ])
+                return mixed.composited(over: image)
+            }),
+
+        // Split toning, approximate: a warm tint for highlights and a cool one for shadows.
+        // Uses one tint over the image at the chosen strength; the two-tone split is not built.
+        CIModule(
+            operation: "splittoning", name: "split-toning (approximate)", iopOrder: 63,
+            defaultEnabled: false,
+            fields: [field("strength", 0, 1, 0), field("hue", 0, 1, 0.1)],
+            apply: { image, v in
+                let hue = v["hue"] ?? 0.1
+                let tint = CIColor(red: CGFloat(0.5 + 0.5 * cos(2 * .pi * hue)),
+                                   green: CGFloat(0.5 + 0.5 * cos(2 * .pi * (hue - 1.0 / 3))),
+                                   blue: CGFloat(0.5 + 0.5 * cos(2 * .pi * (hue - 2.0 / 3))))
+                return image.applyingFilter("CIColorMonochrome", parameters: [
+                    kCIInputColorKey: tint,
+                    kCIInputIntensityKey: v["strength"] ?? 0,
+                ])
+            }),
+
+        // Local contrast, approximate: unsharp masking at a radius, which lifts local detail.
+        CIModule(
+            operation: "bilat", name: "local contrast (approximate)", iopOrder: 47,
+            defaultEnabled: false,
+            fields: [field("detail", 0, 2, 0), field("radius", 1, 50, 10)],
+            apply: { image, v in
+                image.applyingFilter("CIUnsharpMask", parameters: [
+                    kCIInputRadiusKey: v["radius"] ?? 10,
+                    kCIInputIntensityKey: v["detail"] ?? 0,
+                ])
+            }),
+
+        // RGB curve, approximate: the same five-node curve as tone curve, applied to every channel.
+        CIModule(
+            operation: "rgbcurve", name: "rgb curve (approximate)", iopOrder: 32, defaultEnabled: false,
+            fields: [
+                field("y0", 0, 1, 0), field("y1", 0, 1, 0.25), field("y2", 0, 1, 0.5),
+                field("y3", 0, 1, 0.75), field("y4", 0, 1, 1),
+            ],
+            apply: { image, v in
+                image.applyingFilter("CIToneCurve", parameters: [
+                    "inputPoint0": CIVector(x: 0, y: v["y0"] ?? 0),
+                    "inputPoint1": CIVector(x: 0.25, y: v["y1"] ?? 0.25),
+                    "inputPoint2": CIVector(x: 0.5, y: v["y2"] ?? 0.5),
+                    "inputPoint3": CIVector(x: 0.75, y: v["y3"] ?? 0.75),
+                    "inputPoint4": CIVector(x: 1, y: v["y4"] ?? 1),
+                ])
+            }),
+
+        // Relight (fill light), approximate: lifts the shadows, leaves the highlights.
+        CIModule(
+            operation: "relight", name: "fill light (approximate)", iopOrder: 26, defaultEnabled: false,
+            fields: [field("fill", 0, 1, 0)],
+            apply: { image, v in
+                image.applyingFilter("CIHighlightShadowAdjust", parameters: [
+                    "inputShadowAmount": v["fill"] ?? 0,
+                    "inputHighlightAmount": 1,
+                ])
+            }),
+
+        // Colour contrast, approximate: a saturation change from Core Image's colour controls.
+        CIModule(
+            operation: "colorcontrast", name: "color contrast (approximate)", iopOrder: 29,
+            defaultEnabled: false,
+            fields: [field("saturation", -1, 1, 0)],
+            apply: { image, v in
+                image.applyingFilter("CIColorControls", parameters: [
+                    kCIInputSaturationKey: 1 + (v["saturation"] ?? 0),
+                ])
+            }),
+
+        // Colour correction, approximate: a brightness and contrast shift.
+        CIModule(
+            operation: "colorcorrection", name: "color correction (approximate)", iopOrder: 31,
+            defaultEnabled: false,
+            fields: [field("brightness", -1, 1, 0), field("contrast", -1, 1, 0)],
+            apply: { image, v in
+                image.applyingFilter("CIColorControls", parameters: [
+                    kCIInputBrightnessKey: v["brightness"] ?? 0,
+                    kCIInputContrastKey: 1 + (v["contrast"] ?? 0),
+                ])
+            }),
+
+        // Clahe, approximate: local contrast by unsharp masking; not the tile-based CLAHE.
+        CIModule(
+            operation: "clahe", name: "old local contrast (approximate)", iopOrder: 64,
+            defaultEnabled: false,
+            fields: [field("strength", 0, 2, 0)],
+            apply: { image, v in
+                image.applyingFilter("CIUnsharpMask", parameters: [
+                    kCIInputRadiusKey: 8,
+                    kCIInputIntensityKey: v["strength"] ?? 0,
+                ])
+            }),
     ]
 
     /// A float field whose label is its own name, since darktable's descriptions are not carried here.
