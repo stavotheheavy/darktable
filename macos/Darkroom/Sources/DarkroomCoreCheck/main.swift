@@ -212,5 +212,34 @@ check("AW5 nothing reliable gives unit gains", near(allClipped, white64, 1e-12) 
 check("AW6 size mismatch gives unit gains",
       near(AutoWhiteBalance.gains(patchScene(cast: castWB), width: 64, height: 63), white64, 1e-12))
 
+// AW7 dark rule: 15 opposite pairs (k and k + 32) become dark red, luminance about 0.0044. Each pair's hues cancel, so the rest still average neutral.
+let darkRed = SIMD3<Double>(0.019, 0.0005, 0.0005)
+let darkPairs = (0...14).flatMap { [$0, $0 + 32] }
+let darkScene = patchScene(cast: castWB, replaced: Dictionary(uniqueKeysWithValues: darkPairs.map { ($0, darkRed) }))
+let darkGains = AutoWhiteBalance.gains(darkScene, width: 64, height: 64)
+check("AW7 dark patches ignored, cast removed within 1e-6", withinCast(darkGains, castWB, 1e-6), "\(darkGains)")
+// control, as T2: plain grey world over all pixels, dark patches counted, is more than 3% off on red
+var allSum = SIMD3<Double>(repeating: 0)
+for p in darkScene { allSum += p }
+let allMean = allSum / Double(darkScene.count)
+let plainGains = SIMD3(allMean.y / allMean.x, 1, allMean.y / allMean.z)
+check("AW7 control: plain grey world over all pixels is more than 3% off on red", abs(castWB.x * plainGains.x - 1) > 0.03,
+      "\(castWB.x * plainGains.x)")
+
+// AW8 1% floor: 50 of 10000 pixels (0.5%) are reliable, so the answer is unit gains, not the gains of those 50
+var floorImg = [SIMD3<Double>](repeating: SIMD3(repeating: 0.001), count: 100 * 100)
+for k in 0..<50 { floorImg[k] = SIMD3(0.4, 0.3, 0.2) }
+let floorGains = AutoWhiteBalance.gains(floorImg, width: 100, height: 100)
+check("AW8 under 1% reliable gives unit gains", near(floorGains, white64, 1e-12), "\(floorGains)")
+
+// AW9 clamp: red gain would be about 0.167, so it is held at the 0.25 floor
+let clampGains = AutoWhiteBalance.gains(patchScene(cast: SIMD3(6.0, 1.0, 1.0)), width: 64, height: 64, clip: 10)
+check("AW9 red gain clamped to exactly 0.25", clampGains.x == 0.25, "\(clampGains.x)")
+
+// AW10 the 0.95 factor: 0.96 is above 0.95 * clip, so the pair 0 and 32 is excluded
+let edgeScene = patchScene(cast: castWB, replaced: [0: SIMD3(0.96, 0.5, 0.5), 32: SIMD3(0.96, 0.5, 0.5)])
+let edgeGains = AutoWhiteBalance.gains(edgeScene, width: 64, height: 64)
+check("AW10 pixels at 0.96 excluded, cast removed within 1e-6", withinCast(edgeGains, castWB, 1e-6), "\(edgeGains)")
+
 print(failures == 0 ? "\nall checks passed" : "\n\(failures) failed")
 exit(failures == 0 ? 0 : 1)
