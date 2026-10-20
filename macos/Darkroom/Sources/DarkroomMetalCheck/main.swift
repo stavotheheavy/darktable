@@ -241,5 +241,30 @@ do {
     check("C1 tone curve kernel ran", false, "\(error)")
 }
 
+// C2 tone curve extrapolation: channels span -0.2...4.0 linear, unclamped, with the asymmetric curve from TC6
+do {
+    let ys = [0.05, 0.3, 0.55, 0.7, 0.9]
+    let uniforms = (ys + ToneCurve.tangents(ys)).map { Float($0) }
+    let count = 4096
+    let pixels = (0..<count).map { i -> SIMD4<Float> in
+        let t = Double(i) / Double(count - 1)
+        return SIMD4(Float(-0.2 + 4.2 * t), Float(4.0 - 4.2 * t), Float(2 * t), 1)
+    }
+    let out = try MetalPerPixel.run(source: MetalToneCurve.source, function: "tonecurveBuf", pixels: pixels, uniforms: uniforms)
+    var worstRel = 0.0, allFinite = out.count == count
+    for (i, px) in pixels.enumerated() where i < out.count {
+        let cpu = ToneCurve.apply(SIMD3(Double(px.x), Double(px.y), Double(px.z)), ys: ys)
+        let gpu = SIMD3(Double(out[i].x), Double(out[i].y), Double(out[i].z))
+        for c in 0..<3 {
+            if !gpu[c].isFinite { allFinite = false }
+            worstRel = Swift.max(worstRel, Swift.abs(gpu[c] - cpu[c]) / Swift.max(1, Swift.abs(cpu[c])))
+        }
+    }
+    check("C2 tone curve extrapolation past white and below black matches the CPU oracle",
+          allFinite && worstRel < 1e-4, "finite \(allFinite), worst relative error \(worstRel)")
+} catch {
+    check("C2 tone curve extrapolation kernel ran", false, "\(error)")
+}
+
 print(failures == 0 ? "\nall Metal checks passed" : "\n\(failures) failed")
 exit(failures == 0 ? 0 : 1)
