@@ -86,7 +86,7 @@ extension CIModule {
                 return try CIBridge.gain(image, scale: SIMD3(g, g, g))
             }),
 
-        // Luminance sharpening: amount and the radius it works over.
+        // Two-dimensional unsharp mask on the square root of luminance: amount and the radius it works over.
         CIModule(
             operation: "sharpen", name: "sharpen", iopOrder: 30, defaultEnabled: false,
             fields: [
@@ -96,10 +96,7 @@ extension CIModule {
                             min: 0.5, max: 8, defaultValue: .number(1.5), options: []),
             ],
             apply: { image, v in
-                image.applyingFilter("CISharpenLuminance", parameters: [
-                    kCIInputSharpnessKey: v["amount"] ?? 0.4,
-                    kCIInputRadiusKey: v["radius"] ?? 1.5,
-                ])
+                try CIBridge.sharpen2D(image, amount: v["amount"] ?? 0.4, radius: v["radius"] ?? 1.5)
             }),
 
         // Noise reduction, approximate: Core Image's luminance noise reduction. Zero is off.
