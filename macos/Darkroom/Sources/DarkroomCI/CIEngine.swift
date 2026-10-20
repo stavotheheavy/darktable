@@ -78,7 +78,7 @@ public actor CIEngine: PhotoEngine {
         let s = try openedSession()
         cancelFlag.withLock { $0 = false }
         let started = ContinuousClock.now
-        let image = try edited(try decode(s, scale: s.fit * scale, stack: stack), stack)
+        let image = try edited(try decode(s, scale: s.fit * scale, stack: stack), stack, camera: s.camera)
         return try frame(image, crop: nil, since: started)
     }
 
@@ -87,7 +87,7 @@ public actor CIEngine: PhotoEngine {
         let s = try openedSession()
         cancelFlag.withLock { $0 = false }
         let started = ContinuousClock.now
-        let image = try edited(try decode(s, scale: s.fit * scale, stack: stack), stack)
+        let image = try edited(try decode(s, scale: s.fit * scale, stack: stack), stack, camera: s.camera)
         let ext = image.extent.integral
         // Core Image's origin is bottom left; the region is given top left.
         let wanted = CGRect(x: ext.minX + CGFloat(x), y: ext.maxY - CGFloat(y) - CGFloat(height),
@@ -170,7 +170,7 @@ public actor CIEngine: PhotoEngine {
         let s = try Self.makeSession(path: path, maxSide: maxSide)
         cancelFlag.withLock { $0 = false }
         let started = ContinuousClock.now
-        let image = try edited(try decode(s, scale: s.fit, stack: stack), stack)
+        let image = try edited(try decode(s, scale: s.fit, stack: stack), stack, camera: s.camera)
         return try frame(image, crop: nil, since: started)
     }
 
@@ -199,8 +199,10 @@ public actor CIEngine: PhotoEngine {
         return session
     }
 
-    private func edited(_ image: CIImage, _ stack: [StackEntry]) throws -> CIImage {
-        try Self.process(image, stack, camera: try openedSession().camera)
+    /// `camera` is the orientation of the file being rendered: a one-shot render (thumbnails, export) has
+    /// its own, never the open session's.
+    private func edited(_ image: CIImage, _ stack: [StackEntry], camera: Orientation) throws -> CIImage {
+        try Self.process(image, stack, camera: camera)
     }
 
     /// The whole edit on a sensor-orientation image: the per-pixel stack, then geometry. Static so
