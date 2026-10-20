@@ -371,6 +371,14 @@ extension CIModule {
                 ])
             }),
 
+        // Contrast equalizer: wavelet gains on fine, medium and coarse detail of the square-root luminance.
+        CIModule(
+            operation: "atrous", name: "contrast equalizer", iopOrder: 50, defaultEnabled: false,
+            fields: [field("fine", -1, 1, 0), field("medium", -1, 1, 0), field("coarse", -1, 1, 0)],
+            apply: { image, v in
+                try CIBridge.contrastEqualizer(image, fine: v["fine"] ?? 0, medium: v["medium"] ?? 0, coarse: v["coarse"] ?? 0)
+            }),
+
         // RGB curve, approximate: the same five-node curve as tone curve, applied to every channel.
         CIModule(
             operation: "rgbcurve", name: "rgb curve (approximate)", iopOrder: 32, defaultEnabled: false,

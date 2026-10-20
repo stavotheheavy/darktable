@@ -738,5 +738,121 @@ do {
     check("DC3 a negative new s gives black, not NaN", dark[1] == SIMD3(0, 0, 0), "\(dark[1])")
 }
 
+// EQ: the contrast equalizer, wavelet gains on fine, medium and coarse detail of the square-root luminance
+do {
+    let w = 140, h = 140
+    /// A grey image (Y, Y, Y) whose square-root luminance is s(x, y).
+    func grey(_ s: (Int, Int) -> Double) -> [SIMD3<Double>] {
+        (0..<(w * h)).map { i in let v = s(i % w, i / w); return SIMD3(repeating: v * v) }
+    }
+    let checker = grey { x, y in (x + y) % 2 == 0 ? 0.4 : 0.6 }
+    func wave(_ period: Double, _ amp: Double) -> [SIMD3<Double>] {
+        grey { x, _ in 0.5 + amp * sin(2 * Double.pi * Double(x) / period) }
+    }
+    func sqrtLuma(_ rgb: [SIMD3<Double>]) -> [Double] {
+        DetailCommon.sqrtLuminance(rgb, width: w, height: h).values
+    }
+    /// Population standard deviation over rows and columns 40..<100, output over input.
+    func stdRatio(_ input: [SIMD3<Double>], _ output: [SIMD3<Double>]) -> Double {
+        func sd(_ v: [Double]) -> Double {
+            var vals: [Double] = []
+            for y in 40..<100 { for x in 40..<100 { vals.append(v[y * w + x]) } }
+            let m = vals.reduce(0, +) / Double(vals.count)
+            return sqrt(vals.reduce(0) { $0 + ($1 - m) * ($1 - m) } / Double(vals.count))
+        }
+        return sd(sqrtLuma(output)) / sd(sqrtLuma(input))
+    }
+
+    // EQ1 all gains 0 is the identity, and a flat colour at +1 on every slider is unchanged (no detail invented)
+    let fx = DetailCommon.fixture(width: 48, height: 40)
+    /// The largest per-channel difference; a non-finite value is an infinite error.
+    func maxDiff(_ a: [SIMD3<Double>], _ b: [SIMD3<Double>]) -> Double {
+        zip(a, b).reduce(0.0) { acc, pair in
+            let d = pair.0 - pair.1
+            return d.x.isFinite && d.y.isFinite && d.z.isFinite ? max(acc, abs(d.x), abs(d.y), abs(d.z)) : .infinity
+        }
+    }
+    let idErr = maxDiff(ContrastEqualizer.apply(fx, width: 48, height: 40, fine: 0, medium: 0, coarse: 0), fx)
+    check("EQ1 all gains 0 is the identity on the fixture", idErr < 1e-12, "\(idErr)")
+    let flat = [SIMD3<Double>](repeating: SIMD3(0.3, 0.2, 0.1), count: 20 * 20)
+    let flatOut = ContrastEqualizer.apply(flat, width: 20, height: 20, fine: 1, medium: 1, coarse: 1)
+    let flatErr = maxDiff(flatOut, flat)
+    check("EQ1 a flat colour at fine = medium = coarse = 1 is unchanged", flatErr < 1e-12, "\(flatErr)")
+
+    // EQ2 the method: the bands of Filters.atrous, grouped and gained as the card says, give the output's square root
+    let eq2 = ContrastEqualizer.apply(fx, width: 48, height: 40, fine: 0.5, medium: -0.3, coarse: 0.8)
+    let s2 = DetailCommon.sqrtLuminance(fx, width: 48, height: 40)
+    let (bands, res) = Filters.atrous(s2, levels: 5)
+    var eq2Err = 0.0
+    for i in fx.indices where ColorCommon.luminance(fx[i]) > 1e-6 {
+        let expect = max(res.values[i] + 1.5 * (bands[0].values[i] + bands[1].values[i]) + 0.7 * (bands[2].values[i] + bands[3].values[i])
+                         + 1.8 * bands[4].values[i], 0)
+        let got = sqrt(ColorCommon.luminance(eq2[i]))
+        eq2Err = got.isFinite ? max(eq2Err, abs(got - expect)) : .infinity
+    }
+    check("EQ2 the output's square-root luminance is the band formula (fine 0.5, medium -0.3, coarse 0.8)", eq2Err < 1e-9, "\(eq2Err)")
+
+    // EQ3 the 2-pixel checker lives in the finest band, so only fine moves it
+    func inCentre(_ i: Int) -> Bool { let x = i % w, y = i / w; return (62...77).contains(x) && (62...77).contains(y) }
+    let cs = sqrtLuma(checker)
+    let fineUp = sqrtLuma(ContrastEqualizer.apply(checker, width: w, height: h, fine: 1, medium: 0, coarse: 0))
+    /// The largest error over the centre pixels; a non-finite output is an infinite error.
+    func centreError(_ out: [Double], _ expected: (Int) -> Double) -> Double {
+        cs.indices.filter(inCentre).reduce(0.0) { acc, i in
+            out[i].isFinite ? max(acc, abs(out[i] - expected(i))) : .infinity
+        }
+    }
+    let fineErr = centreError(fineUp) { 0.5 + 2 * (cs[$0] - 0.5) }
+    check("EQ3 fine = +1 doubles the checker about 0.5", fineErr < 1e-9, "\(fineErr)")
+    let otherUp = sqrtLuma(ContrastEqualizer.apply(checker, width: w, height: h, fine: 0, medium: 1, coarse: 1))
+    let otherErr = centreError(otherUp) { cs[$0] }
+    check("EQ3 medium = coarse = +1 leave the checker unchanged", otherErr < 1e-9, "\(otherErr)")
+    let fineDown = sqrtLuma(ContrastEqualizer.apply(checker, width: w, height: h, fine: -1, medium: 0, coarse: 0))
+    let downErr = centreError(fineDown) { _ in 0.5 }
+    check("EQ3 fine = -1 flattens the checker to 0.5", downErr < 1e-9, "\(downErr)")
+
+    // EQ4 each slider answers its own scale (the card's prototype numbers)
+    let coarseOnLong = stdRatio(wave(64, 0.1), ContrastEqualizer.apply(wave(64, 0.1), width: w, height: h, fine: 0, medium: 0, coarse: 1))
+    check("EQ4 coarse +1 on a 64-pixel wave gives a std ratio in 1.35...1.65 (\(String(format: "%.3f", coarseOnLong)))",
+          (1.35...1.65).contains(coarseOnLong), "\(coarseOnLong)")
+    let fineOnLong = stdRatio(wave(64, 0.1), ContrastEqualizer.apply(wave(64, 0.1), width: w, height: h, fine: 1, medium: 0, coarse: 0))
+    check("EQ4 fine +1 on a 64-pixel wave gives a std ratio in 0.97...1.08 (\(String(format: "%.3f", fineOnLong)))",
+          (0.97...1.08).contains(fineOnLong), "\(fineOnLong)")
+    let fineOnShort = stdRatio(wave(8, 0.05), ContrastEqualizer.apply(wave(8, 0.05), width: w, height: h, fine: 1, medium: 0, coarse: 0))
+    check("EQ4 fine +1 on an 8-pixel wave gives a std ratio in 1.65...1.95 (\(String(format: "%.3f", fineOnShort)))",
+          (1.65...1.95).contains(fineOnShort), "\(fineOnShort)")
+    let coarseOnShort = stdRatio(wave(8, 0.05), ContrastEqualizer.apply(wave(8, 0.05), width: w, height: h, fine: 0, medium: 0, coarse: 1))
+    check("EQ4 coarse +1 on an 8-pixel wave gives a std ratio in 0.99...1.01 (\(String(format: "%.4f", coarseOnShort)))",
+          (0.99...1.01).contains(coarseOnShort), "\(coarseOnShort)")
+    let mediumOn16 = stdRatio(wave(16, 0.05), ContrastEqualizer.apply(wave(16, 0.05), width: w, height: h, fine: 0, medium: 1, coarse: 0))
+    check("EQ4 medium +1 on a 16-pixel wave gives a std ratio in 1.55...1.80 (\(String(format: "%.3f", mediumOn16)))",
+          (1.55...1.80).contains(mediumOn16), "\(mediumOn16)")
+    let coarseOn16 = stdRatio(wave(16, 0.05), ContrastEqualizer.apply(wave(16, 0.05), width: w, height: h, fine: 0, medium: 0, coarse: 1))
+    check("EQ4 coarse +1 on a 16-pixel wave gives a std ratio in 0.99...1.02 (\(String(format: "%.4f", coarseOn16)))",
+          (0.99...1.02).contains(coarseOn16), "\(coarseOn16)")
+
+    // EQ5 hue and chroma are untouched: every channel is scaled by the same gain
+    let eq5 = ContrastEqualizer.apply(fx, width: 48, height: 40, fine: 0.5, medium: 0.5, coarse: 0.5)
+    var eq5Err = 0.0
+    for (o, i) in zip(eq5, fx) {
+        let r0 = o.x / i.x
+        for c in 1..<3 {
+            let rc = o[c] / i[c]
+            let rel = rc.isFinite && r0.isFinite ? abs(rc - r0) / max(abs(r0), 1e-12) : .infinity
+            eq5Err = max(eq5Err, rel)
+        }
+    }
+    check("EQ5 each channel is scaled by the same gain (hue and chroma unchanged)", eq5Err < 1e-9, "\(eq5Err)")
+
+    // EQ6 finite at both extremes, and black stays black
+    let up = ContrastEqualizer.apply(fx, width: 48, height: 40, fine: 1, medium: 1, coarse: 1)
+    let down = ContrastEqualizer.apply(fx, width: 48, height: 40, fine: -1, medium: -1, coarse: -1)
+    check("EQ6 the output is finite at +1 and at -1 on every slider", up.allSatisfy { $0.x.isFinite && $0.y.isFinite && $0.z.isFinite }
+          && down.allSatisfy { $0.x.isFinite && $0.y.isFinite && $0.z.isFinite })
+    let black = [SIMD3<Double>](repeating: SIMD3(0, 0, 0), count: 16 * 16)
+    let blackOut = ContrastEqualizer.apply(black, width: 16, height: 16, fine: 1, medium: -1, coarse: 1)
+    check("EQ6 black stays exactly (0, 0, 0)", blackOut.allSatisfy { $0 == SIMD3(0, 0, 0) })
+}
+
 print(failures == 0 ? "\nall checks passed" : "\n\(failures) failed")
 exit(failures == 0 ? 0 : 1)
