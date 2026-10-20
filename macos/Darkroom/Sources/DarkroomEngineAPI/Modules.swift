@@ -186,6 +186,12 @@ public struct EnumOption: Sendable, Hashable {
     public let value: Int
     /// "manual" for EXPOSURE_MODE_MANUAL: the shared prefix dropped, lower case.
     public let label: String
+
+    public init(name: String, value: Int, label: String) {
+        self.name = name
+        self.value = value
+        self.label = label
+    }
 }
 
 public struct FieldSchema: Sendable, Identifiable, Hashable {

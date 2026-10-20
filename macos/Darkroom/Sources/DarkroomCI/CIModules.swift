@@ -16,6 +16,8 @@ struct CIModule: Sendable {
     let apply: @Sendable (CIImage, [String: Double]) throws -> CIImage
     /// Wants the decoder's scene-linear output (no boost tone curve) when enabled.
     var sceneReferred = false
+    /// Geometry (flip, straighten, crop): skipped by the per-pixel loop, applied once by `CIGeometry`.
+    var geometry = false
 
     func defaultValue(_ field: String) -> Double? {
         fields.first { $0.name == field }?.defaultValue.double
@@ -451,8 +453,42 @@ extension CIModule {
         return m
     }()
 
-    /// The catalogue as the engine lists it: the Core Image modules, then the display transform.
-    static let all: [CIModule] = catalogue + [display]
+    /// Flip, straighten and crop, with darktable's parameter names (read from its introspection) so one
+    /// stack drives either engine. Their pixels come from `CIGeometry`; `apply` here is never called.
+    static let geometryModules: [CIModule] = {
+        func opt(_ name: String, _ value: Int, _ label: String) -> EnumOption { EnumOption(name: name, value: value, label: label) }
+        let orientations = [
+            opt("ORIENTATION_NONE", 0, "none"), opt("ORIENTATION_FLIP_HORIZONTALLY", 2, "flip horizontally"),
+            opt("ORIENTATION_FLIP_VERTICALLY", 1, "flip vertically"), opt("ORIENTATION_ROTATE_180_DEG", 3, "rotate 180 deg"),
+            opt("ORIENTATION_ROTATE_CW_90_DEG", 5, "rotate cw 90 deg"), opt("ORIENTATION_ROTATE_CCW_90_DEG", 6, "rotate ccw 90 deg"),
+            opt("ORIENTATION_TRANSPOSE", 4, "transpose"), opt("ORIENTATION_TRANSVERSE", 7, "transverse"),
+        ]
+        let cropModes = [opt("ASHIFT_CROP_OFF", 0, "off"), opt("ASHIFT_CROP_LARGEST", 1, "largest"),
+                         opt("ASHIFT_CROP_ASPECT", 2, "aspect")]
+        var flip = CIModule(
+            operation: "flip", name: "orientation", iopOrder: 1, defaultEnabled: false,
+            fields: [FieldSchema(name: "orientation", description: "orientation", kind: .enumeration, min: 0, max: 0,
+                                 defaultValue: .option("ORIENTATION_NONE"), options: orientations)],
+            apply: { image, _ in image })
+        var straighten = CIModule(
+            operation: "ashift", name: "rotate and straighten", iopOrder: 95, defaultEnabled: false,
+            fields: [field("rotation", -45, 45, 0),
+                     FieldSchema(name: "cropmode", description: "automatic cropping", kind: .enumeration, min: 0, max: 0,
+                                 defaultValue: .option("ASHIFT_CROP_LARGEST"), options: cropModes),
+                     field("cl", 0, 1, 0), field("cr", 0, 1, 1), field("ct", 0, 1, 0), field("cb", 0, 1, 1)],
+            apply: { image, _ in image })
+        var crop = CIModule(
+            operation: "crop", name: "crop", iopOrder: 96, defaultEnabled: false,
+            fields: [field("cx", 0, 1, 0), field("cy", 0, 1, 0), field("cw", 0, 1, 1), field("ch", 0, 1, 1)],
+            apply: { image, _ in image })
+        flip.geometry = true
+        straighten.geometry = true
+        crop.geometry = true
+        return [flip, straighten, crop]
+    }()
+
+    /// The catalogue as the engine lists it: the Core Image modules, the display transform, then geometry.
+    static let all: [CIModule] = catalogue + [display] + geometryModules
 
     static func named(_ operation: String) -> CIModule? {
         all.first { $0.operation == operation }

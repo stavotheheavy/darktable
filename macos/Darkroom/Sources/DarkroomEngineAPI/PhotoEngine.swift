@@ -20,6 +20,9 @@ public protocol PhotoEngine: Actor {
     /// The camera's embedded preview of the open image, at the working size. Shown first
     /// while the full render is still coming; nil when the engine has none to offer.
     func sessionPreview() async throws -> RenderedFrame?
+    /// The output size at scale 1 for `stack`, which differs from `sessionInfo()` once the stack crops,
+    /// rotates or flips. Nil when the engine cannot say; the UI then uses `sessionInfo()`.
+    func sessionOutputSize(stack: [StackEntry]) async throws -> (width: Int, height: Int)?
     func sessionModules() async throws -> [ModuleInfo]
     func exportRender(path: String, maxSide: Int, stack: [StackEntry]) async throws -> RenderedFrame
 
@@ -38,4 +41,7 @@ extension PhotoEngine {
 
     /// Engines without a preview path (darktable) answer nil, and the UI waits for the render.
     public func sessionPreview() async throws -> RenderedFrame? { nil }
+
+    /// Engines that cannot report it (darktable, for now) answer nil.
+    public func sessionOutputSize(stack: [StackEntry]) async throws -> (width: Int, height: Int)? { nil }
 }

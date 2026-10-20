@@ -338,5 +338,112 @@ let tc6Lo = ToneCurve.curve(-0.3, ys: asymYs, tangents: asymM)
 check("TC6 above 1 extends from y4 with m4", abs(tc6Hi - (asymYs[4] + asymM[4] * 0.4)) < 1e-12, "\(tc6Hi)")
 check("TC6 below 0 extends from y0 with m0", abs(tc6Lo - (asymYs[0] + asymM[0] * -0.3)) < 1e-12, "\(tc6Lo)")
 
+// G-series: geometry (flip, straighten, crop), the oracle DarkroomCI's geometry reads its affine map from
+do {
+    let size = SIMD2<Double>(300, 200)
+    func close(_ a: SIMD2<Double>, _ b: SIMD2<Double>, _ tol: Double = 1e-9) -> Bool { abs(a.x - b.x) <= tol && abs(a.y - b.y) <= tol }
+    let corners = [SIMD2<Double>(0, 0), SIMD2(300, 0), SIMD2(0, 200), SIMD2(300, 200)]
+    // G1 every orientation sends the corners to the output's corners, and the named cases go where they say
+    for o in Orientation.allCases {
+        let out = o.outputSize(size)
+        let mapped = corners.map { o.map($0, size: size) }
+        let onCorners = mapped.allSatisfy { ($0.x == 0 || $0.x == out.x) && ($0.y == 0 || $0.y == out.y) }
+        check("G1 \(o) maps corners onto corners", onCorners && Set(mapped.map { "\($0)" }).count == 4, "\(mapped)")
+    }
+    check("G1 rotate cw 90: top-left goes to top-right", close(Orientation.rotateCW90.map(.zero, size: size), SIMD2(200, 0)))
+    check("G1 rotate ccw 90: top-left goes to bottom-left", close(Orientation.rotateCCW90.map(.zero, size: size), SIMD2(0, 300)))
+    check("G1 flip horizontally: top-left goes to top-right", close(Orientation.flipHorizontal.map(.zero, size: size), SIMD2(300, 0)))
+    check("G1 flip vertically: top-left goes to bottom-left", close(Orientation.flipVertical.map(.zero, size: size), SIMD2(0, 200)))
+    var p = SIMD2<Double>(37, 141), sz = size
+    for _ in 0..<4 { p = Orientation.rotateCW90.map(p, size: sz); sz = Orientation.rotateCW90.outputSize(sz) }
+    check("G1 four quarter turns are the identity", close(p, SIMD2(37, 141)), "\(p)")
+    check("G1 names and values agree", Orientation(name: "ORIENTATION_ROTATE_CW_90_DEG") == Orientation(value: 5)
+          && Orientation(name: "ORIENTATION_FLIP_HORIZONTALLY") == Orientation(value: 2) && Orientation(value: 99) == .none)
+
+    // G2 rotation round trip and the inscribed rectangles fit inside the rotated image
+    let q = Straighten.rotate(Straighten.rotate(SIMD2(12, 190), size: size, degrees: 13), size: size, degrees: -13)
+    check("G2 rotate +13 then -13 degrees is the identity", close(q, SIMD2(12, 190), 1e-9), "\(q)")
+    var fits = true
+    for deg in [-44.0, -20, -3, 0.5, 7, 30, 45] {
+        for shape in [SIMD2<Double>(300, 200), SIMD2(200, 300), SIMD2(400, 100), SIMD2(100, 100)] {
+            for mode in [StraightenCrop.largest, .aspect] {
+                let r = Straighten.inscribedSize(shape, degrees: deg, mode: mode)
+                let o = shape / 2 - r / 2
+                for c in [o, o + SIMD2(r.x, 0), o + SIMD2(0, r.y), o + r] where !Straighten.insideRotated(c, size: shape, degrees: deg) {
+                    fits = false
+                }
+            }
+        }
+    }
+    check("G2 largest and aspect rectangles have every corner inside the rotated image", fits)
+
+    // G3 the closed form is the largest-area centred rectangle (brute force over aspect ratios)
+    var worstRatio = 1.0
+    for deg in [3.0, 10, 25, 40] {
+        for shape in [SIMD2<Double>(300, 200), SIMD2(400, 100), SIMD2(150, 150)] {
+            let closed = Straighten.inscribedSize(shape, degrees: deg, mode: .largest)
+            var best = 0.0
+            for i in 1...2000 {
+                let aspect = exp(-3 + 6 * Double(i) / 2000)        // width over height, 0.05...20
+                // the largest scale for this aspect, by bisection on "all corners inside"
+                var lo = 0.0, hi = 2 * max(shape.x, shape.y)
+                for _ in 0..<50 {
+                    let mid = (lo + hi) / 2
+                    let r = SIMD2(mid * aspect, mid), o = shape / 2 - r / 2
+                    let inside = [o, o + SIMD2(r.x, 0), o + SIMD2(0, r.y), o + r].allSatisfy {
+                        Straighten.insideRotated($0, size: shape, degrees: deg)
+                    }
+                    if inside { lo = mid } else { hi = mid }
+                }
+                best = max(best, lo * aspect * lo)
+            }
+            worstRatio = min(worstRatio, closed.x * closed.y / best)
+        }
+    }
+    check("G3 closed-form largest rectangle is within 0.1% of the brute-force best", worstRatio > 0.999 && worstRatio < 1.001, "\(worstRatio)")
+
+    // G4 aspect mode keeps the aspect ratio and is maximal: 0.2% larger no longer fits
+    let a = Straighten.inscribedSize(size, degrees: 9, mode: .aspect)
+    check("G4 aspect mode keeps the aspect ratio", abs(a.x / a.y - 1.5) < 1e-12, "\(a)")
+    let big = a * 1.002, bo = size / 2 - big / 2
+    let stillFits = [bo, bo + SIMD2(big.x, 0), bo + SIMD2(0, big.y), bo + big].allSatisfy {
+        Straighten.insideRotated($0, size: size, degrees: 9)
+    }
+    check("G4 aspect mode is the largest such rectangle", !stillFits)
+    check("G4 zero rotation keeps the full frame", Straighten.inscribedSize(size, degrees: 0, mode: .largest) == size
+          && Straighten.inscribedSize(size, degrees: 0, mode: .aspect) == size)
+
+    // G5 crop: the guard, the size, and the crop's top-left becoming the output origin
+    check("G5 a zeroed crop entry is the full frame", CropRect(left: 0, top: 0, right: 0, bottom: 0) == .full)
+    check("G5 out-of-range edges are clamped", CropRect(left: -1, top: 0.2, right: 3, bottom: 0.9) == CropRect(left: 0, top: 0.2, right: 1, bottom: 0.9))
+    let cropOnly = GeometrySpec(crop: CropRect(left: 0.1, top: 0.25, right: 0.6, bottom: 0.75))
+    check("G5 crop output size", close(cropOnly.outputSize(size), SIMD2(150, 100), 1e-9), "\(cropOnly.outputSize(size))")
+    check("G5 crop top-left maps to the output origin", close(cropOnly.map(SIMD2(30, 50), size: size), .zero, 1e-9))
+
+    // G6 a full spec: the input centre lands in the output centre when the crop is centred
+    let full = GeometrySpec(orientation: .rotateCW90, degrees: 6,
+                            straightenCrop: Straighten.cropFractions(SIMD2(200, 300), degrees: 6, mode: .largest),
+                            crop: CropRect(left: 0.2, top: 0.1, right: 0.8, bottom: 0.9))
+    let centre = full.map(size / 2, size: size), out = full.outputSize(size)
+    check("G6 flip, straighten and centred crop keep the centre", close(centre, out / 2, 1e-9), "\(centre) vs \(out / 2)")
+    // G7 direction: positive rotation turns the picture anticlockwise on screen (darktable's convention,
+    // seen in a reference render): a point right of the centre moves up
+    let turned = Straighten.rotate(size / 2 + SIMD2(10, 0), size: size, degrees: 90)
+    check("G7 +90 degrees takes the point right of centre to above it", close(turned, size / 2 + SIMD2(0, -10), 1e-9), "\(turned)")
+
+    // G8 straighten's crop fractions keep exactly the inscribed rectangle, centred; zero rotation keeps all
+    for (deg, mode) in [(8.0, StraightenCrop.largest), (-15.0, .aspect)] {
+        let f = Straighten.cropFractions(size, degrees: deg, mode: mode)
+        let spec = GeometrySpec(degrees: deg, straightenCrop: f)
+        let want = Straighten.inscribedSize(size, degrees: deg, mode: mode)
+        check("G8 \(mode) crop fractions keep the inscribed size at \(deg) degrees", close(spec.outputSize(size), want, 1e-9),
+              "\(spec.outputSize(size)) vs \(want)")
+        check("G8 \(mode) crop keeps the centre at \(deg) degrees", close(spec.map(size / 2, size: size), want / 2, 1e-9))
+    }
+    check("G8 off keeps the whole bounding box", Straighten.cropFractions(size, degrees: 20, mode: .off) == .full)
+    check("G8 no rotation needs no crop", Straighten.cropFractions(size, degrees: 0, mode: .largest) == .full)
+    check("G6 identity spec is the identity", GeometrySpec().isIdentity && close(GeometrySpec().map(SIMD2(5, 7), size: size), SIMD2(5, 7)))
+}
+
 print(failures == 0 ? "\nall checks passed" : "\n\(failures) failed")
 exit(failures == 0 ? 0 : 1)

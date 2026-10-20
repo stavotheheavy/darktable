@@ -73,6 +73,7 @@ struct SelfTest {
         let cropAbuse = has("--crop-abuse")
         let fromModule = take("--from")
         let stackFile = take("--stack")
+        let schemaOp = take("--schema")
         // darktable is the default; `ci` runs the clean engine (only --bench supports it so far)
         let engineName = take("--engine") ?? "darktable"
         guard let path = args.first else {
@@ -93,7 +94,13 @@ struct SelfTest {
                 cacheDir: env["DARKROOM_CACHE_DIR"].map { URL(fileURLWithPath: $0) } ?? home.appending(path: ".cache/darktable-fork"))
             print(String(format: "engine start: %.0f ms", Date().timeIntervalSince(t0) * 1000))
 
-            if let stackFile {
+            if let schemaOp {
+                // a module's public parameter list, from the engine's introspection
+                try await engine.openSession(path: path, maxSide: 400)
+                for f in try await engine.schema(for: schemaOp).fields {
+                    print("\(f.name)\t\(f.kind)\tmin \(f.min)\tmax \(f.max)\tdefault \(f.defaultValue)\t\(f.options.map { "\($0)" }.joined(separator: ","))\t\(f.description)")
+                }
+            } else if let stackFile {
                 try await runStack(engine: engine, path: path, maxSide: maxSide, file: stackFile, out: out)
             } else if cropAbuse {
                 try await runCropAbuse(engine: engine, path: path)
@@ -508,7 +515,21 @@ struct SelfTest {
         let stack = entries.map {
             StackEntry(operation: $0.operation, params: $0.params ?? [:], blend: $0.blend ?? [:], enabled: $0.enabled ?? true)
         }
-        let frame = try await engine.render(path: path, maxSide: maxSide, stack: stack)
+        // through a session, so the size the UI is told can be checked against the size it gets
+        try await engine.openSession(path: path, maxSide: maxSide)
+        let frame = try await engine.sessionRender(stack: stack, scale: 1)
+        let outputSize = try await engine.sessionOutputSize(stack: stack)
+        if let size = outputSize {
+            let ok = size.width == frame.width && size.height == frame.height
+            print("size check: told \(size.width)x\(size.height), rendered \(frame.width)x\(frame.height): \(ok ? "ok" : "FAIL")")
+            if !ok { throw EngineError("sessionOutputSize disagrees with the render") }
+        }
+        // only engines that report sizes promise processedWidth is the scale-1 frame (darktable's means otherwise)
+        if outputSize != nil, let info = await engine.sessionInfo(), stack.isEmpty {
+            let ok = info.processedWidth == frame.width && info.processedHeight == frame.height
+            print("info check: told \(info.processedWidth)x\(info.processedHeight), rendered \(frame.width)x\(frame.height): \(ok ? "ok" : "FAIL")")
+            if !ok { throw EngineError("sessionInfo disagrees with the render") }
+        }
         print("stack \(stack.map(\.operation).joined(separator: ", ")): \(frame.width)x\(frame.height) in "
               + "\(Int(frame.milliseconds)) ms, mean luma \(String(format: "%.1f", meanLuma(frame.image)))")
         if let out { try writePNG(frame.image, to: URL(fileURLWithPath: out)); print("wrote \(out)") }

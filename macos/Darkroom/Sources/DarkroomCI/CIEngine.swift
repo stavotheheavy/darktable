@@ -1,5 +1,6 @@
 import CoreGraphics
 import CoreImage
+import DarkroomCore
 import DarkroomEngineAPI
 import Foundation
 import ImageIO
@@ -27,6 +28,12 @@ public actor CIEngine: PhotoEngine {
         /// The decoder's own tone settings, restored when no scene-referred module is on.
         let boost: Float
         let localToneMap: Float
+        /// The camera's orientation. The decoder runs in sensor orientation (`native` is the sensor's size)
+        /// and geometry applies this as the default flip, as darktable orders it.
+        let camera: Orientation
+
+        /// The decoded size at scale 1 (the working frame), in sensor orientation.
+        var sensorFrame: CGSize { CGSize(width: (native.width * fit).rounded(), height: (native.height * fit).rounded()) }
     }
 
     private var context: CIContext?
@@ -126,12 +133,20 @@ public actor CIEngine: PhotoEngine {
         return RenderedFrame(image: cg, width: cg.width, height: cg.height, milliseconds: ms)
     }
 
+    /// The output size at scale 1 (the working frame) for `stack`: geometry only, nothing is rendered.
+    public func sessionOutputSize(stack: [StackEntry]) async throws -> (width: Int, height: Int)? {
+        let s = try openedSession()
+        return CIGeometry.pixelSize(try CIGeometry.spec(stack, camera: s.camera), input: s.sensorFrame)
+    }
+
     public func sessionInfo() async -> SessionInfo? {
         guard let s = session else { return nil }
+        // the as-shot frame: `native` is the sensor's, which made portrait photos report as landscape
+        let frame = CIGeometry.pixelSize(GeometrySpec(orientation: s.camera), input: s.sensorFrame)
+        let swaps = s.camera.swapsAxes
         return SessionInfo(
-            processedWidth: Int((s.native.width * s.fit).rounded()),
-            processedHeight: Int((s.native.height * s.fit).rounded()),
-            workWidth: Int(s.native.width), workHeight: Int(s.native.height))
+            processedWidth: frame.width, processedHeight: frame.height,
+            workWidth: Int(swaps ? s.native.height : s.native.width), workHeight: Int(swaps ? s.native.width : s.native.height))
     }
 
     public func sessionModules() async throws -> [ModuleInfo] {
@@ -184,13 +199,19 @@ public actor CIEngine: PhotoEngine {
     }
 
     private func edited(_ image: CIImage, _ stack: [StackEntry]) throws -> CIImage {
-        try Self.applyStack(image, stack)
+        try Self.process(image, stack, camera: try openedSession().camera)
+    }
+
+    /// The whole edit on a sensor-orientation image: the per-pixel stack, then geometry. Static so
+    /// `CIEngineProbe` runs this exact code.
+    static func process(_ image: CIImage, _ stack: [StackEntry], camera: Orientation) throws -> CIImage {
+        CIGeometry.apply(try CIGeometry.spec(stack, camera: camera), to: try applyStack(image, stack))
     }
 
     /// Applies the enabled stack entries in pipeline order. An operation the clean engine
     /// does not have is an error, never a silent skip. Static so `CIEngineProbe` runs this exact code.
     static func applyStack(_ image: CIImage, _ stack: [StackEntry]) throws -> CIImage {
-        let ordered = try stack.filter(\.enabled).map { entry -> (CIModule, StackEntry) in
+        let ordered = try stack.filter { $0.enabled && !CIGeometry.operations.contains($0.operation) }.map { entry -> (CIModule, StackEntry) in
             guard let m = CIModule.named(entry.operation) else {
                 throw EngineError("the clean engine has no module \(entry.operation) yet")
             }
@@ -228,7 +249,8 @@ public actor CIEngine: PhotoEngine {
         let long = max(native.width, native.height)
         let fit = long > 0 ? min(1, Double(maxSide) / Double(long)) : 1
         return Session(url: url, raw: raw, native: native, fit: fit, maxSide: maxSide,
-                       boost: raw.boostAmount, localToneMap: raw.localToneMapAmount)
+                       boost: raw.boostAmount, localToneMap: raw.localToneMapAmount,
+                       camera: CIGeometry.orientation(exif: raw.orientation))
     }
 
     /// Decode at `scale` of the native size. Decoding small is what makes open fast:
@@ -241,6 +263,8 @@ public actor CIEngine: PhotoEngine {
         let boost = sceneLinear ? 0 : s.boost, localToneMap = sceneLinear ? 0 : s.localToneMap
         if s.raw.boostAmount != boost { s.raw.boostAmount = boost }
         if s.raw.localToneMapAmount != localToneMap { s.raw.localToneMapAmount = localToneMap }
+        // always the sensor's orientation: geometry turns it upright (see Session.camera)
+        if s.raw.orientation != .up { s.raw.orientation = .up }
         guard let image = s.raw.outputImage else {
             throw EngineError("decode failed")
         }

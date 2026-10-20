@@ -173,5 +173,105 @@ let etc = worst(run([StackEntry(operation: "tonecurve", params: ["y0": .number(0
                 scene.map { ToneCurve.apply($0, ys: toneYs) })
 check("E-TC tone curve S-curve matches the oracle within 1/255", etc < tol, "\(etc)")
 
+// G-E geometry through the engine: three coloured 3x3 markers on a dark 120x80 frame must land where the
+// DarkroomCore oracle maps them, and the output must have the oracle's size
+do {
+    let gw = 120, gh = 80
+    // marker top-left pixels; each is one channel, so the centroid of that channel finds it
+    let markers: [(x: Int, y: Int, channel: Int)] = [(20, 15, 0), (90, 20, 1), (40, 60, 2)]
+    var frame = [SIMD4<Float>](repeating: SIMD4(0.01, 0.01, 0.01, 1), count: gw * gh)
+    for m in markers {
+        for dy in 0..<3 { for dx in 0..<3 { frame[(m.y + dy) * gw + m.x + dx][m.channel] = 1 } }
+    }
+    func centroid(_ px: [SIMD4<Float>], _ w: Int, _ h: Int, _ c: Int) -> SIMD2<Double>? {
+        var sum = SIMD2<Double>(0, 0), weight = 0.0
+        for y in 0..<h { for x in 0..<w {
+            let v = Double(px[y * w + x][c]) - 0.05
+            if v > 0.2 { sum += SIMD2(Double(x) + 0.5, Double(y) + 0.5) * v; weight += v }
+        } }
+        return weight > 0 ? sum / weight : nil
+    }
+    func geometryCase(_ name: String, _ stack: [StackEntry], _ spec: GeometrySpec, tol: Double, camera: Orientation = .none) {
+        do {
+            let r = try CIEngineProbe.renderSized(stack: stack, pixels: frame, width: gw, height: gh, camera: camera)
+            let want = spec.outputSize(SIMD2(Double(gw), Double(gh)))
+            let sizeOK = r.width == max(1, Int(want.x.rounded())) && r.height == max(1, Int(want.y.rounded()))
+            var worstMiss = 0.0
+            for m in markers {
+                let expected = spec.map(SIMD2(Double(m.x) + 1.5, Double(m.y) + 1.5), size: SIMD2(Double(gw), Double(gh)))
+                let inside = expected.x >= 1 && expected.y >= 1 && expected.x <= Double(r.width) - 1 && expected.y <= Double(r.height) - 1
+                guard inside else { continue }  // cropped away
+                guard let got = centroid(r.pixels, r.width, r.height, m.channel) else { worstMiss = .infinity; continue }
+                worstMiss = max(worstMiss, max(abs(got.x - expected.x), abs(got.y - expected.y)))
+            }
+            let finite = r.pixels.allSatisfy { $0.x.isFinite && $0.y.isFinite && $0.z.isFinite }
+            check("G-E \(name): size \(r.width)x\(r.height) and markers within \(tol) px", sizeOK && worstMiss <= tol && finite,
+                  "size \(r.width)x\(r.height) want \(want), worst miss \(worstMiss), finite \(finite)")
+        } catch {
+            check("G-E \(name) rendered", false, "\(error)")
+        }
+    }
+    let names = ["ORIENTATION_NONE", "ORIENTATION_FLIP_VERTICALLY", "ORIENTATION_FLIP_HORIZONTALLY", "ORIENTATION_ROTATE_180_DEG",
+                 "ORIENTATION_TRANSPOSE", "ORIENTATION_ROTATE_CW_90_DEG", "ORIENTATION_ROTATE_CCW_90_DEG", "ORIENTATION_TRANSVERSE"]
+    for n in names {
+        geometryCase("flip \(n)", [StackEntry(operation: "flip", params: ["orientation": .option(n)])],
+                     GeometrySpec(orientation: Orientation(name: n)), tol: 0.01)
+    }
+    // straighten keeps what cl/cr/ct/cb say; the editor fills them from cropmode with Straighten.cropFractions
+    for (deg, mode) in [(7.0, StraightenCrop.largest), (-12.0, .aspect), (20.0, .off)] {
+        let f = Straighten.cropFractions(SIMD2(Double(gw), Double(gh)), degrees: deg, mode: mode)
+        geometryCase("straighten \(deg) \(mode)",
+                     [StackEntry(operation: "ashift", params: ["rotation": .number(deg), "cl": .number(f.left), "ct": .number(f.top),
+                                                              "cr": .number(f.right), "cb": .number(f.bottom)])],
+                     GeometrySpec(degrees: deg, straightenCrop: f), tol: 0.6)
+    }
+    geometryCase("crop", [StackEntry(operation: "crop", params: ["cx": .number(0.1), "cy": .number(0.1), "cw": .number(0.9), "ch": .number(0.95)])],
+                 GeometrySpec(crop: CropRect(left: 0.1, top: 0.1, right: 0.9, bottom: 0.95)), tol: 0.01)
+    let combined: [StackEntry] = [
+        StackEntry(operation: "crop", params: ["cx": .number(0.05), "cy": .number(0.1), "cw": .number(0.95), "ch": .number(0.9)]),
+        StackEntry(operation: "flip", params: ["orientation": .option("ORIENTATION_ROTATE_CW_90_DEG")]),
+        StackEntry(operation: "ashift", params: ["rotation": .number(5)]),
+        StackEntry(operation: "exposure", params: ["exposure": .number(0.5)]),
+    ]
+    geometryCase("flip, straighten, crop and exposure together", combined,
+                 GeometrySpec(orientation: .rotateCW90, degrees: 5, crop: CropRect(left: 0.05, top: 0.1, right: 0.95, bottom: 0.9)), tol: 0.6)
+    // the camera's orientation is the default flip; an explicit flip replaces it (absolute from the sensor),
+    // ORIENTATION_NULL means "the camera's"
+    geometryCase("camera orientation is the default flip", [], GeometrySpec(orientation: .rotateCCW90), tol: 0.01, camera: .rotateCCW90)
+    geometryCase("explicit flip none overrides the camera", [StackEntry(operation: "flip", params: ["orientation": .option("ORIENTATION_NONE")])],
+                 GeometrySpec(), tol: 0.01, camera: .rotateCCW90)
+    geometryCase("ORIENTATION_NULL keeps the camera's", [StackEntry(operation: "flip", params: ["orientation": .option("ORIENTATION_NULL")])],
+                 GeometrySpec(orientation: .rotateCCW90), tol: 0.01, camera: .rotateCCW90)
+    // straighten runs in sensor orientation, before the camera's flip
+    geometryCase("straighten before the camera flip", [StackEntry(operation: "ashift", params: ["rotation": .number(9)])],
+                 GeometrySpec(orientation: .rotateCW90, degrees: 9), tol: 0.6, camera: .rotateCW90)
+
+    // G-X the EXIF table checked against Core Image's own orienting: markers must land in the same places
+    for exif in UInt32(1)...8 {
+        let o = CIEngineProbe.orientation(exif: exif)
+        do {
+            let ci = try CIEngineProbe.renderSized(stack: [], pixels: frame, width: gw, height: gh, coreImageOrientation: exif)
+            let spec = GeometrySpec(orientation: o)
+            var miss = 0.0
+            for m in markers {
+                let expected = spec.map(SIMD2(Double(m.x) + 1.5, Double(m.y) + 1.5), size: SIMD2(Double(gw), Double(gh)))
+                guard let got = centroid(ci.pixels, ci.width, ci.height, m.channel) else { miss = .infinity; continue }
+                miss = max(miss, abs(got.x - expected.x), abs(got.y - expected.y))
+            }
+            check("G-X EXIF \(exif) is \(o), as Core Image orients it", miss <= 0.01, "miss \(miss), size \(ci.width)x\(ci.height)")
+        } catch {
+            check("G-X EXIF \(exif) rendered", false, "\(error)")
+        }
+    }
+    // unsupported straighten fields are an error, not a silent skip
+    do {
+        _ = try CIEngineProbe.renderSized(stack: [StackEntry(operation: "ashift", params: ["lensshift_v": .number(0.2)])],
+                                          pixels: frame, width: gw, height: gh)
+        check("G-E lens shift is refused", false, "rendered anyway")
+    } catch {
+        check("G-E lens shift is refused", "\(error)".contains("lensshift") || "\(error)".contains("lens"), "\(error)")
+    }
+}
+
 print(failures == 0 ? "\nall checks passed" : "\n\(failures) failed")
 exit(failures == 0 ? 0 : 1)
