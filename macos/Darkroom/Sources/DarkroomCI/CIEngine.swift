@@ -11,7 +11,7 @@ import UniformTypeIdentifiers
 /// Image documentation only; it does not use darktable code (see THIRD-PARTY.md).
 ///
 /// Decode, viewport render, region render, one-shot render, export, and the modules in
-/// `CIModule.catalogue` applied as a stack. An operation outside the catalogue is refused.
+/// `CIModule.all` applied as a stack. An operation outside the catalogue is refused.
 ///
 /// Scales follow `Engine`: `sessionInfo().processedWidth` is the working frame, and a
 /// scale of 1.0 is that frame's size. Region coordinates are in the scaled frame's
@@ -24,6 +24,9 @@ public actor CIEngine: PhotoEngine {
         /// Native pixels to working-frame pixels for the maxSide this session was opened at.
         let fit: Double
         let maxSide: Int
+        /// The decoder's own tone settings, restored when no scene-referred module is on.
+        let boost: Float
+        let localToneMap: Float
     }
 
     private var context: CIContext?
@@ -68,7 +71,7 @@ public actor CIEngine: PhotoEngine {
         let s = try openedSession()
         cancelFlag.withLock { $0 = false }
         let started = ContinuousClock.now
-        let image = try edited(try decode(s, scale: s.fit * scale), stack)
+        let image = try edited(try decode(s, scale: s.fit * scale, stack: stack), stack)
         return try frame(image, crop: nil, since: started)
     }
 
@@ -77,7 +80,7 @@ public actor CIEngine: PhotoEngine {
         let s = try openedSession()
         cancelFlag.withLock { $0 = false }
         let started = ContinuousClock.now
-        let image = try edited(try decode(s, scale: s.fit * scale), stack)
+        let image = try edited(try decode(s, scale: s.fit * scale, stack: stack), stack)
         let ext = image.extent.integral
         // Core Image's origin is bottom left; the region is given top left.
         let wanted = CGRect(x: ext.minX + CGFloat(x), y: ext.maxY - CGFloat(y) - CGFloat(height),
@@ -133,7 +136,7 @@ public actor CIEngine: PhotoEngine {
 
     public func sessionModules() async throws -> [ModuleInfo] {
         _ = try openedSession()
-        return CIModule.catalogue.map { m in
+        return CIModule.all.map { m in
             ModuleInfo(operation: m.operation, name: m.name, iopOrder: m.iopOrder,
                        enabled: m.defaultEnabled, defaultEnabled: m.defaultEnabled,
                        params: Dictionary(uniqueKeysWithValues: m.fields.map { ($0.name, $0.defaultValue) }))
@@ -151,14 +154,14 @@ public actor CIEngine: PhotoEngine {
         let s = try Self.makeSession(path: path, maxSide: maxSide)
         cancelFlag.withLock { $0 = false }
         let started = ContinuousClock.now
-        let image = try edited(try decode(s, scale: s.fit), stack)
+        let image = try edited(try decode(s, scale: s.fit, stack: stack), stack)
         return try frame(image, crop: nil, since: started)
     }
 
     // MARK: modules (none in M0)
 
     public func moduleNames() async throws -> [String] {
-        CIModule.catalogue.map(\.operation)
+        CIModule.all.map(\.operation)
     }
 
     public func schema(for operation: String) async throws -> ModuleSchema {
@@ -180,9 +183,13 @@ public actor CIEngine: PhotoEngine {
         return session
     }
 
-    /// Applies the enabled stack entries in pipeline order. An operation the clean engine
-    /// does not have is an error, never a silent skip.
     private func edited(_ image: CIImage, _ stack: [StackEntry]) throws -> CIImage {
+        try Self.applyStack(image, stack)
+    }
+
+    /// Applies the enabled stack entries in pipeline order. An operation the clean engine
+    /// does not have is an error, never a silent skip. Static so `CIEngineProbe` runs this exact code.
+    static func applyStack(_ image: CIImage, _ stack: [StackEntry]) throws -> CIImage {
         let ordered = try stack.filter(\.enabled).map { entry -> (CIModule, StackEntry) in
             guard let m = CIModule.named(entry.operation) else {
                 throw EngineError("the clean engine has no module \(entry.operation) yet")
@@ -199,7 +206,7 @@ public actor CIEngine: PhotoEngine {
                 throw EngineError("the clean engine has no masks yet (mask mode \(Int(maskMode)))")
             }
             let before = out
-            out = m.apply(out, m.values(from: entry.params))
+            out = try m.apply(out, m.values(from: entry.params))
             // opacity is a percentage: mix the module's output back over its input
             let opacity = min(max(entry.blend["opacity"]?.double ?? 100, 0), 100) / 100
             if opacity < 1 {
@@ -220,17 +227,28 @@ public actor CIEngine: PhotoEngine {
         let native = raw.nativeSize
         let long = max(native.width, native.height)
         let fit = long > 0 ? min(1, Double(maxSide) / Double(long)) : 1
-        return Session(url: url, raw: raw, native: native, fit: fit, maxSide: maxSide)
+        return Session(url: url, raw: raw, native: native, fit: fit, maxSide: maxSide,
+                       boost: raw.boostAmount, localToneMap: raw.localToneMapAmount)
     }
 
     /// Decode at `scale` of the native size. Decoding small is what makes open fast:
-    /// the RAW decoder does the downscale, not a later resample.
-    private func decode(_ s: Session, scale: Double) throws -> CIImage {
+    /// the RAW decoder does the downscale, not a later resample. With a scene-referred module on,
+    /// the decoder's boost curve and local tone map are off, so that module sees scene-linear light.
+    private func decode(_ s: Session, scale: Double, stack: [StackEntry]) throws -> CIImage {
         s.raw.scaleFactor = Float(scale)
+        let sceneLinear = Self.wantsSceneLinear(stack)
+        // assign only on a change: setting a filter property can drop the decoder's cached output
+        let boost = sceneLinear ? 0 : s.boost, localToneMap = sceneLinear ? 0 : s.localToneMap
+        if s.raw.boostAmount != boost { s.raw.boostAmount = boost }
+        if s.raw.localToneMapAmount != localToneMap { s.raw.localToneMapAmount = localToneMap }
         guard let image = s.raw.outputImage else {
             throw EngineError("decode failed")
         }
         return image
+    }
+
+    static func wantsSceneLinear(_ stack: [StackEntry]) -> Bool {
+        stack.contains { $0.enabled && CIModule.named($0.operation)?.sceneReferred == true }
     }
 
     private func frame(_ image: CIImage, crop: CGRect?, since started: ContinuousClock.Instant) throws -> RenderedFrame {

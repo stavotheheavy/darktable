@@ -10,6 +10,7 @@ import DarkroomCI
 // Headless checks that the Swift side really drives darktable's engine.
 //   dtb-selftest <image> [--max 1400] [--out frame.png]      engine round trip + timings
 //   dtb-selftest <image> --ui                                the real model: sliders -> stack -> pixels
+//   dtb-selftest <image> --stack s.json --out f.png         one render of a stack file, on either engine
 //   dtb-selftest <raw> --crop-abuse                          raw crops past the frame must not crash a render
 //
 // What this cannot check is how the Liquid Glass views look: SwiftUI draws through the window
@@ -71,6 +72,7 @@ struct SelfTest {
         let effects = has("--effects")
         let cropAbuse = has("--crop-abuse")
         let fromModule = take("--from")
+        let stackFile = take("--stack")
         // darktable is the default; `ci` runs the clean engine (only --bench supports it so far)
         let engineName = take("--engine") ?? "darktable"
         guard let path = args.first else {
@@ -91,7 +93,9 @@ struct SelfTest {
                 cacheDir: env["DARKROOM_CACHE_DIR"].map { URL(fileURLWithPath: $0) } ?? home.appending(path: ".cache/darktable-fork"))
             print(String(format: "engine start: %.0f ms", Date().timeIntervalSince(t0) * 1000))
 
-            if cropAbuse {
+            if let stackFile {
+                try await runStack(engine: engine, path: path, maxSide: maxSide, file: stackFile, out: out)
+            } else if cropAbuse {
                 try await runCropAbuse(engine: engine, path: path)
             } else if effects {
                 try await runEffects(engine: engine, path: path, from: fromModule)
@@ -487,6 +491,27 @@ struct SelfTest {
         let out = NSHomeDirectory() + "/Documents/plans/2026-10-20-ci-engine-m0-bench.md"
         try? report.write(toFile: out, atomically: true, encoding: .utf8)
         print("wrote \(out)")
+    }
+
+    /// One stack entry as a stack file spells it: `[{"operation": "exposure", "params": {"exposure": 1}}]`.
+    struct StackFileEntry: Decodable {
+        var operation: String
+        var params: [String: ParamValue]?
+        var blend: [String: ParamValue]?
+        var enabled: Bool?
+    }
+
+    /// Renders `path` once with the stack in `file` and writes it to `out`. The same file drives either
+    /// engine, so a darktable render of it is the clean engine's reference picture (named parameters only).
+    static func runStack(engine: any PhotoEngine, path: String, maxSide: Int, file: String, out: String?) async throws {
+        let entries = try JSONDecoder().decode([StackFileEntry].self, from: Data(contentsOf: URL(fileURLWithPath: file)))
+        let stack = entries.map {
+            StackEntry(operation: $0.operation, params: $0.params ?? [:], blend: $0.blend ?? [:], enabled: $0.enabled ?? true)
+        }
+        let frame = try await engine.render(path: path, maxSide: maxSide, stack: stack)
+        print("stack \(stack.map(\.operation).joined(separator: ", ")): \(frame.width)x\(frame.height) in "
+              + "\(Int(frame.milliseconds)) ms, mean luma \(String(format: "%.1f", meanLuma(frame.image)))")
+        if let out { try writePNG(frame.image, to: URL(fileURLWithPath: out)); print("wrote \(out)") }
     }
 
     static func runEngine(engine: any PhotoEngine, path: String, maxSide: Int, out: String?) async throws {

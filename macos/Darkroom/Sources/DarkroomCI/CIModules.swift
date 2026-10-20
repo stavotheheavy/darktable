@@ -1,5 +1,7 @@
 import CoreImage
+import DarkroomCore
 import DarkroomEngineAPI
+import DarkroomMetal
 
 /// One edit the clean engine can apply: its parameter schema, defaults and the Core Image
 /// filter chain it runs. Written from Apple's Core Image filter documentation only.
@@ -11,7 +13,9 @@ struct CIModule: Sendable {
     let defaultEnabled: Bool
     let fields: [FieldSchema]
     /// Applies the module to `image` with `values`, keyed by field name.
-    let apply: @Sendable (CIImage, [String: Double]) -> CIImage
+    let apply: @Sendable (CIImage, [String: Double]) throws -> CIImage
+    /// Wants the decoder's scene-linear output (no boost tone curve) when enabled.
+    var sceneReferred = false
 
     func defaultValue(_ field: String) -> Double? {
         fields.first { $0.name == field }?.defaultValue.double
@@ -42,13 +46,9 @@ extension CIModule {
                 FieldSchema(name: "blue", description: "blue", kind: .float,
                             min: 0, max: 8, defaultValue: .number(1), options: []),
             ],
+            // the oracle-checked gain kernel (darkroom-metal-check B2, darkroom-engine-check E1)
             apply: { image, v in
-                image.applyingFilter("CIColorMatrix", parameters: [
-                    "inputRVector": CIVector(x: v["red"] ?? 1, y: 0, z: 0, w: 0),
-                    "inputGVector": CIVector(x: 0, y: v["green"] ?? 1, z: 0, w: 0),
-                    "inputBVector": CIVector(x: 0, y: 0, z: v["blue"] ?? 1, w: 0),
-                    "inputAVector": CIVector(x: 0, y: 0, z: 0, w: 1),
-                ])
+                try CIBridge.gain(image, scale: SIMD3(v["red"] ?? 1, v["green"] ?? 1, v["blue"] ?? 1))
             }),
 
         // Colour balance, as an approximation: vibrance and global saturation and contrast
@@ -82,10 +82,10 @@ extension CIModule {
                 FieldSchema(name: "exposure", description: "exposure", kind: .float,
                             min: -18, max: 18, defaultValue: .number(0), options: []),
             ],
+            // DarkroomCore's Exposure.gain on the oracle-checked gain kernel (darkroom-engine-check E2)
             apply: { image, v in
-                image.applyingFilter("CIExposureAdjust", parameters: [
-                    kCIInputEVKey: v["exposure"] ?? 0,
-                ])
+                let g = Exposure.gain(ev: v["exposure"] ?? 0)
+                return try CIBridge.gain(image, scale: SIMD3(g, g, g))
             }),
 
         // Luminance sharpening: amount and the radius it works over.
@@ -445,7 +445,24 @@ extension CIModule {
                     min: min, max: max, defaultValue: .number(value), options: [])
     }
 
+    /// The scene-referred display transform: DarkroomCore's ToneMap and display matrix on the oracle-checked
+    /// kernel. Enabling it switches the decode to scene-linear (see `CIModule.sceneReferred`).
+    static let display: CIModule = {
+        var m = CIModule(
+            operation: "display", name: "display transform (scene-referred)", iopOrder: 90, defaultEnabled: false,
+            fields: [
+                FieldSchema(name: "contrast", description: "contrast", kind: .float,
+                            min: -100, max: 100, defaultValue: .number(0), options: []),
+            ],
+            apply: { image, v in try CIBridge.toneDisplay(image, contrast: v["contrast"] ?? 0) })
+        m.sceneReferred = true
+        return m
+    }()
+
+    /// The catalogue as the engine lists it: the Core Image modules, then the display transform.
+    static let all: [CIModule] = catalogue + [display]
+
     static func named(_ operation: String) -> CIModule? {
-        catalogue.first { $0.operation == operation }
+        all.first { $0.operation == operation }
     }
 }

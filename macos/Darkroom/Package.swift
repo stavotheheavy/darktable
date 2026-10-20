@@ -17,6 +17,7 @@ let package = Package(
         .executable(name: "darkroom-core-check", targets: ["DarkroomCoreCheck"]),
         .library(name: "DarkroomMetal", targets: ["DarkroomMetal"]),
         .executable(name: "darkroom-metal-check", targets: ["DarkroomMetalCheck"]),
+        .executable(name: "darkroom-engine-check", targets: ["DarkroomEngineCheck"]),
         .executable(name: "Darkroom", targets: ["Darkroom"]),
         .executable(name: "dtb-selftest", targets: ["DarkroomSelfTest"]),
     ],
@@ -44,7 +45,10 @@ let package = Package(
         .executableTarget(name: "DarkroomCoreCheck", dependencies: ["DarkroomCore"]),
 
         // the clean engine's decode and render: Apple's Core Image, behind PhotoEngine
-        .target(name: "DarkroomCI", dependencies: ["DarkroomEngineAPI"]),
+        .target(name: "DarkroomCI", dependencies: ["DarkroomEngineAPI", "DarkroomCore", "DarkroomMetal"]),
+
+        // the engine path checked against the oracle: stack in, pixels out, compared within 1/255
+        .executableTarget(name: "DarkroomEngineCheck", dependencies: ["DarkroomCI", "DarkroomCore", "DarkroomEngineAPI"]),
 
         // Metal kernels for the clean engine, each checked against the DarkroomCore oracle (L3)
         .target(name: "DarkroomMetal", dependencies: ["DarkroomCore"]),
