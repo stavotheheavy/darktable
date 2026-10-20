@@ -781,7 +781,8 @@ do {
     var m3 = 0.0
     for i in fx.indices where ColorCommon.luminance(fx[i]) > 1e-6 {
         let want = max(s.values[i] + 0.7 * (s.values[i] - base.values[i]), 0)
-        m3 = max(m3, abs(sqrt(max(ColorCommon.luminance(out3[i]), 0)) - want))
+        let d = abs(sqrt(max(ColorCommon.luminance(out3[i]), 0)) - want)
+        m3 = d.isFinite ? max(m3, d) : .infinity
     }
     check("SH3 sqrt(Y_out) equals s + 0.7 (s - base) with the three-level blur within 1e-9 (\(m3))", m3 < 1e-9, "\(m3)")
 
@@ -804,7 +805,8 @@ do {
     for i in stepGrey.indices {
         let s0 = sqrt(ColorCommon.luminance(stepGrey[i]))
         let s1 = sqrt(ColorCommon.luminance(out5a[i])), s2 = sqrt(ColorCommon.luminance(out5b[i]))
-        lin = max(lin, abs((s2 - s0) - 2 * (s1 - s0)))
+        let d = abs((s2 - s0) - 2 * (s1 - s0))
+        lin = d.isFinite ? max(lin, d) : .infinity
     }
     check("SH5 the change in s is linear in amount within 1e-9 (\(lin))", lin < 1e-9, "\(lin)")
 
@@ -813,7 +815,8 @@ do {
     var hue = 0.0
     for i in fx.indices {
         let r = out6[i].x / fx[i].x, g = out6[i].y / fx[i].y, b = out6[i].z / fx[i].z
-        hue = max(hue, abs(r - g) / max(1, abs(r)), abs(r - b) / max(1, abs(r)))
+        let d = max(abs(r - g), abs(r - b)) / max(1, abs(r))
+        hue = d.isFinite ? max(hue, d) : .infinity
     }
     check("SH6 every channel gets the same gain (hue and chroma ratios stay) within 1e-9 (\(hue))", hue < 1e-9, "\(hue)")
 
