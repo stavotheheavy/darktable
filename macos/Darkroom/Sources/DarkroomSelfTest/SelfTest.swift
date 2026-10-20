@@ -1053,6 +1053,201 @@ struct SelfTest {
                 model.removeFromPanel(sh)
                 check(!model.inProPanel(sh), "and switching it off takes it out")
             }
+            print("pro panel")
+            let step0 = model.historyIndex
+            model.zoom = .fit
+            await model.settle()
+            func entryWith(_ op: String) -> DarkroomModel.ProEntry? {
+                model.proMenu.flatMap(\.entries).first { $0.modules.map(\.operation).contains(op) }
+            }
+            // PP1 the Common group holds the ten common entries in their order (DarkroomModel.proCommon is internal
+            // to DarkroomUI, so the order is spelled out here); catches a dropped or duplicated module and a moved entry
+            let commonOrder: [[String]] = [
+                ["temperature"], ["exposure"], ["tonecurve"], ["shadhi"], ["colorbalancergb"],
+                ["splittoning"], ["monochrome"], ["sharpen"], ["denoiseprofile"], ["crop", "ashift", "flip"],
+            ]
+            let groups = model.proMenu
+            let commonOps = groups.first { $0.group == "Common" }?.entries.map { $0.modules.map(\.operation) } ?? []
+            check(groups.first?.group == "Common" && commonOps == commonOrder,
+                  "PP1 the Common group is first, with the ten common entries in order (\(commonOps.map { $0.joined(separator: "+") }.joined(separator: ", ")))")
+            // every non-deprecated module is in exactly one menu entry: a module listed twice or not at all shows here
+            var menuCount: [String: Int] = [:]
+            for e in groups.flatMap(\.entries) { for m in e.modules { menuCount[m.id, default: 0] += 1 } }
+            let live = model.modules.filter { !$0.deprecated }
+            let miscounted = live.filter { menuCount[$0.id] != 1 }
+            check(miscounted.isEmpty,
+                  "PP1 every non-deprecated module is in exactly one menu entry (\(live.count) modules, \(miscounted.isEmpty ? "all counted once" : miscounted.map { "\($0.operation) counted \(menuCount[$0.id] ?? 0)" }.joined(separator: ", ")))")
+
+            // PP9 undoing an add takes the module back out and returns the history to where it was; catches an add
+            // that is not one undoable step
+            let shadhi9 = entryWith("shadhi")!
+            let s9 = model.historyIndex
+            let before9 = model.inProPanel(shadhi9)
+            model.addToPanel(shadhi9)
+            await model.settle()
+            let afterAdd9 = model.inProPanel(shadhi9)
+            model.undo()
+            await model.settle()
+            check(!model.inProPanel(shadhi9) && model.historyIndex == s9,
+                  "PP9 undo of an add takes shadows and highlights back out (before add \(before9), after add \(afterAdd9), after undo \(model.inProPanel(shadhi9)), history \(model.historyIndex) for \(s9))")
+
+            // PP10 taking out an unedited basic is one history step, and undo brings it back; catches a removal that
+            // is more than one step, or one that undo leaves out
+            let tone10 = entryWith("tonecurve")!
+            let s10 = model.historyIndex
+            let edited10 = model.proEdited(tone10)
+            let enabled10 = model.isEnabled(module(model, "tonecurve")!)
+            model.removeFromPanel(tone10)
+            await model.settle()
+            let stepsOut = model.historyIndex - s10, outPanel = model.inProPanel(tone10)
+            model.undo()
+            await model.settle()
+            check(!edited10 && stepsOut == 1 && !outPanel && model.inProPanel(tone10) && model.historyIndex == s10,
+                  "PP10 taking out the unedited tone curve is one step and undo puts it back (edited \(edited10), on \(enabled10), steps \(stepsOut), out \(!outPanel), back in \(model.inProPanel(tone10)), history \(model.historyIndex) for \(s10))")
+
+            // PP11 the round trip: an edit to a basic, then taking it out and undoing both; catches the basic losing its
+            // place in the panel when its edits are cleared
+            await model.preparePro()
+            let cb11 = entryWith("colorbalancergb")!
+            let colour11 = module(model, "colorbalancergb")!
+            let s11 = model.historyIndex
+            if let f = model.schema(for: colour11)?.fields.first(where: { $0.name == "saturation_global" }) {
+                model.setParam(colour11, f, to: .number(-1))
+            } else { check(false, "colour balance has a 'saturation_global' field") }
+            await model.settle()
+            model.removeFromPanel(cb11)
+            await model.settle()
+            model.undo()
+            model.undo()
+            await model.settle()
+            check(model.inProPanel(colour11) && model.historyIndex == s11,
+                  "PP11 colour balance is back in the panel after its edit, its removal and both undos (in \(model.inProPanel(colour11)), history \(model.historyIndex) for \(s11))")
+
+            // PP2 the panel runs in pipeline order whatever order its entries were added in; catches an unsorted panel
+            let picked = [entryWith("shadhi"), entryWith("sharpen"), entryWith("vignette"), entryWith("crop"), entryWith("invert")].compactMap { $0 }
+            for e in picked { model.addToPanel(e) }
+            await model.settle()
+            let orders = model.proPanelEntries.map { $0.modules.map(\.iopOrder).min() ?? 0 }
+            let sorted = zip(orders, orders.dropFirst()).allSatisfy { $0 <= $1 }
+            check(picked.count == 5 && picked.allSatisfy { model.inProPanel($0) } && sorted,
+                  "PP2 the panel is in pipeline order (\(model.proPanelEntries.map(\.name).joined(separator: ", ")); iopOrder \(orders))")
+            for e in picked { model.removeFromPanel(e) }
+            await model.settle()
+
+            // PP3 the tone curve's nodes: the diagonal at the start, one write moves one node, writes clamp to 0...1
+            // (catches no clamp and writes going to the wrong node)
+            await model.preparePro()
+            let base = bytes(model.frame)
+            let identity = [0.0, 0.25, 0.5, 0.75, 1.0]
+            let nodes0 = model.curveNodes ?? []
+            check(nodes0.count == 5 && zip(nodes0, identity).allSatisfy { abs($0 - $1) < 1e-9 },
+                  "PP3 the tone curve starts on the diagonal (\(nodes0.map { String(format: "%.2f", $0) }.joined(separator: ", ")))")
+            model.setCurveNode(2, 0.65)
+            await model.settle()
+            let nodes1 = model.curveNodes ?? []
+            check(nodes1.count == 5 && abs(nodes1[2] - 0.65) < 1e-9 && [0, 1, 3, 4].allSatisfy { abs(nodes1[$0] - identity[$0]) < 1e-9 }
+                  && bytes(model.frame) != base,
+                  "PP3 a write to node 2 moves only node 2 and changes the frame (\(nodes1.map { String(format: "%.2f", $0) }.joined(separator: ", ")))")
+            model.setCurveNode(1, 1.4)
+            model.setCurveNode(3, -0.3)
+            await model.settle()
+            let nodes2 = model.curveNodes ?? []
+            check(nodes2.count == 5 && abs(nodes2[1] - 1) < 1e-9 && abs(nodes2[3]) < 1e-9 && abs(nodes2[2] - 0.65) < 1e-9,
+                  "PP3 writes clamp to 0...1 and land on their node (1.4 reads \(nodes2.count == 5 ? nodes2[1] : -1), -0.3 reads \(nodes2.count == 5 ? nodes2[3] : -1), node 2 still \(nodes2.count == 5 ? nodes2[2] : -1))")
+            // PP4 a drag of four values with no settle is one step; the last PP3 write was node 3, so this is a fresh step
+            // (grouped merges a repeated target within 1.5 s), catches every move becoming its own step
+            let s4 = model.historyIndex
+            for x in [0.55, 0.6, 0.65, 0.7] { model.setCurveNode(2, x) }
+            await model.settle()
+            check(model.historyIndex == s4 + 1, "PP4 a drag is one history step (\(model.historyIndex - s4) for 4 values)")
+            // PP5 the power button turns the curve's effect off and back on; the section stays (catches the power button
+            // removing the section, or not stopping the effect)
+            let curve = entryWith("tonecurve")!
+            let curved = bytes(model.frame)
+            model.toggleProEffect(curve)
+            await model.settle()
+            check(model.inProPanel(curve) && !model.proEffectOn(curve) && bytes(model.frame) == base,
+                  "PP5 power off keeps the tone curve in the panel and its frame is the one from before the edit (in panel \(model.inProPanel(curve)), on \(model.proEffectOn(curve)))")
+            model.toggleProEffect(curve)
+            await model.settle()
+            check(model.proEffectOn(curve) && bytes(model.frame) == curved,
+                  "PP5 power on restores the edited frame (on \(model.proEffectOn(curve)))")
+
+            // PP6 crop and straighten is one section (crop, ashift and flip); a size change, then removal, leaves none of
+            // the three applied and the original frame back; catches two sections, or a removal that leaves one applied
+            let geo = entryWith("crop")!
+            let fullW = model.frame?.width ?? 0, fullH = model.frame?.height ?? 0
+            model.addToPanel(geo)
+            await model.settle()
+            let geoSections = model.proPanelEntries.filter { $0.modules.contains { ["crop", "ashift", "flip"].contains($0.operation) } }
+            let geoOps = Set(geoSections.first?.modules.map(\.operation) ?? [])
+            check(geoSections.count == 1 && geoOps == ["crop", "ashift", "flip"],
+                  "PP6 crop and straighten is one section (\(geoSections.count) section, holds \(geoOps.sorted().joined(separator: ", ")))")
+            model.setStraighten(6)
+            model.rotate90()
+            await model.settle()
+            let changedW = model.frame?.width ?? 0, changedH = model.frame?.height ?? 0
+            check((changedW, changedH) != (fullW, fullH),
+                  "PP6 straighten and a quarter turn change the frame (\(fullW)x\(fullH) to \(changedW)x\(changedH))")
+            model.removeFromPanel(geo)
+            await model.settle()
+            let crop = module(model, "crop")!, ashift = module(model, "ashift")!, flip = module(model, "flip")!
+            let geoOff = [crop, ashift, flip].allSatisfy { !model.inProPanel($0) && !model.isEnabled($0) }
+            check(geoOff && model.frame?.width == fullW && model.frame?.height == fullH,
+                  "PP6 removing it leaves crop, ashift and flip out of the panel and off, and the original frame (in panel \([crop, ashift, flip].map { model.inProPanel($0) }), on \([crop, ashift, flip].map { model.isEnabled($0) }), \(model.frame?.width ?? 0)x\(model.frame?.height ?? 0), was \(fullW)x\(fullH))")
+
+            // PP7 a basic that is on by default: taking white balance out switches it off, and undo brings it back in and on
+            // (catches a removal that leaves the module applied, or a removed basic coming straight back)
+            let wb = entryWith("temperature")!
+            let temp = module(model, "temperature")!
+            model.removeFromPanel(wb)
+            await model.settle()
+            check(!model.inProPanel(temp) && !model.isEnabled(temp),
+                  "PP7 removing white balance takes it out and switches it off (in panel \(model.inProPanel(temp)), on \(model.isEnabled(temp)))")
+            model.undo()
+            await model.settle()
+            check(model.inProPanel(temp) && model.isEnabled(temp),
+                  "PP7 undo brings white balance back in and on (in panel \(model.inProPanel(temp)), on \(model.isEnabled(temp)))")
+
+            // PP12 a look switches a removed module back on: white balance is out, and the look's own edit brings it in and on
+            model.removeFromPanel(wb)
+            await model.settle()
+            let outBefore12 = !model.inProPanel(temp)
+            model.apply(SimpleLook.all.first { $0.id == "warm" }!)
+            await model.settle()
+            check(outBefore12 && model.inProPanel(temp) && model.isEnabled(temp),
+                  "PP12 the warm look brings white balance back in and on (out before \(outBefore12), in \(model.inProPanel(temp)), on \(model.isEnabled(temp)))")
+
+            // PP8 an edit to a removed module brings it back: the look edits colour balance (catches the removed set
+            // hiding a module that is in use)
+            let cb = entryWith("colorbalancergb")!
+            model.removeFromPanel(cb)
+            await model.settle()
+            let colour = module(model, "colorbalancergb")!
+            let outBefore = !model.inProPanel(colour)
+            model.apply(SimpleLook.all.first { $0.id == "punch" }!)
+            await model.settle()
+            check(outBefore && model.inProPanel(colour),
+                  "PP8 a look that edits colour balance brings it back into the panel (out before: \(outBefore), in after: \(model.inProPanel(colour)))")
+            while model.historyIndex > step0 { model.undo() }
+            await model.settle()
+
+            // PP13 the panel survives a reopen: the sidecar keeps a removal and an add (catches membership kept only in memory)
+            let tone13 = entryWith("tonecurve")!, vig13 = entryWith("vignette")!
+            model.removeFromPanel(tone13)
+            model.addToPanel(vig13)
+            await model.flushSave()
+            await model.open(path: copy.path)
+            await model.settle()
+            let toneBack = model.inProPanel(module(model, "tonecurve")!), vigIn = model.inProPanel(module(model, "vignette")!)
+            check(!toneBack && vigIn,
+                  "PP13 after reopen the tone curve is out and vignette is in (tone curve in \(toneBack), vignette in \(vigIn))")
+            model.addToPanel(entryWith("tonecurve")!)
+            model.removeFromPanel(entryWith("vignette")!)
+            await model.settle()
+
+            // PP14 the curve geometry helpers: not on clean/s1 yet, so this check waits for the curve-editor card
+            skip("PP14 curve geometry", "CurveGeometry is not on clean/s1 yet")
             model.mode = .simple
         } else {
             skip("pro panel", "the basics and their fields are the clean engine's")
