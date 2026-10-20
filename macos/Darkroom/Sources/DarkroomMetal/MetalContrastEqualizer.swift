@@ -12,6 +12,7 @@ extension CIBridge {
     /// DarkroomCore.ContrastEqualizer.apply as a Core Image graph. Textures 0...6 are the image, s, and the smoothings
     /// sm0...sm4; `u` holds the three gains 1 + fine, 1 + medium and 1 + coarse.
     public static func contrastEqualizer(_ image: CIImage, fine: Double, medium: Double, coarse: Double) throws -> CIImage {
+        guard fine != 0 || medium != 0 || coarse != 0 else { return image }
         let s = try sqrtLuminance(image)
         var smooths: [CIImage] = [], current = s
         for level in 0..<5 {
