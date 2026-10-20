@@ -807,11 +807,15 @@ do {
     check("E-SC2 sharpen: radius 6 at scale 0.5 renders as radius 3 at scale 1", same(img(sh(6), scale: 0.5), img(sh(3), scale: 1)))
     func hz(_ radius: Double) -> [StackEntry] { [StackEntry(operation: "hazeremoval", params: ["strength": .number(0.8), "radius": .number(radius)])] }
     check("E-SC3 haze removal: radius 16 at scale 0.5 renders as radius 8 at scale 1", same(img(hz(16), scale: 0.5), img(hz(8), scale: 1)))
-    var m: [String: ParamValue] = ["mask_mode": .number(2), "mask_kind": .number(0), "mask_refine": .number(10)]
+    // a spatial matte (a gradient), so the refinement radius changes the picture, unlike a constant matte
+    var m: [String: ParamValue] = ["mask_mode": .number(2), "mask_kind": .number(1), "mask_angle": .number(20), "mask_feather": .number(0.05), "mask_refine": .number(10)]
     let e = StackEntry(operation: "exposure", params: ["exposure": .number(1)], blend: m)
     m["mask_refine"] = .number(5)
     let h = StackEntry(operation: "exposure", params: ["exposure": .number(1)], blend: m)
     check("E-SC4 mask refinement: radius 10 at scale 0.5 renders as radius 5 at scale 1", same(img([e], scale: 0.5), img([h], scale: 1)))
+    check("E-SC4 and not as radius 10 at scale 1 (the refinement radius matters here)", !same(img([e], scale: 0.5), img([e], scale: 1)))
+    func bl(_ r: Double) -> [StackEntry] { [StackEntry(operation: "blurs", params: ["radius": .number(r)])] }
+    check("E-SC6 blurs: radius 8 at scale 0.5 renders as radius 4 at scale 1", same(img(bl(8), scale: 0.5), img(bl(4), scale: 1)) && !same(img(bl(8), scale: 0.5), img(bl(8), scale: 1)))
     check("E-SC5 a hostile scale (NaN, 0, 99) is held to 0.001...1 and renders",
           [Double.nan, 0, 99].allSatisfy { img(lc(10), scale: $0).count == detailW * detailH })
 }

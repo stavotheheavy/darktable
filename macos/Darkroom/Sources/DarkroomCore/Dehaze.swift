@@ -8,6 +8,7 @@
 // pixels), airlight (brightness of the haze, scene-linear). The GPU twin is MetalDehaze.
 
 import Foundation
+import simd
 
 public enum Dehaze {
     /// The paper's lower bound on the transmission: it keeps the recovery from amplifying noise without limit.
@@ -21,7 +22,7 @@ public enum Dehaze {
     public static func transmission(_ rgb: [SIMD3<Double>], width: Int, height: Int,
                                     strength: Double, radius: Int, airlight: Double) -> Plane {
         let a = max(airlight, 1e-6)
-        let minRGB = Plane(width: width, height: height, values: rgb.map { max(min($0.x, $0.y, $0.z), 0) / a })
+        let minRGB = Plane(width: width, height: height, values: rgb.map { min(max(min($0.x, $0.y, $0.z), 0) / a, 1) })
         let dark = Filters.minFilter(minRGB, radius: radius)
         let raw = dark.map { 1 - strength * $0 }
         let guide = DetailCommon.sqrtLuminance(rgb, width: width, height: height)
@@ -36,7 +37,11 @@ public enum Dehaze {
         let t = transmission(rgb, width: width, height: height, strength: min(strength, 1), radius: r, airlight: a)
         return zip(rgb, t.values).map { c, tv in
             let tt = max(tv, minTransmission)
-            return (c - SIMD3(repeating: a)) / tt + SIMD3(repeating: a)
+            let air = SIMD3(repeating: a)
+            // the haze model holds below the airlight; light brighter than it (specular, a lamp) is not haze and passes through
+            let hazy = simd_min(c, air)
+            let recovered = (hazy - air) / tt + air + (c - hazy)
+            return simd_max(recovered, SIMD3(repeating: 0))
         }
     }
 }

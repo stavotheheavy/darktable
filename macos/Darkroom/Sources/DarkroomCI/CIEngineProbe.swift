@@ -130,6 +130,10 @@ public enum CIEngineProbe {
         return out
     }
 
+    private static let goldenOverrides: [String: [String: Double]] = [
+        "hazeremoval": ["strength": 1, "radius": 3, "airlight": 1],
+    ]
+
     /// Every catalogue module's operation and display name, for the parity list's checks.
     public static func catalogue() -> [(operation: String, name: String)] {
         CIModule.all.map { ($0.operation, $0.name) }
@@ -148,6 +152,8 @@ public enum CIEngineProbe {
                 if f.kind == .int { v = v.rounded() }
                 params[f.name] = .number(v)
             }
+            // schema-derived settings can make a module a no-op on the small fixture (a haze patch as wide as the frame)
+            for (name, value) in Self.goldenOverrides[m.operation] ?? [:] { params[name] = .number(value) }
             return (m.operation, m.algorithmVersion, [StackEntry(operation: m.operation, params: params)])
         }
     }

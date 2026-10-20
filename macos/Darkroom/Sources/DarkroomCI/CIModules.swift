@@ -231,7 +231,7 @@ extension CIModule {
             apply: { image, v in
                 image.applyingFilter("CIBloom", parameters: [
                     kCIInputIntensityKey: v["strength"] ?? 0,
-                    kCIInputRadiusKey: v["size"] ?? 10,
+                    kCIInputRadiusKey: (v["size"] ?? 10) * (v["_scale"] ?? 1),
                 ])
             }),
 
@@ -287,7 +287,7 @@ extension CIModule {
             operation: "blurs", name: "blurs (approximate)", iopOrder: 48, defaultEnabled: false,
             fields: [field("radius", 0, 50, 0)],
             apply: { image, v in
-                let radius = v["radius"] ?? 0
+                let radius = (v["radius"] ?? 0) * (v["_scale"] ?? 1)
                 guard radius > 0 else { return image }
                 return image.clampedToExtent()
                     .applyingFilter("CIGaussianBlur", parameters: [kCIInputRadiusKey: radius])
@@ -299,7 +299,7 @@ extension CIModule {
             operation: "lowpass", name: "lowpass (approximate)", iopOrder: 49, defaultEnabled: false,
             fields: [field("radius", 0, 50, 0)],
             apply: { image, v in
-                let radius = v["radius"] ?? 0
+                let radius = (v["radius"] ?? 0) * (v["_scale"] ?? 1)
                 guard radius > 0 else { return image }
                 let blurred = image.clampedToExtent()
                     .applyingFilter("CIGaussianBlur", parameters: [kCIInputRadiusKey: radius])
@@ -321,8 +321,8 @@ extension CIModule {
             operation: "censorize", name: "censorize (approximate)", iopOrder: 61, defaultEnabled: false,
             fields: [field("pixelation", 1, 100, 1)],
             apply: { image, v in
-                let size = v["pixelation"] ?? 1
-                guard size > 1 else { return image }
+                let size = max((v["pixelation"] ?? 1) * (v["_scale"] ?? 1), 1)
+                guard (v["pixelation"] ?? 1) > 1 else { return image }
                 return image.applyingFilter("CIPixellate", parameters: [
                     "inputScale": size,
                     "inputCenter": CIVector(x: image.extent.midX, y: image.extent.midY),
@@ -337,7 +337,7 @@ extension CIModule {
                 let strength = v["strength"] ?? 0
                 guard strength > 0 else { return image }
                 let blurred = image.clampedToExtent()
-                    .applyingFilter("CIGaussianBlur", parameters: [kCIInputRadiusKey: v["radius"] ?? 4])
+                    .applyingFilter("CIGaussianBlur", parameters: [kCIInputRadiusKey: (v["radius"] ?? 4) * (v["_scale"] ?? 1)])
                     .cropped(to: image.extent)
                 let mixed = blurred.applyingFilter("CIColorMatrix", parameters: [
                     "inputAVector": CIVector(x: 0, y: 0, z: 0, w: CGFloat(strength)),
@@ -450,7 +450,7 @@ extension CIModule {
             fields: [field("strength", 0, 2, 0)],
             apply: { image, v in
                 image.applyingFilter("CIUnsharpMask", parameters: [
-                    kCIInputRadiusKey: 8,
+                    kCIInputRadiusKey: 8 * (v["_scale"] ?? 1),
                     kCIInputIntensityKey: v["strength"] ?? 0,
                 ])
             }),

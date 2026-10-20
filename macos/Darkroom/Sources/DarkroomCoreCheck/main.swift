@@ -1428,7 +1428,8 @@ do {
     for y in 0..<h { for x in 0..<w {
         var m = Double.infinity
         for dy in -r...r { for dx in -r...r { m = min(m, tex.at(x + dx, y + dy)) } }
-        worst = max(worst, abs(m - fast.values[y * w + x]))
+        let d = abs(m - fast.values[y * w + x])
+        worst = d.isFinite ? max(worst, d) : .infinity
     } }
     check("DF1 min filter equals the brute-force window minimum, edges clamped", worst < 1e-15, "\(worst)")
     check("DF1 min filter radius 0 is the identity and never exceeds the input", Filters.minFilter(tex, radius: 0) == tex
@@ -1444,7 +1445,7 @@ do {
     let base = DetailCommon.fixture(width: fw, height: fh)
     check("DH1 strength 0 is the identity", Dehaze.apply(base, width: fw, height: fh, strength: 0, radius: 8, airlight: 1) == base)
     // a clear scene whose every pixel has a zero channel (dark channel 0), hazed with transmission 0.6 and airlight 1
-    let clear = base.map { $0 - SIMD3(repeating: min($0.x, $0.y, $0.z)) }
+    let clear = base.map { c -> SIMD3<Double> in let d = c - SIMD3(repeating: min(c.x, c.y, c.z)); return SIMD3(min(d.x, 1), min(d.y, 1), min(d.z, 1)) }   // a haze-free scene is no brighter than the airlight
     let hazy = clear.map { $0 * 0.6 + SIMD3(repeating: 0.4) }
     let rec = close(Dehaze.apply(hazy, width: fw, height: fh, strength: 1, radius: 3, airlight: 1), clear, 1e-9)
     check("DH2 haze with transmission 0.6 is removed exactly (dark channel prior recovers it)", rec < 1e-9, "\(rec)")
@@ -1456,12 +1457,20 @@ do {
     let wrongA = close(Dehaze.apply(hazy2, width: fw, height: fh, strength: 1, radius: 3, airlight: 1), clear, 1e-9)
     check("DH4 airlight 2 recovers a scene hazed with airlight 2", rec2 < 1e-9, "\(rec2)")
     check("DH4 airlight 1 does not (the airlight is used)", wrongA > 0.05, "\(wrongA)")
-    let brightGrey = [SIMD3<Double>](repeating: SIMD3(repeating: 1.5), count: fw * fh)
-    let floored = Dehaze.apply(brightGrey, width: fw, height: fh, strength: 1, radius: 3, airlight: 1)
-    check("DH5 the transmission floor 0.1 holds: t would be -0.5, the result is (1.5 - 1) / 0.1 + 1 = 6",
-          floored.allSatisfy { abs($0.x - 6) < 1e-9 && abs($0.y - 6) < 1e-9 && abs($0.z - 6) < 1e-9 }, "\(floored[0])")
+    // t below the 0.1 floor: dark channel 0.95, strength 1 gives t = 0.05, floored to 0.1: (0.95 - 1) / 0.1 + 1 = 0.5 (no floor: 0)
+    let nearAir = Dehaze.apply([SIMD3<Double>](repeating: SIMD3(repeating: 0.95), count: fw * fh), width: fw, height: fh, strength: 1, radius: 3, airlight: 1)
+    check("DH5 the transmission floor 0.1 holds: (0.95 - 1) / 0.1 + 1 = 0.5",
+          nearAir.allSatisfy { abs($0.x - 0.5) < 1e-9 && abs($0.y - 0.5) < 1e-9 && abs($0.z - 0.5) < 1e-9 }, "\(nearAir[0])")
     let atAir = Dehaze.apply([SIMD3<Double>](repeating: SIMD3(repeating: 1), count: fw * fh), width: fw, height: fh, strength: 1, radius: 3, airlight: 1)
     check("DH5 a pixel equal to the airlight stays the airlight (no 0/0)", atAir.allSatisfy { $0 == SIMD3(1, 1, 1) }, "\(atAir[0])")
+    // light brighter than the airlight is not haze: it passes through (no (2 - 1) / 0.1 + 1 = 11)
+    let lamp = [SIMD3<Double>](repeating: SIMD3(repeating: 2), count: fw * fh)
+    let lampOut = Dehaze.apply(lamp, width: fw, height: fh, strength: 0.5, radius: 3, airlight: 1)
+    check("DH5b a highlight above the airlight is unchanged by haze removal", lampOut.allSatisfy { abs($0.x - 2) < 1e-9 && abs($0.y - 2) < 1e-9 && abs($0.z - 2) < 1e-9 }, "\(lampOut[0])")
+    // a dark scene beside a bright sky: the refined transmission spreads, but nothing goes negative
+    let skyEdge = (0..<(fw * fh)).map { i in i % fw < fw / 2 ? SIMD3<Double>(repeating: 2) : SIMD3(0.2, 0.25, 0.3) }
+    let skyOut = Dehaze.apply(skyEdge, width: fw, height: fh, strength: 1, radius: 3, airlight: 1)
+    check("DH5c next to a bright sky no pixel goes negative or non-finite", skyOut.allSatisfy { $0.x >= 0 && $0.y >= 0 && $0.z >= 0 && $0.x.isFinite && $0.y.isFinite && $0.z.isFinite })
     var finite = true
     let ext = base + [SIMD3<Double>](repeating: SIMD3(-0.2, 0.1, 0.3), count: fw * 2)
     for (s, rad, a) in [(1.0, 8.0, 0.2), (1.0, 1.0, 4.0), (0.6, 40.0, 1.0), (1.0, 5.0, 0.2)] {

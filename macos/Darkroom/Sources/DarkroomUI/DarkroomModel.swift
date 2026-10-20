@@ -104,6 +104,11 @@ public final class DarkroomModel {
     public private(set) var versionNotices: [String] = []
     /// Set when the image's sidecar could not be read (a newer format, or damaged): the file is left alone and not saved over.
     private var sidecarLocked: String?
+    /// The history, step and algorithm versions as they are on disk (or as opened with no sidecar): a save that would
+    /// write the same thing is skipped, so merely opening a photo never re-stamps its sidecar with this app's versions.
+    private var lastSaved: (history: [HistoryItem], index: Int)?
+    private var loadedAlgorithms: [String: Int]?
+    private var loadedEdits: EditMap = [:]
 
     private let engine: any PhotoEngine
     private var rendering = false
@@ -210,6 +215,15 @@ public final class DarkroomModel {
             }
         } catch {
             status = "\(error)"
+            // nothing is open: the previous photo's edits must not be saved over this path's sidecar by the next flush
+            saveTask?.cancel()
+            filePath = nil
+            sidecarLocked = nil
+            versionNotices = []
+            history = [HistoryItem(label: "original", detail: "", edits: [:])]
+            historyIndex = 0
+            edits = [:]
+            lastSaved = nil
             return
         }
 
@@ -222,6 +236,9 @@ public final class DarkroomModel {
             let known = Set(modules.map(\.id))
             edits = history[historyIndex].edits.filter { known.contains($0.key) }
             versionNotices = s.versionNotices(current: await engine.algorithmVersions())
+            lastSaved = (s.history, s.index)
+            loadedAlgorithms = s.algorithms
+            loadedEdits = history[historyIndex].edits
             if let first = versionNotices.first { status = versionNotices.count == 1 ? first : "\(first) (and \(versionNotices.count - 1) more)" }
         } else {
             if case .unreadable(let why) = loaded {
@@ -231,6 +248,9 @@ public final class DarkroomModel {
             history = [HistoryItem(label: "original", detail: "", edits: [:])]
             historyIndex = 0
             edits = [:]
+            lastSaved = (history, 0)
+            loadedAlgorithms = nil
+            loadedEdits = [:]
         }
 
         selectedID = modules.first { $0.operation == "exposure" }?.id ?? modules.first?.id
@@ -652,16 +672,27 @@ public final class DarkroomModel {
         guard let path = filePath else { return }
         // a sidecar this app could not read is somebody's edits (a newer app's): never write over it
         if let why = sidecarLocked { saveError = "Edits are not saved for this photo: \(why). The file was left untouched."; return }
+        if let last = lastSaved, last.history == history, last.index == historyIndex { return }   // nothing to write
         let hasEdits = history.count > 1
         let url = Sidecar.url(for: path)
         do {
             if hasEdits {
                 var s = Sidecar(history: history, index: historyIndex)
-                let versions = await engine.algorithmVersions()
+                // this app's versions, except for a module whose edit is the one that was loaded: it keeps the version
+                // it was made with, so a notice about changed maths does not vanish by merely re-saving
+                var versions = await engine.algorithmVersions()
+                if versions.isEmpty { versions = loadedAlgorithms ?? [:] } else {
+                    for (id, edit) in edits where loadedEdits[id] == edit {
+                        let op = String(id.split(separator: "#").first ?? "")
+                        if let was = loadedAlgorithms?[op] { versions[op] = was }
+                    }
+                }
                 s.algorithms = versions.isEmpty ? nil : versions
                 try s.save(for: path)
+                lastSaved = (history, historyIndex)
             } else if FileManager.default.fileExists(atPath: url.path) {
                 try FileManager.default.removeItem(at: url)
+                lastSaved = (history, historyIndex)
             }
             saveError = nil
         } catch {

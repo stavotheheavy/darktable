@@ -15,7 +15,7 @@ kernel void dehazeMinTex(texture2d<float, access::read> src [[texture(0)]],
                          uint2 gid [[thread_position_in_grid]]) {
     if (gid.x >= dst.get_width() || gid.y >= dst.get_height()) { return; }
     float4 c = src.read(uint2(int2(gid) + off[0]));
-    float m = max(min(c.r, min(c.g, c.b)), 0.0f) * u[0];
+    float m = min(max(min(c.r, min(c.g, c.b)), 0.0f) * u[0], 1.0f);
     dst.write(float4(m, m, m, c.a), gid);
 }
 
@@ -39,7 +39,9 @@ kernel void dehazeOutTex(texture2d<float, access::read> img [[texture(0)]],
     if (gid.x >= dst.get_width() || gid.y >= dst.get_height()) { return; }
     float4 c = img.read(uint2(int2(gid) + off[0]));
     float t = max(trans.read(uint2(int2(gid) + off[1])).x, u[1]);
-    dst.write(float4((c.rgb - u[0]) / t + u[0], c.a), gid);
+    float3 air = float3(u[0]);
+    float3 hazy = min(c.rgb, air);   // light brighter than the airlight is not haze and passes through
+    dst.write(float4(max((hazy - air) / t + air + (c.rgb - hazy), 0.0f), c.a), gid);
 }
 """#
 }

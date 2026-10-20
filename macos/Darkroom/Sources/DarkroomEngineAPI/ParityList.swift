@@ -66,7 +66,7 @@ public enum ParityList {
             e("sigmoid", .covered(by: "display")), e("agx", .covered(by: "display")),
             e("graduatednd", .covered(by: "masks"), "a gradient mask on exposure"),
             e("bilateral", .covered(by: "denoiseprofile")), e("nlmeans", .covered(by: "denoiseprofile")),
-            e("contrastntexture", .covered(by: "atrous")), e("colorbalance", .covered(by: "colorbalancergb"), "the legacy 4-way grading"),
+            e("contrastntexture", .covered(by: "atrous")), 
             // wanted, not built (roughly in order of value to a photographer)
             e("toneequal", .planned("masks and a guided-filter base are built; the equalizer on top is not")),
             e("highlights", .planned("DarkroomCore.HighlightRebuild is an oracle with no GPU kernel and no module")),
@@ -95,7 +95,7 @@ public enum ParityList {
             e("zonesystem", .dropped("deprecated in darktable")), e("globaltonemap", .dropped("deprecated in darktable")),
             e("vibrance", .dropped("deprecated in darktable; colorbalancergb has vibrance")),
             e("channelmixerrgb", .planned("the calibration-matrix mixer; channelmixer covers the plain 3x3 case")),
-            e("colorharmonizer", .planned()),
+            e("colorharmonizer", .planned()), e("colorbalance", .planned("the 4-way lift/gamma/gain grading; colorbalancergb has only contrast, saturation and vibrance")),
             // ours
             e("display", .exact, "not a darktable module: the scene-referred display transform, with an HDR peak"),
         ]

@@ -322,7 +322,7 @@ struct TopBar: View {
         // an optional HDR gain map: a viewer that knows it shows highlights past white, any other shows the same picture.
         // Remembered between exports; the clean engine writes it, the darktable engine cannot (the box is then ignored).
         let key = "exportHDRGainMap"
-        let box = NSButton(checkboxWithTitle: "Include HDR gain map (4 stops of highlight headroom)", target: nil, action: nil)
+        let box = NSButton(checkboxWithTitle: "Include HDR gain map (highlights up to 4x white)", target: nil, action: nil)
         box.state = UserDefaults.standard.bool(forKey: key) ? .on : .off
         let holder = NSView(frame: NSRect(x: 0, y: 0, width: 420, height: 36))
         box.frame = NSRect(x: 12, y: 8, width: 400, height: 20)

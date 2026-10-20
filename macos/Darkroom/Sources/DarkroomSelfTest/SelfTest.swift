@@ -978,6 +978,12 @@ struct SelfTest {
                 await other.open(path: copy.path)
                 check(!other.versionNotices.isEmpty && other.versionNotices.allSatisfy { $0.contains(word) },
                       "a sidecar saved with \(label) algorithms says so (\(other.versionNotices.first ?? "no notice"))")
+                // looking at a photo is not editing it: saving must not re-stamp the record with this app's versions
+                let before = try Data(contentsOf: sidecarURL)
+                await other.flushSave()
+                await other.open(path: copy.path)
+                await other.flushSave()
+                check((try? Data(contentsOf: sidecarURL)) == before, "opening and closing a photo leaves its \(label)-algorithm sidecar byte for byte")
             }
         }
         // a sidecar from a newer format is never read and never overwritten
@@ -1503,6 +1509,31 @@ struct SelfTest {
         model.setParam(exposure, ev, to: .number(0.3))
         await model.settle()
         check(model.frame != nil, "session still renders after export (\(Int(model.lastMilliseconds ?? 0)) ms)")
+
+        // a photo that fails to open must not take the previous photo's edits (or deletion) to its own sidecar.
+        // Last, because a failed open leaves the shared engine with no session.
+        print("a photo that fails to open")
+        // a folder with a raw's name: no engine can open it (a missing file opens lazily on the Core Image engine)
+        let missing = copy.deletingLastPathComponent().appendingPathComponent("folder-named-photo.ARW")
+        try? FileManager.default.createDirectory(at: missing, withIntermediateDirectories: true)
+        let missingSidecar = URL(fileURLWithPath: missing.path + ".darkroom.json")
+        try? FileManager.default.removeItem(at: missingSidecar)
+        let hopper = DarkroomModel(engine: engine)
+        await hopper.open(path: copy.path)
+        await hopper.settle()
+        if let exposure = module(hopper, "exposure"), let ev = field(hopper, exposure, "exposure") { hopper.setParam(exposure, ev, to: .number(0.7)) }
+        await hopper.open(path: missing.path)       // fails
+        await hopper.flushSave()
+        if let exposure = module(hopper, "exposure"), let ev = field(hopper, exposure, "exposure") { hopper.setParam(exposure, ev, to: .number(0.9)) }
+        await hopper.flushSave()
+        if clean {
+            // the Core Image engine opens any path lazily (even a folder), so an open cannot fail there; the model's reset
+            // on a thrown open is covered on the engine that does throw
+            notApplicable.append("a failed open cannot be provoked on the Core Image engine (it opens any path lazily)")
+        } else {
+            check(!FileManager.default.fileExists(atPath: missingSidecar.path), "a photo that failed to open gets no sidecar from the previous photo's edits")
+        }
+        try? FileManager.default.removeItem(at: missing)
 
         if !notApplicable.isEmpty { print("\n\(notApplicable.count) check(s) n/a on this engine: \(notApplicable.joined(separator: "; "))") }
         print(failures.isEmpty ? "\nALL CHECKS PASSED" : "\n\(failures.count) CHECK(S) FAILED")
