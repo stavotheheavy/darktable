@@ -16,6 +16,9 @@ struct CIModule: Sendable {
     let apply: @Sendable (CIImage, [String: Double]) throws -> CIImage
     /// Wants the decoder's scene-linear output (no boost tone curve) when enabled.
     var sceneReferred = false
+    /// Tone curve and its kin shape display values (0...1), so with a scene-referred module on they run after it, where
+    /// the picture is already display light; the curve then acts on what the eye sees, not on raw scene light.
+    static let displayReferredOperations: Set<String> = ["tonecurve"]
     /// Goes up whenever the module's maths changes. Saved with an edit (the sidecar), so a later app can tell the picture
     /// would now look different; darkroom-engine-check's golden images (T11) fail until the new version has goldens.
     var algorithmVersion = 1

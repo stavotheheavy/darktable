@@ -228,6 +228,25 @@ let etc = worst(run([StackEntry(operation: "tonecurve", params: ["y0": .number(0
                 scene.map { ToneCurve.apply($0, ys: toneYs) })
 check("E-TC tone curve S-curve matches the oracle within 1/255", etc < tol, "\(etc)")
 
+// E-TC2 with the display transform on, the tone curve runs after it, on display light (not on scene light before it)
+do {
+    let ys = [0.0, 0.15, 0.5, 0.85, 1.0]
+    let curve = StackEntry(operation: "tonecurve", params: ["y0": .number(0), "y1": .number(0.15), "y2": .number(0.5), "y3": .number(0.85), "y4": .number(1)])
+    let display = StackEntry(operation: "display", params: ["contrast": .number(0)])
+    let tone = ToneMap(contrast: 0)
+    let toDisplay: (SIMD3<Double>) -> SIMD3<Double> = { p in
+        let r = ColorSpaces.srgbToRec2020.apply(p)
+        return ColorSpaces.rec2020ToSRGB.apply(SIMD3(tone.apply(r.x), tone.apply(r.y), tone.apply(r.z)))
+    }
+    let after = scene.map { ToneCurve.apply(toDisplay($0), ys: ys) }
+    let before = scene.map { toDisplay(ToneCurve.apply($0, ys: ys)) }
+    // listed curve-first on purpose: the engine orders them, not the list
+    let got = run([curve, display])
+    let eAfter = worst(got, after), eBefore = worst(got, before)
+    check("E-TC2 tone curve after the display transform matches the oracle within 1/255", eAfter < tol, "\(eAfter)")
+    check("E-TC2 and it is not the curve-before-display order (the two differ by more than 4/255)", eBefore > 4.0 / 255, "\(eBefore)")
+}
+
 // G-E geometry through the engine: three coloured 3x3 markers on a dark 120x80 frame must land where the
 // DarkroomCore oracle maps them, and the output must have the oracle's size
 do {

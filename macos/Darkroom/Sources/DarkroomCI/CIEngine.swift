@@ -269,13 +269,14 @@ public actor CIEngine: PhotoEngine {
     /// does not have is an error, never a silent skip. Static so `CIEngineProbe` runs this exact code.
     static func applyStack(_ image: CIImage, _ stack: [StackEntry], hdrPeak: Double? = nil, scale: Double = 1,
                            camera: Orientation = .none, rasters: [String: MaskRaster] = [:]) throws -> CIImage {
+        let sceneReferred = wantsSceneLinear(stack)
         let ordered = try stack.filter { $0.enabled && !CIGeometry.operations.contains($0.operation) }.map { entry -> (CIModule, StackEntry) in
             guard let m = CIModule.named(entry.operation) else {
                 throw EngineError("the clean engine has no module \(entry.operation) yet")
             }
             return (m, entry)
         }
-        .sorted { $0.0.iopOrder < $1.0.iopOrder }
+        .sorted { Self.effectiveOrder($0.0, sceneReferred: sceneReferred) < Self.effectiveOrder($1.0, sceneReferred: sceneReferred) }
 
         var out = image
         // a module's mask drawn over the picture while it is edited (render-only: the model never puts this in an export)
@@ -365,6 +366,12 @@ public actor CIEngine: PhotoEngine {
             throw EngineError("decode failed")
         }
         return image
+    }
+
+    /// Where a module runs: its own `iopOrder`, except that display-referred modules (the tone curve) follow the
+    /// scene-referred display transform when one is on.
+    static func effectiveOrder(_ m: CIModule, sceneReferred: Bool) -> Double {
+        sceneReferred && CIModule.displayReferredOperations.contains(m.operation) ? 90 + Double(m.iopOrder) / 1000 : Double(m.iopOrder)
     }
 
     static func wantsSceneLinear(_ stack: [StackEntry]) -> Bool {
