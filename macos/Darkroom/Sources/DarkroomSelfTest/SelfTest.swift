@@ -907,9 +907,15 @@ struct SelfTest {
                   "SG2 straighten clamps to plus or minus 45 and rounds to 0.1 (80 reads \(high), -80 reads \(low), 3.14159 reads \(rounded))")
             await backToStart()
 
+            // straighten 8 must first crop inside the frame, so that returning to 0 is a real change
+            model.setStraighten(8)
+            await model.settle()
+            let (w8, h8) = frameSize()
+            check(w8 < sw0 && h8 < sh0, "SG3 straighten 8 crops inside the frame (\(w8)x\(h8), was \(sw0)x\(sh0))")
             model.setStraighten(0)
             await model.settle()
             check(frameSize() == (sw0, sh0), "SG3 straighten 0 is the full frame again (\(frameSize().w)x\(frameSize().h), was \(sw0)x\(sh0))")
+            await backToStart()
 
             model.setAspect(.fourFive)
             await model.settle()
@@ -957,6 +963,18 @@ struct SelfTest {
                 check(false, "crop has a 'cw' field for a Pro crop")
             }
 
+            // a 1:1 crop that is not centred is no preset, even though its ratio matches one
+            await backToStart()
+            if let crop = module(model, "crop"), let bottom = field(model, crop, "ch") {
+                model.setParam(crop, bottom, to: .number(Double(sw0) / Double(sh0)))
+                await model.settle()
+                let (w9, h9) = frameSize()
+                check(abs(w9 - sw0) <= 1 && abs(h9 - sw0) <= 1 && model.simpleAspect == nil,
+                      "SG9b a 1:1 crop that is not centred is no preset (\(w9)x\(h9), preset \(String(describing: model.simpleAspect)))")
+            } else {
+                check(false, "crop has a 'ch' field for an uncentred crop")
+            }
+
             await backToStart()
             model.setAspect(.square)
             model.setAspect(.original)
@@ -967,7 +985,7 @@ struct SelfTest {
             await backToStart()
             model.mode = .pro
         } else {
-            skip("simple geometry","needs sessionOutputSize and the camera orientation, which the darktable engine does not report")
+            skip("simple geometry", "needs sessionOutputSize and the camera orientation, which the darktable engine does not report")
         }
 
         print("simple mode")
