@@ -673,6 +673,9 @@ public struct DarkroomRoot: View {
             case .library: LibraryView(library: library, open: openPhoto)
             case .darkroom: DarkroomView(model: model)
             }
+            // the app is Vantage; Darkroom is the editing view, as Develop is in other editors
+            Color.clear.frame(width: 0, height: 0)
+                .navigationTitle(screen == .darkroom ? "Vantage \u{2014} Darkroom" : "Vantage \u{2014} Library")
             if !welcomed {
                 WelcomeView { mode, folder in
                     UserDefaults.standard.set(true, forKey: "darkroom.welcomed")
