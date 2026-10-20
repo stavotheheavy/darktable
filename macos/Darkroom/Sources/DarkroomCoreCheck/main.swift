@@ -1385,5 +1385,36 @@ do {
           g.isFinite && g >= 0 && g <= 1, "\(g)")
 }
 
+// S6 review additions: points where the right rule and the wrong one give different answers
+do {
+    let W = 48.0, H = 40.0, D = (W * W + H * H).squareRoot()
+    func alpha(_ blend: [String: Double], x: Double = 24, y: Double = 20, rgb: SIMD3<Double> = SIMD3(0.3, 0.3, 0.3)) -> Double {
+        Mask.alpha(Mask.spec(from: blend.merging(["mask_mode": 2]) { $1 })!, x: x, y: y, width: W, height: H, rgb: rgb)
+    }
+    func close(_ a: Double, _ b: Double, _ e: Double = 1e-9) -> Bool { a.isFinite && abs(a - b) < e }
+    // a smoothstep is 0.15625 a quarter of the way up (a linear ramp would say 0.25)
+    let gq = alpha(["mask_kind": 1, "mask_angle": 0, "mask_position": 0.5, "mask_feather": 0.4], x: 24 + (0.4 - 0.5) * D)
+    check("MR1 gradient: a quarter of the way up the soft band is the smoothstep 0.15625, not 0.25", close(gq, 0.15625), "\(gq)")
+    let eq = alpha(["mask_kind": 2, "mask_rx": 0.2, "mask_ry": 0.2, "mask_feather": 0.5], x: 24 + 0.625 * 0.2 * D)
+    check("MR2 ellipse: r = 0.625 in the fade is 1 - 0.15625", close(eq, 0.84375), "\(eq)")
+    func grey(_ s: Double) -> SIMD3<Double> { SIMD3(repeating: s * s) }
+    let lq = alpha(["mask_kind": 3, "mask_low": 0.2, "mask_high": 0.8, "mask_feather": 0.5], rgb: grey(0.2375))
+    check("MR3 luminance: a quarter of the way up the soft ramp is 0.15625", close(lq, 0.15625), "\(lq)")
+    func col(_ L: Double, _ C: Double, _ hDeg: Double) -> SIMD3<Double> {
+        let h = hDeg * .pi / 180
+        return OkLab.toWorking(SIMD3(L, C * cos(h), C * sin(h)))
+    }
+    let cq = alpha(["mask_kind": 4, "mask_hue": 30, "mask_hue_width": 40, "mask_chroma_min": 0.02, "mask_feather": 0.5], rgb: col(0.6, 0.1, 55))
+    check("MR4 colour: dh 25 in the 20...40 fade is 1 - 0.15625", close(cq, 0.84375), "\(cq)")
+    // luminance must be Rec.709: (0.5, 0.2, 0.1) is s = 0.5065; the channel mean (s 0.5164) and Rec.601 (0.5276) are above 0.51
+    let c709 = alpha(["mask_kind": 3, "mask_low": 0.51, "mask_high": 0.8, "mask_feather": 0], rgb: SIMD3(0.5, 0.2, 0.1))
+    check("MR5 luminance mask uses Rec.709 weights (mean or Rec.601 would be inside the 0.51...0.8 window)", c709 == 0, "\(c709)")
+    // lightness must not leak into the colour weight: inside both soft bands the answer is 0.25 at every lightness
+    let leaks = [0.2, 0.6, 0.9].map {
+        alpha(["mask_kind": 4, "mask_hue": 30, "mask_hue_width": 20, "mask_chroma_min": 0.02, "mask_feather": 0.5], rgb: col($0, 0.015, 45))
+    }
+    check("MR6 colour mask: inside both soft bands the weight is 0.25 at every lightness", leaks.allSatisfy { close($0, 0.25) }, "\(leaks)")
+}
+
 print(failures == 0 ? "\nall checks passed" : "\n\(failures) failed")
 exit(failures == 0 ? 0 : 1)
