@@ -5,8 +5,8 @@ import SwiftUI
 /// same monotone curve ToneCurve evaluates. Drag a node up or down; the arrow keys nudge the focused one.
 struct CurveEditor: View {
     @Bindable var model: DarkroomModel
-    /// The node a drag is moving, chosen where the drag starts.
-    @State private var dragNode: Int?
+    /// The node a drag is moving, chosen where the drag starts. The gesture resets it when the drag ends or is cancelled.
+    @GestureState private var activeNode: Int?
     @FocusState private var focusedNode: Int?
 
     private static let flat = [0.0, 0.25, 0.5, 0.75, 1.0]
@@ -28,6 +28,11 @@ struct CurveEditor: View {
         .background(Color.black.opacity(0.25), in: RoundedRectangle(cornerRadius: 12))
         .disabled(!live)
         .opacity(live ? 1 : 0.5)
+        .onChange(of: activeNode) { old, new in
+            if let new { focusedNode = new }
+            // paired with the start in drag(size:): a cancelled drag resets the node too, so this still runs
+            if old != nil && new == nil { model.setDragging(false) }
+        }
         .rig("pro-curve")
         .onAppear {
             if Rig.enabled {
@@ -74,7 +79,7 @@ struct CurveEditor: View {
 
     /// One node: a 28 pt hit area around a circle of radius 7 (9 while it is dragged or focused).
     private func handle(_ i: Int, ys: [Double], size: CGSize) -> some View {
-        let active = dragNode == i || focusedNode == i
+        let active = activeNode == i || focusedNode == i
         let d: CGFloat = active ? 18 : 14
         return Circle()
             .fill(Color.black.opacity(0.6))
@@ -103,41 +108,35 @@ struct CurveEditor: View {
     }
 
     /// Vertical only: the node nearest the start of the drag follows the pointer's height. One drag is one history step.
+    /// A 3 pt move is needed to start, so a plain click (which may only mean focus) changes nothing.
     private func drag(size: CGSize) -> some Gesture {
-        DragGesture(minimumDistance: 0)
-            .onChanged { value in
-                if dragNode == nil {
-                    let i = CurveGeometry.nearestNode(toX: value.startLocation.x, plotLeft: 0, plotWidth: size.width)
-                    dragNode = i
-                    focusedNode = i
+        DragGesture(minimumDistance: 3)
+            .updating($activeNode) { value, node, _ in
+                if node == nil {
+                    node = CurveGeometry.nearestNode(toX: value.startLocation.x, plotLeft: 0, plotWidth: size.width)
                     model.setDragging(true)
                 }
-                if let i = dragNode {
-                    model.setCurveNode(i, CurveGeometry.height(atY: value.location.y, plotTop: 0, plotHeight: size.height))
-                }
-            }
-            .onEnded { _ in
-                dragNode = nil
-                model.setDragging(false)
+                guard let i = node else { return }
+                model.setCurveNode(i, CurveGeometry.height(atY: value.location.y, plotTop: 0, plotHeight: size.height))
             }
     }
 }
 
 /// The curve editor's geometry, kept apart from the view so the maths can be checked without a screen.
-enum CurveGeometry {
+public enum CurveGeometry {
     /// The node height under a pointer at vertical position `y`; the top of the plot is 1, the bottom 0.
-    static func height(atY y: CGFloat, plotTop: CGFloat, plotHeight: CGFloat) -> Double {
+    public static func height(atY y: CGFloat, plotTop: CGFloat, plotHeight: CGFloat) -> Double {
         guard plotHeight > 0 else { return 0 }
         return min(max(1 - Double((y - plotTop) / plotHeight), 0), 1)
     }
 
     /// The vertical position of a node at height `h`.
-    static func y(forHeight h: Double, plotTop: CGFloat, plotHeight: CGFloat) -> CGFloat {
+    public static func y(forHeight h: Double, plotTop: CGFloat, plotHeight: CGFloat) -> CGFloat {
         plotTop + CGFloat(1 - h) * plotHeight
     }
 
     /// The node (0...4) whose x is nearest `x`.
-    static func nearestNode(toX x: CGFloat, plotLeft: CGFloat, plotWidth: CGFloat) -> Int {
+    public static func nearestNode(toX x: CGFloat, plotLeft: CGFloat, plotWidth: CGFloat) -> Int {
         guard plotWidth > 0 else { return 0 }
         return Int(min(max(((x - plotLeft) / plotWidth * 4).rounded(), 0), 4))
     }
