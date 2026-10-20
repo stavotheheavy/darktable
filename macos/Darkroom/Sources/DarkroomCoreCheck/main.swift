@@ -1192,5 +1192,46 @@ do {
           part[0] == after[0] && part[1] == img[1])
 }
 
+// MG: linear gradient mask (card maskgradient)
+do {
+    func ga(_ b: [String: Double], _ x: Double, _ y: Double) -> Double {
+        MaskGradient.alpha(p: MaskGradient.params(b), x: x, y: y, width: 48, height: 40)
+    }
+    let hard: [String: Double] = ["mask_angle": 0, "mask_position": 0.5, "mask_feather": 0]
+    check("GR1 angle 0 hard edge grows to the right, independent of y",
+          [5.0, 35.0].allSatisfy { ga(hard, 23.5, $0) == 0 && ga(hard, 24.5, $0) == 1 } && ga(hard, 0.5, 20) == 0 && ga(hard, 47.5, 20) == 1)
+    var h90 = hard; h90["mask_angle"] = 90
+    check("GR2 angle 90 grows downward, independent of x",
+          [5.0, 40.0].allSatisfy { ga(h90, $0, 19.5) == 0 && ga(h90, $0, 20.5) == 1 })
+    let soft: [String: Double] = ["mask_angle": 0, "mask_position": 0.5, "mask_feather": 0.4]
+    var mono = true, prev = -1.0
+    for i in 0..<48 { let a = ga(soft, Double(i) + 0.5, 20); if a < prev { mono = false }; prev = a }
+    check("GR3 feather band centred and the stated width",
+          abs(ga(soft, 24.0, 20) - 0.5) < 1e-12 && abs(ga(soft, 11.5036, 20)) < 1e-9 && abs(ga(soft, 36.4964, 20) - 1) < 1e-9 && mono,
+          "\(ga(soft, 24, 20)) \(ga(soft, 11.5036, 20)) \(ga(soft, 36.4964, 20)) mono \(mono)")
+    var h180 = hard; h180["mask_angle"] = 180
+    check("GR4 angle 180 is the mirror of angle 0",
+          (0..<48).allSatisfy { ga(h180, Double($0) + 0.5, 20) == 1 - ga(hard, Double($0) + 0.5, 20) })
+    var h25 = hard; h25["mask_position"] = 0.25
+    check("GR5 position 0.25 puts the edge at x = 8.3795", ga(h25, 7.5, 20) == 0 && ga(h25, 8.5, 20) == 1)
+    let pd = MaskGradient.params([:])
+    var p90 = MaskGradient.params(["mask_angle": 90])
+    check("GR6 keys: defaults, degrees, clamps",
+          pd == [0, 0.5, 0.2] && abs(p90[0] - .pi / 2) < 1e-12
+          && MaskGradient.params(["mask_position": 1.7])[1] == 1 && MaskGradient.params(["mask_position": -0.3])[1] == 0
+          && MaskGradient.params(["mask_feather": 2])[2] == 1 && MaskGradient.params(["mask_feather": -1])[2] == 0, "\(pd)")
+    p90 = []
+    let rot: [String: Double] = ["mask_angle": 45, "mask_position": 0.5, "mask_feather": 0.3]
+    check("GR7 rotation about the frame centre",
+          abs(ga(rot, 24, 20) - 0.5) < 1e-12 && abs(ga(rot, 29, 17) + ga(rot, 19, 23) - 1) < 1e-12)
+    let g8: [String: Double] = ["mask_angle": 33, "mask_position": 0.4, "mask_feather": 0.5]
+    var ok8 = true
+    for i in 0..<20 { for j in 0..<20 {
+        let a = ga(g8, (Double(i) + 0.5) * 48 / 20, (Double(j) + 0.5) * 40 / 20)
+        if !(a.isFinite && a >= 0 && a <= 1) { ok8 = false }
+    } }
+    check("GR8 finite and within 0...1", ok8)
+}
+
 print(failures == 0 ? "\nall checks passed" : "\n\(failures) failed")
 exit(failures == 0 ? 0 : 1)
