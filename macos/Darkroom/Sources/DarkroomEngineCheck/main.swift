@@ -314,5 +314,63 @@ let eSTLinear = worstLinear(eSTEngine, eSTOracle)
 check("E-ST split toning matches the oracle within 1/255 and unclamped within 1e-4", eST < tol && eSTLinear < 1e-4,
       "encoded \(eST), linear \(eSTLinear)")
 
+// F-E the neighbourhood filters on the GPU, through Core Image, against DarkroomCore.Filters; regions against the full frame
+do {
+    let fw = 64, fh = 48
+    // three different textures per channel so a channel mix-up shows
+    let px: [SIMD4<Float>] = (0..<(fw * fh)).map { i in
+        let x = Double(i % fw), y = Double(i / fw)
+        return SIMD4(Float(0.4 + 0.25 * sin(x / 3.1) * cos(y / 4.7)), Float(0.5 + 0.3 * sin(x / 1.7 + y / 2.3)),
+                     Float(0.2 + 0.15 * cos(x * y / 37)), 1)
+    }
+    func plane(_ c: Int) -> Plane { Plane(width: fw, height: fh, values: px.map { Double($0[c]) }) }
+    func worstAgainst(_ got: [SIMD4<Float>], _ want: [Plane]) -> Double {
+        var w = 0.0
+        for (i, g) in got.enumerated() {
+            for c in 0..<3 {
+                guard g[c].isFinite else { return .infinity }
+                w = max(w, abs(Double(g[c]) - want[c].values[i]))
+            }
+        }
+        return got.count == fw * fh ? w : .infinity
+    }
+    func run(_ f: CIEngineProbe.Filter, region: (x: Int, y: Int, w: Int, h: Int)? = nil) -> [SIMD4<Float>] {
+        (try? CIEngineProbe.filter(f, pixels: px, width: fw, height: fh, region: region)) ?? []
+    }
+    for r in [1, 3, 20] {
+        let e = worstAgainst(run(.box(r)), (0..<3).map { Filters.boxMean(plane($0), radius: r) })
+        check("F-E1 box mean radius \(r) on the GPU matches the oracle within 2e-6", e < 2e-6, "\(e)")
+    }
+    for level in 0...3 {
+        let e = worstAgainst(run(.atrous(level)), (0..<3).map { Filters.atrousSmooth(plane($0), level: level) })
+        check("F-E2 à trous smoothing level \(level) on the GPU matches the oracle within 2e-6", e < 2e-6, "\(e)")
+    }
+    let lum = Plane(width: fw, height: fh, values: px.map { 0.2126 * Double($0.x) + 0.7152 * Double($0.y) + 0.0722 * Double($0.z) })
+    let ge = worstAgainst(run(.guided(4, 1e-3)), (0..<3).map { Filters.guided(guide: lum, input: plane($0), radius: 4, eps: 1e-3) })
+    check("F-E3 guided filter (radius 4, eps 1e-3, luminance guide) on the GPU matches the oracle within 2e-4", ge < 2e-4, "\(ge)")
+    // F-E4 tile seams: a region renders exactly what the full frame has there, inside and at the edges, and the
+    // full frame is the oracle's (so an empty render cannot pass by matching another empty render)
+    let oracles: [String: [Plane]] = [
+        "box": (0..<3).map { Filters.boxMean(plane($0), radius: 5) },
+        "atrous": (0..<3).map { Filters.atrousSmooth(plane($0), level: 2) },
+        "guided": (0..<3).map { Filters.guided(guide: lum, input: plane($0), radius: 4, eps: 1e-3) },
+    ]
+    for (name, f) in [("box", CIEngineProbe.Filter.box(5)), ("atrous", .atrous(2)), ("guided", .guided(4, 1e-3))] {
+        let full = run(f)
+        let fullErr = worstAgainst(full, oracles[name]!)
+        var worstSeam = 0.0, ok = full.count == fw * fh && fullErr < 2e-4
+        for reg in [(x: 17, y: 9, w: 30, h: 25), (x: 0, y: 0, w: 20, h: 20), (x: 50, y: 30, w: 14, h: 18)] {
+            let part = run(f, region: reg)
+            guard part.count == reg.w * reg.h else { ok = false; continue }
+            for yy in 0..<reg.h { for xx in 0..<reg.w {
+                let a = part[yy * reg.w + xx], b = full[(reg.y + yy) * fw + reg.x + xx]
+                for c in 0..<4 { worstSeam = max(worstSeam, abs(Double(a[c]) - Double(b[c]))); if !a[c].isFinite { ok = false } }
+            } }
+        }
+        check("F-E4 \(name) renders the same in a region as in the full frame (inside and at the edges), and the full frame is the oracle's",
+              ok && worstSeam < 1e-6, "seam \(worstSeam), full vs oracle \(fullErr)")
+    }
+}
+
 print(failures == 0 ? "\nall checks passed" : "\n\(failures) failed")
 exit(failures == 0 ? 0 : 1)

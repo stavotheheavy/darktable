@@ -13,6 +13,8 @@ public enum CIBridgeError: Error {
     case noDevice
     case noKernel(String)
     case badArguments
+    /// A spatial kernel got a region of a size it did not ask for (it would read the wrong neighbours).
+    case regionMismatch(input: CGRect, output: CGRect)
 }
 
 /// The pipelines the bridge runs, compiled once from the buffer kernels' own sources plus the texture

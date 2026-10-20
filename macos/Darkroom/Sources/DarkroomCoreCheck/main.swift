@@ -665,5 +665,58 @@ check("ST6 balance +1 tints more than balance 0 at this grey", st6Warm > st6Neut
 let st7 = splitRun(SIMD3(4, 3, 2), shH: 220, shS: 1, hiH: 60, hiS: 1)
 check("ST7 past white stays finite", st7.x.isFinite && st7.y.isFinite && st7.z.isFinite, "\(st7)")
 
+// F-series: the neighbourhood filters (box mean, guided filter, à trous) the detail modules are built on
+do {
+    // a textured 40x30 plane: smooth waves plus a deterministic "noise" term
+    let w = 40, h = 30
+    let tex = Plane(width: w, height: h, values: (0..<(w * h)).map { i in
+        let x = Double(i % w), y = Double(i / w)
+        return 0.4 + 0.25 * sin(x / 3.1) * cos(y / 4.7) + 0.05 * sin(x * 12.9898 + y * 78.233)
+    })
+    // F1 box mean equals a brute-force window sum with clamped edges
+    let r = 3, fast = Filters.boxMean(tex, radius: r)
+    var worst = 0.0
+    for y in 0..<h { for x in 0..<w {
+        var s = 0.0
+        for dy in -r...r { for dx in -r...r { s += tex.at(x + dx, y + dy) } }
+        worst = max(worst, abs(s / Double((2 * r + 1) * (2 * r + 1)) - fast.values[y * w + x]))
+    } }
+    check("F1 box mean equals the brute-force window mean, edges clamped", worst < 1e-12, "\(worst)")
+    // F2 identities
+    let flat = Plane(width: w, height: h, fill: 0.37)
+    check("F2 box mean of a constant is the constant; radius 0 is the identity",
+          Filters.boxMean(flat, radius: 5).values.allSatisfy { abs($0 - 0.37) < 1e-12 } && Filters.boxMean(tex, radius: 0) == tex)
+    // F3 the guided filter's limits: tiny eps self-guided keeps the input; huge eps is the box of the box
+    let keep = Filters.guided(guide: tex, input: tex, radius: 4, eps: 1e-12)
+    let keepErr = zip(keep.values, tex.values).map { abs($0 - $1) }.max() ?? .infinity
+    check("F3 self-guided with eps 1e-12 returns the input", keepErr < 1e-4, "\(keepErr)")
+    let wide = Filters.guided(guide: tex, input: tex, radius: 4, eps: 1e9)
+    let boxbox = Filters.boxMean(Filters.boxMean(tex, radius: 4), radius: 4)
+    let wideErr = zip(wide.values, boxbox.values).map { abs($0 - $1) }.max() ?? .infinity
+    check("F3 with eps 1e9 the guided filter is the box mean of the box mean", wideErr < 1e-6, "\(wideErr)")
+    check("F3 a constant stays constant", Filters.guided(guide: flat, input: flat, radius: 4, eps: 1e-3).values.allSatisfy { abs($0 - 0.37) < 1e-12 })
+    // F4 edge preservation: a 0.1 / 0.9 step stays sharp under the guided filter, and box blurring (the control) smears it
+    let step = Plane(width: w, height: h, values: (0..<(w * h)).map { $0 % w < 20 ? 0.1 : 0.9 })
+    let g = Filters.guided(guide: step, input: step, radius: 4, eps: 1e-4)
+    let left = g.at(19, 15), right = g.at(20, 15), boxLeft = Filters.boxMean(step, radius: 4).at(19, 15)
+    check("F4 the guided filter keeps a step sharp (\(left) | \(right)); box mean smears it (\(boxLeft))",
+          left < 0.15 && right > 0.85 && boxLeft > 0.4, "")
+    let finite = g.values.allSatisfy(\.isFinite) && keep.values.allSatisfy(\.isFinite) && wide.values.allSatisfy(\.isFinite)
+    check("F4 guided outputs are finite", finite)
+    // F5 à trous splits and sums back exactly
+    let (bands, residual) = Filters.atrous(tex, levels: 5)
+    var sum = residual
+    for b in bands { sum = Plane.zip(sum, b, +) }
+    let recon = zip(sum.values, tex.values).map { abs($0 - $1) }.max() ?? .infinity
+    check("F5 à trous bands plus the residual give back the input", recon < 1e-12, "\(recon)")
+    // F6 a constant has no detail
+    check("F6 a constant has zero detail in every band", Filters.atrous(flat, levels: 4).details.allSatisfy { $0.values.allSatisfy { abs($0) < 1e-15 } })
+    // F7 band selectivity: a 2-pixel checkerboard lives in the finest band
+    let checker = Plane(width: w, height: h, values: (0..<(w * h)).map { ((($0 % w) + ($0 / w)) % 2 == 0) ? 0.3 : 0.7 })
+    let cb = Filters.atrous(checker, levels: 4).details.map { $0.values.reduce(0) { $0 + $1 * $1 } }
+    let frac = cb[0] / max(cb.reduce(0, +), 1e-30)
+    check("F7 a 2-pixel checkerboard puts most of its detail energy in the finest band (\(String(format: "%.3f", frac)))", frac > 0.9)
+}
+
 print(failures == 0 ? "\nall checks passed" : "\n\(failures) failed")
 exit(failures == 0 ? 0 : 1)

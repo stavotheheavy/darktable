@@ -6,6 +6,7 @@
 import CoreImage
 import DarkroomCore
 import DarkroomEngineAPI
+import DarkroomMetal
 import Foundation
 import Metal
 
@@ -47,6 +48,34 @@ public enum CIEngineProbe {
                            bounds: ext, format: .RGBAf, colorSpace: space)
         }
         return (out, ow, oh)
+    }
+
+    /// The neighbourhood filters the detail modules use, for darkroom-engine-check's F-E series.
+    public enum Filter: Sendable { case box(Int), atrous(Int), guided(Int, Double) }
+
+    /// Runs `filter` through Core Image on `pixels` and renders the whole frame, or only `region` (x, y, width,
+    /// height, top-left origin) so tile seams can be compared with the full frame.
+    public static func filter(_ filter: Filter, pixels: [SIMD4<Float>], width: Int, height: Int,
+                              region: (x: Int, y: Int, w: Int, h: Int)? = nil) throws -> [SIMD4<Float>] {
+        guard pixels.count == width * height, let space = CGColorSpace(name: CGColorSpace.extendedLinearSRGB),
+              let device = MTLCreateSystemDefaultDevice() else { throw EngineError("probe: bad input") }
+        let input = CIImage(bitmapData: pixels.withUnsafeBytes { Data($0) }, bytesPerRow: width * 16,
+                            size: CGSize(width: width, height: height), format: .RGBAf, colorSpace: space)
+        let output: CIImage
+        switch filter {
+        case .box(let r): output = try CIBridge.boxMean(input, radius: r)
+        case .atrous(let level): output = try CIBridge.atrousSmooth(input, level: level)
+        case .guided(let r, let eps): output = try CIBridge.guided(input, radius: r, eps: eps)
+        }
+        let r = region ?? (0, 0, width, height)
+        // top-left region to Core Image's bottom-left coordinates
+        let bounds = CGRect(x: r.x, y: height - r.y - r.h, width: r.w, height: r.h)
+        let context = CIContext(mtlDevice: device, options: [.workingColorSpace: space, .workingFormat: CIFormat.RGBAf, .cacheIntermediates: false])
+        var out = [SIMD4<Float>](repeating: .zero, count: r.w * r.h)
+        out.withUnsafeMutableBytes { buf in
+            context.render(output, toBitmap: buf.baseAddress!, rowBytes: r.w * 16, bounds: bounds, format: .RGBAf, colorSpace: space)
+        }
+        return out
     }
 
     /// The engine's reading of a camera EXIF orientation value (1...8).
