@@ -738,5 +738,89 @@ do {
     check("DC3 a negative new s gives black, not NaN", dark[1] == SIMD3(0, 0, 0), "\(dark[1])")
 }
 
+// LC local contrast on square-root luminance (DarkroomCore.LocalContrast)
+do {
+    let fw = 48, fh = 40
+    let fix = DetailCommon.fixture(width: fw, height: fh)
+    func maxDiff(_ a: [SIMD3<Double>], _ b: [SIMD3<Double>]) -> Double {
+        var w = 0.0
+        for (p, q) in zip(a, b) { for c in 0..<3 { w = max(w, abs(p[c] - q[c])) } }
+        return a.count == b.count ? w : .infinity
+    }
+    func finite(_ a: [SIMD3<Double>]) -> Bool { a.allSatisfy { $0.x.isFinite && $0.y.isFinite && $0.z.isFinite } }
+    // a grey step at x = 20 (s = 0.2 left, s = 0.8 right) and a grey sine wave in s (Y = s^2)
+    let stepGrey: [SIMD3<Double>] = (0..<(40 * 16)).map { i in SIMD3(repeating: i % 40 < 20 ? 0.04 : 0.64) }
+    let waveGrey: [SIMD3<Double>] = (0..<(60 * 60)).map { i in
+        let s = 0.5 + 0.02 * sin(2 * Double.pi * Double(i % 60) / 8)
+        return SIMD3(repeating: s * s)
+    }
+    func popStd(_ p: Plane, width: Int) -> Double {
+        var vals: [Double] = []
+        for y in 20..<40 { for x in 20..<40 { vals.append(p.values[y * width + x]) } }
+        let m = vals.reduce(0, +) / Double(vals.count)
+        return sqrt(vals.reduce(0) { $0 + ($1 - m) * ($1 - m) } / Double(vals.count))
+    }
+
+    // LC1 detail 0 is the identity; flat colour at detail 2 is unchanged
+    let id = LocalContrast.apply(fix, width: fw, height: fh, detail: 0, radius: 5)
+    let flat = [SIMD3<Double>](repeating: SIMD3(0.3, 0.2, 0.1), count: 16 * 16)
+    let flatOut = LocalContrast.apply(flat, width: 16, height: 16, detail: 2, radius: 2)
+    let lc1 = maxDiff(id, fix), lc1b = maxDiff(flatOut, flat)
+    check("LC1 detail 0 is the identity, and flat colour at detail 2 is unchanged, within 1e-12",
+          lc1.isFinite && lc1 < 1e-12 && lc1b.isFinite && lc1b < 1e-12, "\(lc1), \(lc1b)")
+
+    // LC2 the method: sqrt(Y_out) = max(s + 0.8 (s - guided(s)), 0) on every pixel
+    let s = DetailCommon.sqrtLuminance(fix, width: fw, height: fh)
+    let ref = Filters.guided(guide: s, input: s, radius: 5, eps: 0.01)
+    let out = LocalContrast.apply(fix, width: fw, height: fh, detail: 0.8, radius: 5)
+    let sOut = DetailCommon.sqrtLuminance(out, width: fw, height: fh)
+    var e2 = 0.0
+    for i in fix.indices where 0.2126 * fix[i].x + 0.7152 * fix[i].y + 0.0722 * fix[i].z > 1e-6 {
+        e2 = max(e2, abs(sOut.values[i] - max(s.values[i] + 0.8 * (s.values[i] - ref.values[i]), 0)))
+    }
+    check("LC2 sqrt(Y_out) equals max(s + 0.8 (s - guided), 0) within 1e-9", e2.isFinite && e2 < 1e-9, "\(e2)")
+
+    // LC3 edge-aware: the boost at the step is much smaller than a box base would give
+    let stepS = DetailCommon.sqrtLuminance(stepGrey, width: 40, height: 16)
+    let stepOut = DetailCommon.sqrtLuminance(LocalContrast.apply(stepGrey, width: 40, height: 16, detail: 1, radius: 4), width: 40, height: 16)
+    let boxBase = Filters.boxMean(stepS, radius: 4)
+    var dGuided = 0.0, dBox = 0.0
+    for x in 19...20 {
+        let i = 8 * 40 + x
+        dGuided = max(dGuided, abs(stepOut.values[i] - stepS.values[i]))
+        dBox = max(dBox, abs(stepS.values[i] - boxBase.values[i]))
+    }
+    let ratio3 = dGuided / dBox
+    check("LC3 the boost at the step is under 0.3 times the box-base boost (edge-aware, no halo)",
+          ratio3.isFinite && ratio3 < 0.3, "guided \(dGuided), box \(dBox), ratio \(ratio3)")
+
+    // LC4 and LC5 positive detail boosts texture, negative detail flattens it
+    let waveS = DetailCommon.sqrtLuminance(waveGrey, width: 60, height: 60)
+    let inStd = popStd(waveS, width: 60)
+    let up = popStd(DetailCommon.sqrtLuminance(LocalContrast.apply(waveGrey, width: 60, height: 60, detail: 1, radius: 4), width: 60, height: 60), width: 60)
+    let down = popStd(DetailCommon.sqrtLuminance(LocalContrast.apply(waveGrey, width: 60, height: 60, detail: -1, radius: 4), width: 60, height: 60), width: 60)
+    let ratio4 = up / inStd, ratio5 = down / inStd
+    check("LC4 detail 1 raises the population std of s by 1.85 to 2.05 times", ratio4.isFinite && ratio4 > 1.85 && ratio4 < 2.05, "\(ratio4)")
+    check("LC5 detail -1 flattens: the std of s falls under 0.1 times", ratio5.isFinite && ratio5 < 0.1, "\(ratio5)")
+
+    // LC6 hue and chroma are untouched: each channel's ratio to its input is the same
+    let fixOut = LocalContrast.apply(fix, width: fw, height: fh, detail: 1, radius: 6)
+    var e6 = 0.0
+    for (p, q) in zip(fixOut, fix) {
+        let rx = p.x / q.x, ry = p.y / q.y, rz = p.z / q.z
+        e6 = max(e6, abs(rx - ry) / max(1, abs(rx)), abs(rx - rz) / max(1, abs(rx)))
+    }
+    check("LC6 each channel's ratio to its input is the same on every pixel (hue and chroma kept)", e6.isFinite && e6 < 1e-9, "\(e6)")
+
+    // LC7 finite on the fixture at detail 2 and -1, and black stays black
+    var blackIn = fix
+    blackIn[0] = SIMD3(0, 0, 0)
+    let o2 = LocalContrast.apply(blackIn, width: fw, height: fh, detail: 2, radius: 5)
+    let o7 = LocalContrast.apply(blackIn, width: fw, height: fh, detail: -1, radius: 5)
+    check("LC7 output is finite at detail 2 and -1, and black stays exactly black",
+          finite(LocalContrast.apply(fix, width: fw, height: fh, detail: 2, radius: 5)) && finite(o2) && finite(o7)
+          && o2[0] == SIMD3(0, 0, 0) && o7[0] == SIMD3(0, 0, 0))
+}
+
 print(failures == 0 ? "\nall checks passed" : "\n\(failures) failed")
 exit(failures == 0 ? 0 : 1)
