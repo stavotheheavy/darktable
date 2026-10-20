@@ -186,16 +186,19 @@ extension CIModule {
                 image.applyingFilter("CIVibrance", parameters: [kCIInputAmountKey: v["strength"] ?? 0])
             }),
 
-        // Monochrome, approximate: a single tint colour over the luminance.
+        // Monochrome: black and white with a colour filter. Intensity 0 leaves the image unchanged; greys stay grey.
         CIModule(
-            operation: "monochrome", name: "monochrome (approximate)", iopOrder: 45,
+            operation: "monochrome", name: "monochrome", iopOrder: 45,
             defaultEnabled: false,
-            fields: [field("intensity", 0, 1, 0)],
+            fields: [field("intensity", 0, 1, 0), field("filter_hue", 0, 360, 30), field("filter_strength", 0, 1, 0)],
+            // DarkroomCore's Monochrome on the oracle-checked per-pixel kernel (darkroom-engine-check E-MO)
             apply: { image, v in
-                image.applyingFilter("CIColorMonochrome", parameters: [
-                    kCIInputColorKey: CIColor(red: 0.5, green: 0.5, blue: 0.5),
-                    kCIInputIntensityKey: v["intensity"] ?? 0,
-                ])
+                let intensity = v["intensity"] ?? 0
+                guard intensity > 0 else { return image }
+                let hue = (v["filter_hue"] ?? 30) * .pi / 180
+                return try CIBridge.perPixel(image, source: MetalMonochrome.source, function: "monochromeTex",
+                                             uniforms: [Float(intensity), Float(v["filter_strength"] ?? 0),
+                                                        Float(cos(hue)), Float(sin(hue))])
             }),
 
         // Vignetting: darkens the corners. Zero strength is off.

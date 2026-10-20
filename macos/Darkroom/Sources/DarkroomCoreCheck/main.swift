@@ -556,5 +556,47 @@ check("CM3 a mono mix", near(ChannelMixer.apply(SIMD3(0.5, 0.25, 1.0), rows: cmM
 check("CM4 no clamp above white", near(ChannelMixer.apply(SIMD3(1.5, 0.2, 0.1), rows: [[2, 0, 0], [0, 2, 0], [0, 0, 2]]), SIMD3(3.0, 0.4, 0.2), 1e-12))
 check("CM4 no clamp below black", near(ChannelMixer.apply(SIMD3(0.4, 0.5, 0.6), rows: [[-1, 0, 0], [0, 1, 0], [0, 0, 1]]), SIMD3(-0.4, 0.5, 0.6), 1e-12))
 
+// MO monochrome with a colour filter: intensity 0 leaves colours alone, intensity 1 gives the luminance grey,
+// the filter lightens its own hue and darkens the opposite, and greys and zero stay put
+let moColours = (0..<4096).map { i in
+    SIMD3(Double(i % 16) / 15 * 1.5 + 0.01, Double((i / 16) % 16) / 15 * 1.5 + 0.01, Double(i / 256) / 15 * 1.5 + 0.01)
+}
+let moIdentity = moColours.allSatisfy { near(Monochrome.apply($0, intensity: 0, filterHueDegrees: 30, filterStrength: 1), $0, 1e-12) }
+check("MO1 intensity 0 is the identity on 4096 colours", moIdentity)
+let moWhite = Monochrome.apply(SIMD3(0.5, 0.25, 1.0), intensity: 1, filterHueDegrees: 30, filterStrength: 0)
+check("MO2 plain black and white is the luminance grey 0.3573", near(moWhite, SIMD3(repeating: 0.3573), 1e-12), "\(moWhite)")
+let moGrey = Monochrome.apply(SIMD3(repeating: 0.3), intensity: 1, filterHueDegrees: 30, filterStrength: 1)
+check("MO3 greys ignore the filter", near(moGrey, SIMD3(repeating: 0.3), 1e-9), "\(moGrey)")
+func moColour(_ hueDegrees: Double) -> SIMD3<Double> {
+    OkLab.toWorking(OkLab.lab(SIMD3(0.6, 0.15, hueDegrees * .pi / 180)))
+}
+let moHot = moColour(30), moCold = moColour(210)
+let hotRatio = Monochrome.apply(moHot, intensity: 1, filterHueDegrees: 30, filterStrength: 0.5).x
+    / Monochrome.apply(moHot, intensity: 1, filterHueDegrees: 30, filterStrength: 0).x
+let coldRatio = Monochrome.apply(moCold, intensity: 1, filterHueDegrees: 30, filterStrength: 0.5).x
+    / Monochrome.apply(moCold, intensity: 1, filterHueDegrees: 30, filterStrength: 0).x
+check("MO4 the filter's own hue is lighter by 1.5", abs(hotRatio - 1.5) < 1e-9, "\(hotRatio)")
+check("MO4 the opposite hue is darker by 0.5", abs(coldRatio - 0.5) < 1e-9, "\(coldRatio)")
+let moHalf = Monochrome.apply(SIMD3(0.5, 0.25, 1.0), intensity: 0.5, filterHueDegrees: 30, filterStrength: 0)
+check("MO5 half intensity is the midpoint of input and grey", near(moHalf, (SIMD3(0.5, 0.25, 1.0) + moWhite) / 2, 1e-12), "\(moHalf)")
+let moHotOut = Monochrome.apply(SIMD3(4, 3, 2), intensity: 1, filterHueDegrees: 30, filterStrength: 1)
+let moZero = Monochrome.apply(SIMD3(0, 0, 0), intensity: 1, filterHueDegrees: 30, filterStrength: 1)
+let moFinite = [moHotOut, moZero].allSatisfy { $0.x.isFinite && $0.y.isFinite && $0.z.isFinite }
+check("MO6 past white and black give finite outputs", moFinite, "\(moHotOut) \(moZero)")
+check("MO6 black stays black", moZero == SIMD3(0, 0, 0), "\(moZero)")
+
+// MO7 the chroma fade: at chroma 0.075 (half of the 0.15 full fade) the filter's factor is 1 + 0.5 * 0.5 = 1.25
+// on its own hue and 1 - 0.5 * 0.5 = 0.75 on the opposite hue; without the fade both would be 1.5 and 0.5
+func moFadeColour(_ hueDegrees: Double) -> SIMD3<Double> {
+    OkLab.toWorking(OkLab.lab(SIMD3(0.6, 0.075, hueDegrees * .pi / 180)))
+}
+let moFadeHot = moFadeColour(30), moFadeCold = moFadeColour(210)
+let fadeHotRatio = Monochrome.apply(moFadeHot, intensity: 1, filterHueDegrees: 30, filterStrength: 0.5).x
+    / Monochrome.apply(moFadeHot, intensity: 1, filterHueDegrees: 30, filterStrength: 0).x
+let fadeColdRatio = Monochrome.apply(moFadeCold, intensity: 1, filterHueDegrees: 30, filterStrength: 0.5).x
+    / Monochrome.apply(moFadeCold, intensity: 1, filterHueDegrees: 30, filterStrength: 0).x
+check("MO7 half chroma: the filter's own hue is lighter by 1.25", abs(fadeHotRatio - 1.25) < 1e-9, "\(fadeHotRatio)")
+check("MO7 half chroma: the opposite hue is darker by 0.75", abs(fadeColdRatio - 0.75) < 1e-9, "\(fadeColdRatio)")
+
 print(failures == 0 ? "\nall checks passed" : "\n\(failures) failed")
 exit(failures == 0 ? 0 : 1)

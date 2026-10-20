@@ -294,5 +294,13 @@ let eCM = worst(cmOut, cmOracle), eCMLinear = worstLinear(cmOut, cmOracle)
 check("E-CM channel mixer matches the oracle within 1/255 and unclamped (relative 1e-5)", eCM < tol && eCMLinear < 1e-5,
       "encoded \(eCM), linear \(eCMLinear)")
 
+// E-MO monochrome with a colour filter: the per-pixel kernel through the engine (monochromeTex) against Monochrome in DarkroomCore
+let monoStack = [StackEntry(operation: "monochrome", params: ["intensity": .number(0.8), "filter_hue": .number(200), "filter_strength": .number(0.7)])]
+let monoOracle = scene.map { Monochrome.apply($0, intensity: 0.8, filterHueDegrees: 200, filterStrength: 0.7) }
+let eMO = worst(run(monoStack), monoOracle)
+check("E-MO monochrome matches the oracle within 1/255", eMO < tol, "\(eMO)")
+let eMOLinear = worstLinear(run(monoStack), monoOracle)
+check("E-MO monochrome matches the oracle unclamped (relative 1e-4)", eMOLinear < 1e-4, "\(eMOLinear)")
+
 print(failures == 0 ? "\nall checks passed" : "\n\(failures) failed")
 exit(failures == 0 ? 0 : 1)
