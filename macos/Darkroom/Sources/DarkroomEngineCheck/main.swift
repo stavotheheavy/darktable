@@ -464,5 +464,31 @@ do {
           e < tol && el < 2e-4, "encoded \(e), linear \(el)")
 }
 
+// E-EQ the contrast equalizer through the engine (CIBridge.contrastEqualizer) against ContrastEqualizer, with tile seams
+do {
+    let eqStack = [StackEntry(operation: "atrous", params: ["fine": .number(0.6), "medium": .number(-0.4), "coarse": .number(0.9)])]
+    let oracle = ContrastEqualizer.apply(detailImg, width: detailW, height: detailH, fine: 0.6, medium: -0.4, coarse: 0.9)
+    let eqEngine = runDetail(eqStack)
+    let eqErr = worst(eqEngine, oracle), eqLinear = worstLinear(eqEngine, oracle)
+    check("E-EQ contrast equalizer matches the oracle within 1/255 and unclamped within 2e-4",
+          eqErr < tol && eqLinear < 2e-4, "encoded \(eqErr), unclamped \(eqLinear)")
+    let eqSeams = detailSeams(eqStack, oracle: oracle)
+    check("E-EQ-seam contrast equalizer tiles match the full frame, and the full frame is the oracle's",
+          eqSeams.ok, "seam \(eqSeams.seam), full vs oracle \(eqSeams.fullVsOracle)")
+    // fine alone: the finest group is wired to the GPU's finest bands
+    let fineStack = [StackEntry(operation: "atrous", params: ["fine": .number(1)])]
+    let fineOracle = ContrastEqualizer.apply(detailImg, width: detailW, height: detailH, fine: 1, medium: 0, coarse: 0)
+    let fineEngine = runDetail(fineStack)
+    let fineErr = worst(fineEngine, fineOracle), fineLinear = worstLinear(fineEngine, fineOracle)
+    check("E-EQ-fine fine +1 alone matches the oracle within 1/255 and unclamped within 2e-4",
+          fineErr < tol && fineLinear < 2e-4, "encoded \(fineErr), unclamped \(fineLinear)")
+    // all sliders at 0: the input comes back untouched, bit for bit (a non-finite value never compares equal)
+    let zeroStack = [StackEntry(operation: "atrous", params: ["fine": .number(0), "medium": .number(0), "coarse": .number(0)])]
+    let zeroEngine = runDetail(zeroStack)
+    let zeroExact = zeroEngine.count == detailPx.count && zip(zeroEngine, detailPx).allSatisfy { $0 == $1 }
+    check("E-EQ-zero all sliders at 0 return the input bit-exactly", zeroExact,
+          "count \(zeroEngine.count) of \(detailPx.count)")
+}
+
 print(failures == 0 ? "\nall checks passed" : "\n\(failures) failed")
 exit(failures == 0 ? 0 : 1)
