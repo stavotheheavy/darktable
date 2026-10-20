@@ -163,7 +163,9 @@ struct ProPanel: View {
 
     var body: some View {
         VStack(spacing: 12) {
+            // a compact scope: the sections are what Pro is for, and the curve must be on screen at 860 pt
             ScopesCard(model: model)
+                .frame(height: 176)
             ScrollView {
                 VStack(alignment: .leading, spacing: 8) {
                     let entries = model.proPanelEntries
@@ -193,13 +195,15 @@ struct ProSection: View {
 
     var body: some View {
         let on = model.proEffectOn(entry), open = model.proOpen.contains(entry.id)
+        // dimmed only when an edit is switched off: a basic at neutral is off in the engine but changes nothing
+        let dim = !on && model.proEdited(entry)
         VStack(alignment: .leading, spacing: 4) {
             HStack(spacing: 6) {
                 Button { model.toggleProEffect(entry) } label: {
                     Image(systemName: "power")
                         .font(.system(size: 14, weight: .semibold))
                         .foregroundStyle(on ? Theme.accent : Color.secondary)
-                        .frame(width: 36, height: 36)
+                        .frame(width: 44, height: 44)
                         .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
@@ -216,7 +220,7 @@ struct ProSection: View {
                             .foregroundStyle(.secondary)
                             .rotationEffect(.degrees(open ? 0 : -90))
                     }
-                    .frame(height: 36)
+                    .frame(height: 44)
                     .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
@@ -234,12 +238,12 @@ struct ProSection: View {
                 body(for: entry)
                     .padding(.horizontal, 6)
                     .padding(.bottom, 8)
-                    .opacity(on ? 1 : 0.5)
+                    .opacity(dim ? 0.5 : 1)
             }
         }
         .padding(.horizontal, 4)
         .background(Color.white.opacity(0.06), in: RoundedRectangle(cornerRadius: 18))
-        .opacity(on ? 1 : 0.75)
+        .opacity(dim ? 0.75 : 1)
     }
 
     @ViewBuilder

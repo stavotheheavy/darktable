@@ -147,6 +147,11 @@ public final class Rig {
             "historyCount": model.history.count, "historyIndex": model.historyIndex,
             "lastRenderMs": model.lastMilliseconds ?? -1,
             "zoom": model.zoom.rawValue,
+            // Pro's panel, in order: the section, its first operation, effect on, unfolded
+            "pro": model.proPanelEntries.map { ["name": $0.name, "op": $0.modules[0].operation,
+                                                "on": model.proEffectOn($0), "open": model.proOpen.contains($0.id)] as [String: Any] },
+            "curve": model.curveNodes ?? [],
+            "looksOpen": UserDefaults.standard.bool(forKey: SimplePanel.looksOpenKey),
             "rssMB": Int(Self.rssMB()),
             "clicks": clicks,
             "library": ["order": library.shown.prefix(6).map { "\($0.name):\(Int($0.sharpness ?? -1))" }, "comparing": library.items.isEmpty ? false : (comparingNow?() ?? false),
@@ -315,6 +320,22 @@ public final class Rig {
             default: return ["ok": false, "error": "unknown library action"]
             }
             result = ["ok": true, "selected": library.selected ?? ""]
+        } else if let pro = o["pro"] as? String {
+            // model-level Pro actions (native menus cannot be clicked by the rig):
+            // add|remove|power|fold <op>, preset <look id>, history <index>, curve <node 0-4> <0..1>
+            let parts = pro.split(separator: " ").map(String.init)
+            let entry = parts.count > 1 ? model.proMenu.flatMap(\.entries).first { $0.modules.contains { $0.operation == parts[1] } } : nil
+            switch parts.first ?? "" {
+            case "add": guard let e = entry else { return ["ok": false, "error": "no module \(parts.dropFirst().joined())"] }; model.addToPanel(e)
+            case "remove": guard let e = entry else { return ["ok": false, "error": "no module \(parts.dropFirst().joined())"] }; model.removeFromPanel(e)
+            case "power": guard let e = entry, model.inProPanel(e) else { return ["ok": false, "error": "not in the panel"] }; model.toggleProEffect(e)
+            case "fold": guard let e = entry else { return ["ok": false, "error": "no module"] }; model.toggleProFold(e)
+            case "preset": guard parts.count > 1, let look = SimpleLook.all.first(where: { $0.id == parts[1] }) else { return ["ok": false, "error": "no look"] }; model.apply(look)
+            case "history": guard parts.count > 1, let i = Int(parts[1]), model.history.indices.contains(i) else { return ["ok": false, "error": "no step"] }; model.jump(to: i)
+            case "curve": guard parts.count > 2, let i = Int(parts[1]), let y = Double(parts[2]) else { return ["ok": false, "error": "curve <node> <0..1>"] }; model.setCurveNode(i, y)
+            default: return ["ok": false, "error": "unknown pro action"]
+            }
+            result = ["ok": true, "panel": model.proPanelEntries.map(\.name)]
         } else if let id = o["select"] as? String {
             guard let m = model.modules.first(where: { $0.id == id || $0.operation == id }) else { return ["ok": false, "error": "no module \(id)"] }
             model.select(m); result = ["ok": true, "selected": m.id]
