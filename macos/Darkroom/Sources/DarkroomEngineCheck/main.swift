@@ -558,5 +558,33 @@ do {
           (try? CIEngineProbe.render(stack: [masked(bad)], pixels: detailPx, width: detailW, height: detailH)) == nil)
 }
 
+// MaskEllipse (EL): GPU matte, stack, seams and inversion against the oracle
+do {
+    let b1: [String: Double] = ["mask_cx": 0.4, "mask_cy": 0.6, "mask_rx": 0.3, "mask_ry": 0.15, "mask_rotation": 25, "mask_feather": 0.4]
+    let b2: [String: Double] = ["mask_cx": 0.7, "mask_cy": 0.3, "mask_rx": 0.2, "mask_ry": 0.2, "mask_rotation": 0, "mask_feather": 0.6]
+    func spec(_ b: [String: Double]) -> MaskSpec { Mask.spec(from: b.merging(["mask_mode": 2, "mask_kind": 2]) { $1 })! }
+    let e1 = maskMatteError(spec(b1)), e2 = maskMatteError(spec(b2))
+    check("E-EL-matte GPU matte equals the oracle", e1 < 1e-4 && e2 < 1e-4, "worst \(e1), \(e2)")
+
+    func blend(_ b: [String: Double], invert: Bool = false) -> [String: ParamValue] {
+        var out = b.mapValues { ParamValue.number($0) }
+        out["mask_mode"] = .number(2); out["mask_kind"] = .number(2)
+        if invert { out["mask_invert"] = .number(1) }
+        return out
+    }
+    let s = spec(b1), oracle = maskedExposureOracle(s)
+    let got = runDetail([maskedExposure(blend(b1))])
+    let wr = worst(got, oracle), wl = worstLinear(got, oracle)
+    check("E-EL-stack masked exposure equals the oracle", wr < tol && wl < 2e-4, "encoded \(wr), linear \(wl)")
+
+    let seam = detailSeams([maskedExposure(blend(b1))], oracle: oracle)
+    check("E-EL-seam regions equal the full frame", seam.ok, "seam \(seam.seam), full vs oracle \(seam.fullVsOracle)")
+
+    var si = s; si.invert = true
+    let gi = runDetail([maskedExposure(blend(b1, invert: true))])
+    let wri = worst(gi, maskedExposureOracle(si)), wli = worstLinear(gi, maskedExposureOracle(si))
+    check("E-EL-invert inverted mask equals the oracle", wri < tol && wli < 2e-4, "encoded \(wri), linear \(wli)")
+}
+
 print(failures == 0 ? "\nall checks passed" : "\n\(failures) failed")
 exit(failures == 0 ? 0 : 1)

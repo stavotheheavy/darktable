@@ -1192,5 +1192,53 @@ do {
           part[0] == after[0] && part[1] == img[1])
 }
 
+// MaskEllipse (EL1...EL8): frame 48 by 40, D = hypot(48, 40)
+do {
+    let W = 48.0, H = 40.0, D = hypot(W, H)
+    func el(_ b: [String: Double], _ x: Double, _ y: Double) -> Double {
+        MaskEllipse.alpha(p: MaskEllipse.params(b), x: x, y: y, width: W, height: H)
+    }
+    let d0 = el([:], 24, 20), d1 = el([:], 0.5, 0.5)
+    check("EL1 centre is 1, far corner is 0", d0 == 1 && d1 == 0, "centre \(d0), corner \(d1)")
+
+    let hard: [String: Double] = ["mask_rx": 0.2, "mask_ry": 0.1, "mask_feather": 0]
+    let hx = (el(hard, 24 + 12.4, 20), el(hard, 24 + 12.6, 20)), hy = (el(hard, 24, 20 + 6.2), el(hard, 24, 20 + 6.3))
+    check("EL2 hard edge on the axes (rx, ry in diagonals)", hx == (1, 0) && hy == (1, 0), "x \(hx), y \(hy)")
+
+    let fe: [String: Double] = ["mask_rx": 0.2, "mask_ry": 0.2, "mask_feather": 0.5]
+    let f75 = el(fe, 24 + 0.2 * D * 0.75, 20), f50 = el(fe, 24 + 0.2 * D * 0.5, 20), f100 = el(fe, 24 + 0.2 * D, 20)
+    check("EL3 feather fades inward from the edge", abs(f75 - 0.5) < 1e-9 && abs(f50 - 1) < 1e-12 && abs(f100) < 1e-9,
+          "r.75 \(f75), r.5 \(f50), r1 \(f100)")
+
+    func rot(_ deg: Double) -> [String: Double] { ["mask_rx": 0.3, "mask_ry": 0.1, "mask_feather": 0, "mask_rotation": deg] }
+    let a45 = (el(rot(45), 34, 30), el(rot(45), 34, 10)), m45 = (el(rot(-45), 34, 30), el(rot(-45), 34, 10))
+    check("EL4 rotation sign", a45 == (1, 0) && m45 == (0, 1), "45 \(a45), -45 \(m45)")
+
+    let ck: [String: Double] = ["mask_cx": 0.25, "mask_cy": 0.75, "mask_rx": 0.2, "mask_ry": 0.2]
+    let c1 = el(ck, 12, 30), c2 = el(ck, 36, 10)
+    check("EL5 centre keys", c1 == 1 && c2 == 0, "centre \(c1), far \(c2)")
+
+    let pd = MaskEllipse.params([:])
+    let pz = MaskEllipse.params(["mask_rx": 0]), pr = MaskEllipse.params(["mask_rotation": 90])
+    let pf = MaskEllipse.params(["mask_feather": 3]), pc = MaskEllipse.params(["mask_cx": -2])
+    check("EL6 keys, defaults and clamps",
+          pd == [0.5, 0.5, 0.25, 0.25, 0, 0.2] && pz[2] == 1e-4 && abs(pr[4] - Double.pi / 2) < 1e-12 && pf[5] == 1 && pc[0] == 0,
+          "defaults \(pd), rx0 \(pz[2]), rot90 \(pr[4]), feather3 \(pf[5]), cx-2 \(pc[0])")
+
+    let sym: [String: Double] = ["mask_rotation": 30, "mask_feather": 0.4]
+    var symErr = 0.0
+    for d in [(4.0, 7.0), (-9.0, 2.0)] { symErr = max(symErr, abs(el(sym, 24 + d.0, 20 + d.1) - el(sym, 24 - d.0, 20 - d.1))) }
+    check("EL7 point symmetry about the centre", symErr < 1e-12, "worst \(symErr)")
+
+    var ok = true
+    for b in [[String: Double](), ["mask_rx": 0, "mask_rotation": 33, "mask_feather": 0.3]] {
+        for i in 0..<20 { for j in 0..<20 {
+            let a = el(b, (Double(i) + 0.5) * W / 20, (Double(j) + 0.5) * H / 20)
+            if !(a.isFinite && a >= 0 && a <= 1) { ok = false }
+        } }
+    }
+    check("EL8 finite, within 0...1, no NaN at the radius floor", ok)
+}
+
 print(failures == 0 ? "\nall checks passed" : "\n\(failures) failed")
 exit(failures == 0 ? 0 : 1)
