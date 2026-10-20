@@ -672,5 +672,15 @@ do {
     check("E-CO-invert the inverted colour mask equals the oracle", eIT < tol && eIL < 2e-4, "\(eIT) \(eIL)")
 }
 
+// E-M8 a NaN or infinite mask kind or mode is an error, never a crash (the error message must not trap either)
+do {
+    for blend: [String: ParamValue] in [["mask_mode": .number(2), "mask_kind": .number(.nan)],
+                                        ["mask_mode": .number(2), "mask_kind": .number(.infinity)],
+                                        ["mask_mode": .number(.infinity)], ["mask_mode": .number(.nan), "mask_kind": .number(1)]] {
+        let threw = (try? CIEngineProbe.render(stack: [maskedExposure(blend)], pixels: detailPx, width: detailW, height: detailH)) == nil
+        check("E-M8 a non-finite mask value is an error, not a crash (\(blend.keys.sorted()))", threw)
+    }
+}
+
 print(failures == 0 ? "\nall checks passed" : "\n\(failures) failed")
 exit(failures == 0 ? 0 : 1)

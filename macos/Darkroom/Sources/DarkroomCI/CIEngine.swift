@@ -232,14 +232,14 @@ public actor CIEngine: PhotoEngine {
                 // a local mask (DarkroomCore.Mask): cut from the module's input, then the output is mixed over it
                 let blend = entry.blend.compactMapValues { $0.double }
                 guard let spec = Mask.spec(from: blend) else {
-                    throw EngineError("the clean engine has no mask kind \(Int(blend["mask_kind"] ?? 0))")
+                    throw EngineError("the clean engine has no mask kind \(blend["mask_kind"] ?? 0)")
                 }
                 let matte = try CIBridge.localMask(before, spec: spec)
                 out = try CIBridge.blendMasked(before: before, after: out, mask: matte, opacity: spec.opacity)
                 continue
             }
             guard maskMode == 0 || maskMode == 1 else {
-                throw EngineError("the clean engine has no masks of mode \(Int(maskMode)) (drawn and parametric masks are not built)")
+                throw EngineError("the clean engine has no masks of mode \(maskMode) (drawn and parametric masks are not built)")
             }
             // opacity is a percentage: mix the module's output back over its input
             let opacity = min(max(entry.blend["opacity"]?.double ?? 100, 0), 100) / 100
