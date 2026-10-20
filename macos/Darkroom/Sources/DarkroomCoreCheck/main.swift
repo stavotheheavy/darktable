@@ -170,5 +170,47 @@ do {
     check("A3 with no support the blown red stays at clip", dark[20 * n + 20].x == 1.0, "\(dark[20 * n + 20])")
 }
 
+// AW auto white balance (grey world): a 64 by 64 scene of 8 by 8 patches of 8 by 8 pixels, neutral on average.
+// `replaced` swaps given patches (by index 8 * i + j) for fixed values; the rest take the colour times `cast`.
+func patchScene(cast: SIMD3<Double> = SIMD3(1, 1, 1), replaced: [Int: SIMD3<Double>] = [:]) -> [SIMD3<Double>] {
+    var img = [SIMD3<Double>](repeating: SIMD3(repeating: 0), count: 64 * 64)
+    for i in 0..<8 {
+        for j in 0..<8 {
+            let a = 2 * Double.pi * Double(8 * i + j) / 64
+            let colour = 0.3 * SIMD3<Double>(1 + 0.6 * cos(a), 1 + 0.6 * cos(a - 2.094), 1 + 0.6 * cos(a + 2.094))
+            let value = replaced[8 * i + j] ?? colour * cast
+            for y in 0..<8 { for x in 0..<8 { img[(8 * i + y) * 64 + 8 * j + x] = value } }
+        }
+    }
+    return img
+}
+// ten patches spread evenly over the 64 (indices 0, 6, 12, 19, 25, 32, 38, 44, 51, 57)
+let spread = (0..<10).map { $0 * 64 / 10 }
+func withinCast(_ g: SIMD3<Double>, _ cast: SIMD3<Double>, _ tol: Double) -> Bool {
+    let r = g * cast
+    return abs(r.x - 1) <= tol && abs(r.y - 1) <= tol && abs(r.z - 1) <= tol
+}
+let castWB = SIMD3<Double>(1.3, 1.0, 0.7)
+let white64 = SIMD3<Double>(1, 1, 1)
+
+check("AW1 neutral scene gives unit gains", near(AutoWhiteBalance.gains(patchScene(), width: 64, height: 64), white64, 1e-6),
+      "\(AutoWhiteBalance.gains(patchScene(), width: 64, height: 64))")
+let castGains = AutoWhiteBalance.gains(patchScene(cast: castWB), width: 64, height: 64)
+check("AW2 cast removed within 2%", withinCast(castGains, castWB, 0.02), "\(castGains)")
+let clippedGains = AutoWhiteBalance.gains(
+    patchScene(cast: castWB, replaced: Dictionary(uniqueKeysWithValues: spread.map { ($0, white64) })),
+    width: 64, height: 64)
+check("AW3 clipped patches ignored, cast removed within 2%", withinCast(clippedGains, castWB, 0.02), "\(clippedGains)")
+let blackGains = AutoWhiteBalance.gains(
+    patchScene(cast: castWB, replaced: Dictionary(uniqueKeysWithValues: spread.map { ($0, SIMD3<Double>(0.005, 0.002, 0.009)) })),
+    width: 64, height: 64)
+check("AW4 near-black patches ignored, cast removed within 2%", withinCast(blackGains, castWB, 0.02), "\(blackGains)")
+let allClipped = AutoWhiteBalance.gains([SIMD3<Double>](repeating: white64, count: 64 * 64), width: 64, height: 64)
+let allBlack = AutoWhiteBalance.gains([SIMD3<Double>](repeating: SIMD3(repeating: 0), count: 64 * 64), width: 64, height: 64)
+check("AW5 nothing reliable gives unit gains", near(allClipped, white64, 1e-12) && near(allBlack, white64, 1e-12),
+      "clipped \(allClipped), black \(allBlack)")
+check("AW6 size mismatch gives unit gains",
+      near(AutoWhiteBalance.gains(patchScene(cast: castWB), width: 64, height: 63), white64, 1e-12))
+
 print(failures == 0 ? "\nall checks passed" : "\n\(failures) failed")
 exit(failures == 0 ? 0 : 1)
