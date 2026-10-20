@@ -273,5 +273,17 @@ do {
     }
 }
 
+// E-ST split toning: the same settings through the engine (CIBridge.perPixel, splitTex) against SplitToning in DarkroomCore
+let eSTEngine = run([StackEntry(operation: "splittoning", params: [
+    "shadows_hue": .number(220), "shadows_saturation": .number(0.8),
+    "highlights_hue": .number(60), "highlights_saturation": .number(0.6), "balance": .number(0.3),
+])])
+let eSTOracle = scene.map { SplitToning.apply($0, shadowsHueDegrees: 220, shadowsSaturation: 0.8,
+                                              highlightsHueDegrees: 60, highlightsSaturation: 0.6, balance: 0.3) }
+let eST = worst(eSTEngine, eSTOracle)
+let eSTLinear = worstLinear(eSTEngine, eSTOracle)
+check("E-ST split toning matches the oracle within 1/255 and unclamped within 1e-4", eST < tol && eSTLinear < 1e-4,
+      "encoded \(eST), linear \(eSTLinear)")
+
 print(failures == 0 ? "\nall checks passed" : "\n\(failures) failed")
 exit(failures == 0 ? 0 : 1)

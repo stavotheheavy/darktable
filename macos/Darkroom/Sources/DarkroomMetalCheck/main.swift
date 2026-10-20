@@ -372,5 +372,33 @@ do {
     check("CC1-CC3 colour helpers ran", false, "\(error)")
 }
 
+// split toning on Metal against SplitToning.apply (unclamped): every hue, deep shadow to past white
+do {
+    let count = 4096
+    let pixels = (0..<count).map { i -> SIMD4<Float> in
+        let t = Double(i) / Double(count - 1), h = t * 37 * 2 * .pi, v = 0.002 + 2.5 * t
+        return SIMD4(Float(v * (0.6 + 0.4 * cos(h))), Float(v * (0.6 + 0.4 * cos(h - 2.1))), Float(v * (0.6 + 0.4 * cos(h + 2.1))), 1)
+    }
+    // the uniforms as CIModules builds them: pivot, shadows (a, b), highlights (a, b)
+    let shH = 220 * Double.pi / 180, hiH = 60 * Double.pi / 180
+    let uniforms: [Float] = [0.5 + 0.25 * 0.3, Float(0.08 * 0.8 * cos(shH)), Float(0.08 * 0.8 * sin(shH)),
+                             Float(0.08 * 0.6 * cos(hiH)), Float(0.08 * 0.6 * sin(hiH))]
+    let out = try MetalPerPixel.run(source: MetalSplitToning.source, function: "splitBuf", pixels: pixels, uniforms: uniforms)
+    var worstRel = 0.0, allFinite = out.count == count
+    for (i, px) in pixels.enumerated() where i < out.count {
+        let cpu = SplitToning.apply(SIMD3(Double(px.x), Double(px.y), Double(px.z)), shadowsHueDegrees: 220, shadowsSaturation: 0.8,
+                                    highlightsHueDegrees: 60, highlightsSaturation: 0.6, balance: 0.3)
+        let gpu = SIMD3(Double(out[i].x), Double(out[i].y), Double(out[i].z))
+        for c in 0..<3 {
+            if !gpu[c].isFinite { allFinite = false }
+            worstRel = Swift.max(worstRel, Swift.abs(gpu[c] - cpu[c]) / Swift.max(1, Swift.abs(cpu[c])))
+        }
+    }
+    check("split toning on Metal is finite and within 1e-4 of SplitToning.apply (unclamped)",
+          allFinite && worstRel < 1e-4, "finite \(allFinite), worst relative error \(worstRel)")
+} catch {
+    check("split toning kernel ran", false, "\(error)")
+}
+
 print(failures == 0 ? "\nall Metal checks passed" : "\n\(failures) failed")
 exit(failures == 0 ? 0 : 1)
