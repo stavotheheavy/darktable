@@ -718,5 +718,25 @@ do {
     check("F7 a 2-pixel checkerboard puts most of its detail energy in the finest band (\(String(format: "%.3f", frac)))", frac > 0.9)
 }
 
+// DC: the square-root luminance helpers the S5 detail cards share
+do {
+    let w = 48, h = 40
+    let img = DetailCommon.fixture(width: w, height: h)
+    let s = DetailCommon.sqrtLuminance(img, width: w, height: h)
+    check("DC1 the fixture is finite, positive and has a past-white corner", img.allSatisfy { $0.x.isFinite && $0.y.isFinite && $0.z.isFinite && $0.x > 0 && $0.y > 0 && $0.z > 0 } && img.contains { $0.x > 1 })
+    let back = DetailCommon.applying(sqrtLuminance: s, to: img)
+    var rt = 0.0
+    for (a, b) in zip(back, img) { for c in 0..<3 { rt = max(rt, abs(a[c] - b[c]) / max(1, abs(b[c]))) } }
+    check("DC1 giving a pixel back its own square-root luminance is the identity", rt < 1e-12, "\(rt)")
+    let doubled = DetailCommon.applying(sqrtLuminance: s.map { 2 * $0 }, to: img)
+    var scale = 0.0
+    for (a, b) in zip(doubled, img) { for c in 0..<3 { scale = max(scale, abs(a[c] - 4 * b[c]) / max(1, 4 * abs(b[c]))) } }
+    check("DC2 doubling s multiplies luminance and every channel by 4 (hue and chroma ratios stay)", scale < 1e-12, "\(scale)")
+    let dark = DetailCommon.applying(sqrtLuminance: Plane(width: 2, height: 1, values: [5, -1]),
+                                     to: [SIMD3(1e-8, 1e-8, 1e-8), SIMD3(0.3, 0.2, 0.1)])
+    check("DC3 a pixel at or under the minimum luminance is left alone", dark[0] == SIMD3(1e-8, 1e-8, 1e-8), "\(dark[0])")
+    check("DC3 a negative new s gives black, not NaN", dark[1] == SIMD3(0, 0, 0), "\(dark[1])")
+}
+
 print(failures == 0 ? "\nall checks passed" : "\n\(failures) failed")
 exit(failures == 0 ? 0 : 1)

@@ -372,5 +372,21 @@ do {
     }
 }
 
+// E-DC the square-root luminance kernels on the GPU against DarkroomCore.DetailCommon
+do {
+    let fw = 48, fh = 40
+    let img = DetailCommon.fixture(width: fw, height: fh)
+    let px: [SIMD4<Float>] = img.map { SIMD4(Float($0.x), Float($0.y), Float($0.z), 1) }
+    let s = DetailCommon.sqrtLuminance(img, width: fw, height: fh)
+    let got = (try? CIEngineProbe.filter(.sqrtLuminance, pixels: px, width: fw, height: fh)) ?? []
+    var e = got.count == fw * fh ? 0.0 : Double.infinity
+    for (i, g) in got.enumerated() { for c in 0..<3 { e = g[c].isFinite ? max(e, abs(Double(g[c]) - s.values[i])) : .infinity } }
+    check("E-DC1 square-root luminance on the GPU matches the oracle within 1e-6", e < 1e-6, "\(e)")
+    let round = (try? CIEngineProbe.filter(.sqrtLuminanceRoundTrip, pixels: px, width: fw, height: fh)) ?? []
+    var r = round.count == fw * fh ? 0.0 : Double.infinity
+    for (i, g) in round.enumerated() { for c in 0..<3 { r = g[c].isFinite ? max(r, abs(Double(g[c]) - img[i][c]) / max(1, abs(img[i][c]))) : .infinity } }
+    check("E-DC2 replacing s by itself on the GPU gives the image back within 1e-5", r < 1e-5, "\(r)")
+}
+
 print(failures == 0 ? "\nall checks passed" : "\n\(failures) failed")
 exit(failures == 0 ? 0 : 1)
