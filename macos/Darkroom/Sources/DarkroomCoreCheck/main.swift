@@ -471,5 +471,80 @@ do {
     check("G6 identity spec is the identity", GeometrySpec().isIdentity && close(GeometrySpec().map(SIMD2(5, 7), size: size), SIMD2(5, 7)))
 }
 
+// CB colour balance (Simple's Contrast and Color sliders) in OkLab
+// 4096 colours from deep shadow to past white, every hue
+let cbSweep: [SIMD3<Double>] = (0..<4096).map { i in
+    let t = Double(i) / 4095, h = t * 37 * 2 * .pi, v = 0.002 + 2.5 * t
+    return SIMD3(v * (0.6 + 0.4 * cos(h)), v * (0.6 + 0.4 * cos(h - 2.1)), v * (0.6 + 0.4 * cos(h + 2.1)))
+}
+
+// CB1 the defaults are the identity
+var cb1Worst = 0.0
+for c in cbSweep {
+    let o = ColorBalance.apply(c, contrast: 0, saturation: 0, vibrance: 0)
+    // max() drops NaN, so a non-finite output is an infinite error
+    guard o.x.isFinite, o.y.isFinite, o.z.isFinite else { cb1Worst = .infinity; continue }
+    for k in 0..<3 { cb1Worst = max(cb1Worst, abs(o[k] - c[k]) / abs(c[k])) }
+}
+check("CB1 defaults are the identity on 4096 colours within 1e-9 relative", cb1Worst < 1e-9, "\(cb1Worst)")
+
+// CB2 contrast pivots on middle grey and scales above and below it by 2^c
+let grey18 = ColorBalance.apply(SIMD3(repeating: 0.18), contrast: 0.5, saturation: 0, vibrance: 0)
+check("CB2 contrast 0.5 leaves middle grey (0.18) unchanged within 1e-12", near(grey18, SIMD3(repeating: 0.18), 1e-12), "\(grey18)")
+let grey36 = ColorBalance.apply(SIMD3(repeating: 0.36), contrast: 0.5, saturation: 0, vibrance: 0)
+let want36 = 0.36 * 2.0.squareRoot()
+check("CB2 contrast 0.5 lifts grey 0.36 to 0.36 * 2^0.5 within 1e-9", near(grey36, SIMD3(repeating: want36), 1e-9), "\(grey36) want \(want36)")
+
+// CB3 contrast keeps hue: every channel scales together, and the OkLab cube root is homogeneous
+let cb3in = SIMD3<Double>(0.3, 0.12, 0.05)
+let hue3In = OkLab.lch(OkLab.fromWorking(cb3in)).z
+let hue3Out = OkLab.lch(OkLab.fromWorking(ColorBalance.apply(cb3in, contrast: 0.5, saturation: 0, vibrance: 0))).z
+check("CB3 contrast 0.5 keeps the OkLab hue within 1e-9 rad", abs(ColorCommon.hueDifference(hue3Out, hue3In)) < 1e-9,
+      "\(hue3Out - hue3In)")
+
+// CB4 saturation -1 is grey, and L is untouched
+let cb4in = OkLab.fromWorking(cb3in)
+let cb4out = OkLab.fromWorking(ColorBalance.apply(cb3in, contrast: 0, saturation: -1, vibrance: 0))
+check("CB4 saturation -1 gives OkLab chroma under 1e-6", hypot(cb4out.y, cb4out.z) < 1e-6, "\(hypot(cb4out.y, cb4out.z))")
+check("CB4 saturation -1 keeps OkLab L within 1e-9", abs(cb4out.x - cb4in.x) < 1e-9, "\(cb4out.x - cb4in.x)")
+
+// CB5 (roadmap gate T6) saturation +0.5 is hue-safe: 36 hues at L 0.6, chroma 0.04
+var cb5Drift = 0.0, cb5Chroma = 0.0, cb5L = 0.0, cb5Min = Double.infinity, cb5Finite = true
+for i in 0..<36 {
+    let h = Double(i) * 10 * .pi / 180
+    let rgb = OkLab.toWorking(SIMD3(0.6, 0.04 * cos(h), 0.04 * sin(h)))
+    let out = ColorBalance.apply(rgb, contrast: 0, saturation: 0.5, vibrance: 0)
+    // max() and min() drop NaN, so a non-finite output fails the finite check explicitly
+    if !(out.x.isFinite && out.y.isFinite && out.z.isFinite) { cb5Finite = false; continue }
+    let before = OkLab.lch(OkLab.fromWorking(rgb)), after = OkLab.lch(OkLab.fromWorking(out))
+    cb5Drift = max(cb5Drift, abs(ColorCommon.hueDifference(after.z, before.z)))
+    cb5Chroma = max(cb5Chroma, abs(after.y - 0.06))
+    cb5L = max(cb5L, abs(after.x - 0.6))
+    cb5Min = min(cb5Min, out.min())
+}
+check("CB5 every output is finite", cb5Finite, "a non-finite output")
+check("CB5 saturation +0.5 keeps every hue within 2 degrees", cb5Finite && cb5Drift * 180 / .pi < 2, "\(cb5Drift * 180 / .pi) degrees")
+check("CB5 saturation +0.5 gives chroma 0.06 within 1e-9", cb5Chroma < 1e-9, "\(cb5Chroma)")
+check("CB5 saturation +0.5 keeps L within 1e-9", cb5L < 1e-9, "\(cb5L)")
+check("CB5 saturation +0.5 does not clip (every channel >= -1e-9)", cb5Min >= -1e-9, "\(cb5Min)")
+
+// CB6 vibrance favours dull colours: the chroma ratio is 1 + v * (1 - smoothstep(0, 0.2, C))
+func cbVibranceRatio(_ chroma: Double) -> Double {
+    let rgb = OkLab.toWorking(SIMD3(0.6, chroma * cos(1.0), chroma * sin(1.0)))
+    let inC = OkLab.lch(OkLab.fromWorking(rgb)).y
+    let outC = OkLab.lch(OkLab.fromWorking(ColorBalance.apply(rgb, contrast: 0, saturation: 0, vibrance: 0.6))).y
+    return outC / inC
+}
+let ratio02 = cbVibranceRatio(0.02), ratio18 = cbVibranceRatio(0.18)
+check("CB6 vibrance 0.6 gives chroma 0.02 a ratio of 1.5832 within 1e-9", abs(ratio02 - 1.5832) < 1e-9, "\(ratio02)")
+check("CB6 vibrance 0.6 gives chroma 0.18 a ratio of 1.0168 within 1e-9", abs(ratio18 - 1.0168) < 1e-9, "\(ratio18)")
+check("CB6 the dull colour gains the larger ratio", ratio02 > ratio18, "\(ratio02) vs \(ratio18)")
+
+// CB7 black stays black (no pow(0, negative)), and an HDR colour stays finite
+let cb7Black = ColorBalance.apply(SIMD3(0, 0, 0), contrast: -0.5, saturation: 0, vibrance: 0)
+check("CB7 black stays exactly black at contrast -0.5", cb7Black == SIMD3(0, 0, 0), "\(cb7Black)")
+let cb7Hot = ColorBalance.apply(SIMD3(4, 3, 2), contrast: 0.3, saturation: 0.3, vibrance: 0.3)
+check("CB7 HDR (4, 3, 2) gives finite channels", cb7Hot.x.isFinite && cb7Hot.y.isFinite && cb7Hot.z.isFinite, "\(cb7Hot)")
+
 print(failures == 0 ? "\nall checks passed" : "\n\(failures) failed")
 exit(failures == 0 ? 0 : 1)

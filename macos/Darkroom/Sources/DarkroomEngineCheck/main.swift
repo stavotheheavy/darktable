@@ -273,5 +273,13 @@ do {
     }
 }
 
+// E-CB colour balance in OkLab (Simple's Contrast and Color sliders) through the per-pixel kernel
+let eCB = run([StackEntry(operation: "colorbalancergb", params: ["contrast": .number(0.3), "saturation_global": .number(0.4),
+                                                                  "vibrance": .number(0.5)])])
+let eCBWant = scene.map { ColorBalance.apply($0, contrast: 0.3, saturation: 0.4, vibrance: 0.5) }
+let eCBEncoded = worst(eCB, eCBWant), eCBLinear = worstLinear(eCB, eCBWant)
+check("E-CB colour balance matches the oracle within 1/255 and unclamped within 1e-4",
+      eCBEncoded < tol && eCBLinear < 1e-4, "encoded \(eCBEncoded), linear \(eCBLinear)")
+
 print(failures == 0 ? "\nall checks passed" : "\n\(failures) failed")
 exit(failures == 0 ? 0 : 1)

@@ -373,5 +373,40 @@ do {
     check("CC1-CC3 colour helpers ran", false, "\(error)")
 }
 
+// CB colour balance kernel against ColorBalance, on the same 4096 colours as CB1 in DarkroomCoreCheck
+do {
+    let cbPixels: [SIMD4<Float>] = (0..<4096).map { i in
+        let t = Double(i) / 4095, h = t * 37 * 2 * .pi, v = 0.002 + 2.5 * t
+        return SIMD4(Float(v * (0.6 + 0.4 * cos(h))), Float(v * (0.6 + 0.4 * cos(h - 2.1))), Float(v * (0.6 + 0.4 * cos(h + 2.1))), 1)
+    }
+    let cbOut = try MetalPerPixel.run(source: MetalColorBalance.source, function: "colorbalanceBuf", pixels: cbPixels,
+                                      uniforms: [0.3, 0.4, 0.5])
+    var cbFinite = cbOut.count == cbPixels.count, cbWorst = 0.0
+    for (g, p) in zip(cbOut, cbPixels) {
+        guard g.x.isFinite, g.y.isFinite, g.z.isFinite else { cbFinite = false; continue }
+        let input = SIMD3<Double>(Double(p.x), Double(p.y), Double(p.z))
+        let want = ColorBalance.apply(input, contrast: 0.3, saturation: 0.4, vibrance: 0.5)
+        for k in 0..<3 { cbWorst = max(cbWorst, abs(Double(g[k]) - want[k]) / max(1, abs(want[k]))) }
+    }
+    check("CB colorbalanceBuf is finite and matches ColorBalance within relative 1e-4 unclamped",
+          cbFinite && cbWorst < 1e-4, "finite \(cbFinite), worst relative error \(cbWorst)")
+} catch {
+    check("CB colorbalanceBuf kernel ran", false, "\(error)")
+}
+
+// CB-M2 the black guard on the GPU: without `y > 0`, pow(0, -0.5) is infinite and 0 times infinity is NaN
+do {
+    let blackPixels: [SIMD4<Float>] = [SIMD4(0, 0, 0, 1), SIMD4(0.001, 0.002, 0.0005, 1), SIMD4(2, 1.5, 0.3, 1)]
+    let blackOut = try MetalPerPixel.run(source: MetalColorBalance.source, function: "colorbalanceBuf", pixels: blackPixels,
+                                         uniforms: [-0.5, 0, 0])
+    let exactBlack = blackOut[0].x == 0 && blackOut[0].y == 0 && blackOut[0].z == 0
+    let allFiniteBlack = blackOut.count == blackPixels.count
+        && blackOut.allSatisfy { $0.x.isFinite && $0.y.isFinite && $0.z.isFinite }
+    check("CB-M2 exact black stays exactly (0, 0, 0) at contrast -0.5 on Metal, every output finite",
+          exactBlack && allFiniteBlack, "black \(blackOut[0]), all finite \(allFiniteBlack)")
+} catch {
+    check("CB-M2 black guard kernel ran", false, "\(error)")
+}
+
 print(failures == 0 ? "\nall Metal checks passed" : "\n\(failures) failed")
 exit(failures == 0 ? 0 : 1)
