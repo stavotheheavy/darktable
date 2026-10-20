@@ -844,7 +844,7 @@ struct SelfTest {
         } else if clean {
             check(false, "crop is in the module list")
         } else {
-            skip("geometry", "the darktable engine's crop defaults come from its editor, not the stack")
+            skip("geometry", "these checks rely on sessionOutputSize, which the darktable engine does not report")
         }
 
         print("simple mode")
