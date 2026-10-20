@@ -23,7 +23,8 @@ struct CIModule: Sendable {
         fields.first { $0.name == field }?.defaultValue.double
     }
 
-    /// The numeric value of each field: from the stack entry, else the field's default.
+    /// The numeric value of each field: from the stack entry, else the field's default. The engine adds `_scale` (the
+    /// render's size against native pixels) for modules whose radii are full-resolution pixels.
     func values(from params: [String: ParamValue]) -> [String: Double] {
         var out: [String: Double] = [:]
         for f in fields {
@@ -102,7 +103,7 @@ extension CIModule {
                             min: 0.5, max: 8, defaultValue: .number(1.5), options: []),
             ],
             apply: { image, v in
-                try CIBridge.sharpen2D(image, amount: v["amount"] ?? 0.4, radius: v["radius"] ?? 1.5)
+                try CIBridge.sharpen2D(image, amount: v["amount"] ?? 0.4, radius: (v["radius"] ?? 1.5) * (v["_scale"] ?? 1))
             }),
 
         // Wavelet noise reduction: luminance and colour strength, each 0...1. Zero is off, and both zero is the identity
@@ -115,7 +116,7 @@ extension CIModule {
                 field("chroma", 0, 1, 0),
             ],
             apply: { image, v in
-                try CIBridge.noiseReduction(image, luma: v["luma"] ?? 0, chroma: v["chroma"] ?? 0)
+                try CIBridge.noiseReduction(image, luma: (v["luma"] ?? 0) * (v["_scale"] ?? 1), chroma: (v["chroma"] ?? 0) * (v["_scale"] ?? 1))
             }),
 
         // Channel mixer: a 3x3 matrix on RGB; the identity leaves the image unchanged.
@@ -368,7 +369,7 @@ extension CIModule {
             defaultEnabled: false,
             fields: [field("detail", -1, 2, 0), field("radius", 1, 50, 10)],
             apply: { image, v in
-                try CIBridge.localContrast(image, detail: v["detail"] ?? 0, radius: v["radius"] ?? 10)
+                try CIBridge.localContrast(image, detail: v["detail"] ?? 0, radius: (v["radius"] ?? 10) * (v["_scale"] ?? 1))
             }),
 
         // Contrast equalizer: wavelet gains on fine, medium and coarse detail of the square-root luminance.
@@ -385,7 +386,7 @@ extension CIModule {
             operation: "hazeremoval", name: "haze removal", iopOrder: 51, defaultEnabled: false,
             fields: [field("strength", 0, 1, 0), field("radius", 1, 40, 8), field("airlight", 0.2, 4, 1)],
             apply: { image, v in
-                try CIBridge.dehaze(image, strength: v["strength"] ?? 0, radius: v["radius"] ?? 8, airlight: v["airlight"] ?? 1)
+                try CIBridge.dehaze(image, strength: v["strength"] ?? 0, radius: (v["radius"] ?? 8) * (v["_scale"] ?? 1), airlight: v["airlight"] ?? 1)
             }),
 
         // RGB curve, approximate: the same five-node curve as tone curve, applied to every channel.

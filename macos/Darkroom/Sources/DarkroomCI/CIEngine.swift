@@ -79,7 +79,7 @@ public actor CIEngine: PhotoEngine {
         let s = try openedSession()
         cancelFlag.withLock { $0 = false }
         let started = ContinuousClock.now
-        let image = try edited(try decode(s, scale: s.fit * scale, stack: stack), stack, camera: s.camera)
+        let image = try edited(try decode(s, scale: s.fit * scale, stack: stack), stack, camera: s.camera, scale: s.fit * scale)
         return try frame(image, crop: nil, since: started)
     }
 
@@ -88,7 +88,7 @@ public actor CIEngine: PhotoEngine {
         let s = try openedSession()
         cancelFlag.withLock { $0 = false }
         let started = ContinuousClock.now
-        let image = try edited(try decode(s, scale: s.fit * scale, stack: stack), stack, camera: s.camera)
+        let image = try edited(try decode(s, scale: s.fit * scale, stack: stack), stack, camera: s.camera, scale: s.fit * scale)
         let ext = image.extent.integral
         // Core Image's origin is bottom left; the region is given top left.
         let wanted = CGRect(x: ext.minX + CGFloat(x), y: ext.maxY - CGFloat(y) - CGFloat(height),
@@ -112,22 +112,7 @@ public actor CIEngine: PhotoEngine {
     public func sessionPreview() async throws -> RenderedFrame? {
         let s = try openedSession()
         let started = ContinuousClock.now
-        let options: [CFString: Any] = [
-            kCGImageSourceCreateThumbnailFromImageIfAbsent: false,   // never fall back to a full decode
-            kCGImageSourceCreateThumbnailWithTransform: true,        // apply EXIF orientation
-            kCGImageSourceThumbnailMaxPixelSize: s.maxSide,
-        ]
-        // Read the file mapped and build the source from Data, not from the URL: a URL-backed
-        // ImageIO source kept about 0.85 MB per open, so RSS grew with every photo opened.
-        // Data carries no file name, so the type comes from the extension: without it ImageIO
-        // reads a RAW as plain TIFF and finds only the tiny EXIF thumbnail, or none.
-        let typeHint = UTType(filenameExtension: s.url.pathExtension)?.identifier
-        let sourceOptions = typeHint.map { [kCGImageSourceTypeIdentifierHint: $0] as CFDictionary }
-        guard let data = try? Data(contentsOf: s.url, options: .alwaysMapped),
-              let source = CGImageSourceCreateWithData(data as CFData, sourceOptions),
-              let cg = CGImageSourceCreateThumbnailAtIndex(source, 0, options as CFDictionary),
-              cg.colorSpace?.name == CGColorSpace.sRGB
-        else { return nil }
+        guard let cg = EmbeddedPreview.read(path: s.url.path, maxSide: s.maxSide) else { return nil }
         let elapsed = started.duration(to: .now)
         let ms = Double(elapsed.components.seconds) * 1_000
             + Double(elapsed.components.attoseconds) / 1_000_000_000_000_000
@@ -173,14 +158,14 @@ public actor CIEngine: PhotoEngine {
         let peak = min(max(headroom, 1), 8)
         if Self.wantsSceneLinear(stack) {
             let decoded = try decode(s, scale: s.fit, stack: stack)
-            let sdr = try Self.process(decoded, stack, camera: s.camera)
-            let hdr = try Self.process(decoded, stack, camera: s.camera, hdrPeak: peak)
+            let sdr = try Self.process(decoded, stack, camera: s.camera, scale: s.fit)
+            let hdr = try Self.process(decoded, stack, camera: s.camera, hdrPeak: peak, scale: s.fit)
             return try Self.hdrJPEG(context: context, sdr: sdr, hdr: hdr, headroom: peak)
         }
         s.raw.extendedDynamicRangeAmount = 0
-        let sdr = try edited(try decode(s, scale: s.fit, stack: stack), stack, camera: s.camera)
+        let sdr = try edited(try decode(s, scale: s.fit, stack: stack), stack, camera: s.camera, scale: s.fit)
         s.raw.extendedDynamicRangeAmount = 1
-        let hdr = try edited(try decode(s, scale: s.fit, stack: stack), stack, camera: s.camera)
+        let hdr = try edited(try decode(s, scale: s.fit, stack: stack), stack, camera: s.camera, scale: s.fit)
         s.raw.extendedDynamicRangeAmount = 0
         return try Self.hdrJPEG(context: context, sdr: sdr, hdr: hdr, headroom: peak)
     }
@@ -192,7 +177,7 @@ public actor CIEngine: PhotoEngine {
         let s = try Self.makeSession(path: path, maxSide: maxSide)
         cancelFlag.withLock { $0 = false }
         let started = ContinuousClock.now
-        let image = try edited(try decode(s, scale: s.fit, stack: stack), stack, camera: s.camera)
+        let image = try edited(try decode(s, scale: s.fit, stack: stack), stack, camera: s.camera, scale: s.fit)
         return try frame(image, crop: nil, since: started)
     }
 
@@ -242,21 +227,25 @@ public actor CIEngine: PhotoEngine {
         return data
     }
 
-    private func edited(_ image: CIImage, _ stack: [StackEntry], camera: Orientation) throws -> CIImage {
-        try Self.process(image, stack, camera: camera)
+    private func edited(_ image: CIImage, _ stack: [StackEntry], camera: Orientation, scale: Double = 1) throws -> CIImage {
+        try Self.process(image, stack, camera: camera, scale: scale)
     }
 
     /// The whole edit on a sensor-orientation image: the per-pixel stack, then geometry. Static so
     /// `CIEngineProbe` runs this exact code.
     /// `hdrPeak` (linear, SDR white = 1) renders the HDR version of the image: the display transform lets highlights
     /// past 1 up to that peak; nil is the ordinary SDR render.
-    static func process(_ image: CIImage, _ stack: [StackEntry], camera: Orientation, hdrPeak: Double? = nil) throws -> CIImage {
-        CIGeometry.apply(try CIGeometry.spec(stack, camera: camera), to: try applyStack(image, stack, hdrPeak: hdrPeak))
+    /// `scale` is the render's size against native pixels (1 = full resolution): modules that work over a radius in
+    /// pixels (sharpen, local contrast, haze removal, mask refinement) take their radius as full-resolution pixels and
+    /// shrink it by `scale`, so a preview looks like the export (roadmap T9).
+    static func process(_ image: CIImage, _ stack: [StackEntry], camera: Orientation, hdrPeak: Double? = nil,
+                        scale: Double = 1) throws -> CIImage {
+        CIGeometry.apply(try CIGeometry.spec(stack, camera: camera), to: try applyStack(image, stack, hdrPeak: hdrPeak, scale: scale))
     }
 
     /// Applies the enabled stack entries in pipeline order. An operation the clean engine
     /// does not have is an error, never a silent skip. Static so `CIEngineProbe` runs this exact code.
-    static func applyStack(_ image: CIImage, _ stack: [StackEntry], hdrPeak: Double? = nil) throws -> CIImage {
+    static func applyStack(_ image: CIImage, _ stack: [StackEntry], hdrPeak: Double? = nil, scale: Double = 1) throws -> CIImage {
         let ordered = try stack.filter { $0.enabled && !CIGeometry.operations.contains($0.operation) }.map { entry -> (CIModule, StackEntry) in
             guard let m = CIModule.named(entry.operation) else {
                 throw EngineError("the clean engine has no module \(entry.operation) yet")
@@ -271,13 +260,15 @@ public actor CIEngine: PhotoEngine {
             let before = out
             var values = m.values(from: entry.params)
             if let hdrPeak, m.operation == "display" { values["peak"] = hdrPeak }
+            values["_scale"] = scale.isFinite ? min(max(scale, 1e-3), 1) : 1
             out = try m.apply(out, values)
             if maskMode == 2 {
                 // a local mask (DarkroomCore.Mask): cut from the module's input, then the output is mixed over it
                 let blend = entry.blend.compactMapValues { $0.double }
-                guard let spec = Mask.spec(from: blend) else {
+                guard var spec = Mask.spec(from: blend) else {
                     throw EngineError("the clean engine has no mask kind \(blend["mask_kind"] ?? 0)")
                 }
+                if spec.refineRadius > 0 { spec.refineRadius = max(1, Int((Double(spec.refineRadius) * min(max(scale, 1e-3), 1)).rounded())) }
                 let matte = try CIBridge.localMask(before, spec: spec)
                 out = try CIBridge.blendMasked(before: before, after: out, mask: matte, opacity: spec.opacity)
                 continue

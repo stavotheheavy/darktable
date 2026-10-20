@@ -794,5 +794,27 @@ do {
     } else { check("T10h-i the file expands to HDR", false) }
 }
 
+// E-SC render scale: radii are full-resolution pixels, so a preview (scale 0.5) of radius R looks like radius R/2 at full size
+do {
+    func img(_ stack: [StackEntry], scale: Double) -> [SIMD4<Float>] {
+        (try? CIEngineProbe.render(stack: stack, pixels: detailPx, width: detailW, height: detailH, scale: scale)) ?? []
+    }
+    func same(_ a: [SIMD4<Float>], _ b: [SIMD4<Float>]) -> Bool { a.count == detailW * detailH && a == b }
+    func lc(_ radius: Double) -> [StackEntry] { [StackEntry(operation: "bilat", params: ["detail": .number(0.8), "radius": .number(radius)])] }
+    check("E-SC1 local contrast: radius 12 at scale 0.5 renders as radius 6 at scale 1", same(img(lc(12), scale: 0.5), img(lc(6), scale: 1)))
+    check("E-SC1 and not as radius 12 at scale 1 (the scale is used)", !same(img(lc(12), scale: 0.5), img(lc(12), scale: 1)))
+    func sh(_ radius: Double) -> [StackEntry] { [StackEntry(operation: "sharpen", params: ["amount": .number(1), "radius": .number(radius)])] }
+    check("E-SC2 sharpen: radius 6 at scale 0.5 renders as radius 3 at scale 1", same(img(sh(6), scale: 0.5), img(sh(3), scale: 1)))
+    func hz(_ radius: Double) -> [StackEntry] { [StackEntry(operation: "hazeremoval", params: ["strength": .number(0.8), "radius": .number(radius)])] }
+    check("E-SC3 haze removal: radius 16 at scale 0.5 renders as radius 8 at scale 1", same(img(hz(16), scale: 0.5), img(hz(8), scale: 1)))
+    var m: [String: ParamValue] = ["mask_mode": .number(2), "mask_kind": .number(0), "mask_refine": .number(10)]
+    let e = StackEntry(operation: "exposure", params: ["exposure": .number(1)], blend: m)
+    m["mask_refine"] = .number(5)
+    let h = StackEntry(operation: "exposure", params: ["exposure": .number(1)], blend: m)
+    check("E-SC4 mask refinement: radius 10 at scale 0.5 renders as radius 5 at scale 1", same(img([e], scale: 0.5), img([h], scale: 1)))
+    check("E-SC5 a hostile scale (NaN, 0, 99) is held to 0.001...1 and renders",
+          [Double.nan, 0, 99].allSatisfy { img(lc(10), scale: $0).count == detailW * detailH })
+}
+
 print(failures == 0 ? "\nall checks passed" : "\n\(failures) failed")
 exit(failures == 0 ? 0 : 1)

@@ -13,13 +13,13 @@ import Metal
 public enum CIEngineProbe {
     /// `pixels` are RGBA float in the engine's working space (extended linear sRGB), `width` by `height`.
     /// Returns the rendered pixels in the same space and layout, with no colour management on the way out.
-    public static func render(stack: [StackEntry], pixels: [SIMD4<Float>], width: Int, height: Int) throws -> [SIMD4<Float>] {
-        try renderSized(stack: stack, pixels: pixels, width: width, height: height).pixels
+    public static func render(stack: [StackEntry], pixels: [SIMD4<Float>], width: Int, height: Int, scale: Double = 1) throws -> [SIMD4<Float>] {
+        try renderSized(stack: stack, pixels: pixels, width: width, height: height, scale: scale).pixels
     }
 
     /// Like `render`, for stacks that change the size: returns the output pixels and their size.
     public static func renderSized(stack: [StackEntry], pixels: [SIMD4<Float>], width: Int, height: Int,
-                                   camera: Orientation = .none, coreImageOrientation: UInt32? = nil) throws
+                                   camera: Orientation = .none, coreImageOrientation: UInt32? = nil, scale: Double = 1) throws
         -> (pixels: [SIMD4<Float>], width: Int, height: Int) {
         guard pixels.count == width * height, width > 0, height > 0 else { throw EngineError("probe: size mismatch") }
         guard let space = CGColorSpace(name: CGColorSpace.extendedLinearSRGB),
@@ -35,7 +35,7 @@ public enum CIEngineProbe {
             let turned = input.oriented(o)
             output = turned.transformed(by: CGAffineTransform(translationX: -turned.extent.minX, y: -turned.extent.minY))
         } else {
-            output = try CIEngine.process(input, stack, camera: camera)
+            output = try CIEngine.process(input, stack, camera: camera, scale: scale)
         }
         let context = CIContext(mtlDevice: device, options: [
             .workingColorSpace: space, .workingFormat: CIFormat.RGBAf, .cacheIntermediates: false,
