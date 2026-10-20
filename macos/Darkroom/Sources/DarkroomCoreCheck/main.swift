@@ -598,5 +598,72 @@ let fadeColdRatio = Monochrome.apply(moFadeCold, intensity: 1, filterHueDegrees:
 check("MO7 half chroma: the filter's own hue is lighter by 1.25", abs(fadeHotRatio - 1.25) < 1e-9, "\(fadeHotRatio)")
 check("MO7 half chroma: the opposite hue is darker by 0.75", abs(fadeColdRatio - 0.75) < 1e-9, "\(fadeColdRatio)")
 
+// ST split toning: greys are built in OkLab (a = b = 0) so their chroma is exactly zero before the tint
+func splitGrey(_ L: Double) -> SIMD3<Double> { OkLab.toWorking(SIMD3(L, 0, 0)) }
+func splitRun(_ c: SIMD3<Double>, shH: Double = 0, shS: Double = 0, hiH: Double = 0, hiS: Double = 0, balance: Double = 0) -> SIMD3<Double> {
+    SplitToning.apply(c, shadowsHueDegrees: shH, shadowsSaturation: shS, highlightsHueDegrees: hiH, highlightsSaturation: hiS, balance: balance)
+}
+func hueErrorDegrees(_ lab: SIMD3<Double>, _ wantDegrees: Double) -> Double {
+    abs(ColorCommon.hueDifference(OkLab.lch(lab).z, wantDegrees * .pi / 180)) * 180 / .pi
+}
+
+// ST1 zero saturations are the identity on 4096 colours
+var stWorstIdentity = 0.0, stFinite1 = true
+for i in 0..<4096 {
+    let t = Double(i) / 4095, h = t * 37 * 2 * .pi, v = 0.002 + 2.5 * t
+    let c = SIMD3(v * (0.6 + 0.4 * cos(h)), v * (0.6 + 0.4 * cos(h - 2.1)), v * (0.6 + 0.4 * cos(h + 2.1)))
+    let out = splitRun(c)
+    for k in 0..<3 {
+        // inputs are at least 0.0004, so dividing by |input| is safe; max() would drop a NaN, hence the explicit check
+        if !out[k].isFinite { stFinite1 = false }
+        stWorstIdentity = max(stWorstIdentity, abs(out[k] - c[k]) / abs(c[k]))
+    }
+}
+check("ST1 zero saturations are the identity within 1e-9 relative, finite", stWorstIdentity < 1e-9 && stFinite1, "worst \(stWorstIdentity), finite \(stFinite1)")
+
+// ST2 shadows take the shadow hue: grey at L 0.2 gets a chroma of 0.08 at 220 degrees
+let st2 = OkLab.fromWorking(splitRun(splitGrey(0.2), shH: 220, shS: 1))
+let st2Chroma = OkLab.lch(st2).y
+check("ST2 shadow tint hue is 220 within 2 degrees", hueErrorDegrees(st2, 220) < 2, "\(OkLab.lch(st2).z)")
+check("ST2 shadow tint chroma is 0.08 within 1e-9", abs(st2Chroma - 0.08 * (1 - ColorCommon.smoothstep(0.3, 0.7, 0.2))) < 1e-9, "\(st2Chroma)")
+
+// ST3 highlights take the highlight hue: grey at L 0.9 gets a chroma of 0.08 at 60 degrees
+let st3 = OkLab.fromWorking(splitRun(splitGrey(0.9), hiH: 60, hiS: 1))
+check("ST3 highlight tint hue is 60 within 2 degrees", hueErrorDegrees(st3, 60) < 2, "\(OkLab.lch(st3).z)")
+check("ST3 highlight tint chroma is 0.08 within 1e-9", abs(OkLab.lch(st3).y - 0.08) < 1e-9, "\(OkLab.lch(st3).y)")
+
+// ST4 a shadow tint stays out of the highlights
+let st4 = OkLab.fromWorking(splitRun(splitGrey(0.9), shH: 220, shS: 1))
+check("ST4 a shadow tint leaves a highlight grey neutral (chroma under 1e-9)", OkLab.lch(st4).y < 1e-9, "\(OkLab.lch(st4).y)")
+
+// ST5 lightness never changes, for ST2 to ST4 and a coloured input
+var worstL = 0.0, stFinite5 = true
+let st5Cases: [(SIMD3<Double>, Double, Double, Double, Double)] = [
+    (splitGrey(0.2), 220, 1, 0, 0), (splitGrey(0.9), 0, 0, 60, 1), (splitGrey(0.9), 220, 1, 0, 0), (SIMD3(0.6, 0.3, 0.1), 220, 1, 60, 1),
+]
+for (c, shH, shS, hiH, hiS) in st5Cases {
+    let inL = OkLab.fromWorking(c).x
+    let out = splitRun(c, shH: shH, shS: shS, hiH: hiH, hiS: hiS)
+    if !(out.x.isFinite && out.y.isFinite && out.z.isFinite) { stFinite5 = false }
+    let outL = OkLab.fromWorking(out).x
+    if !outL.isFinite { stFinite5 = false }
+    // max() drops a NaN, so a non-finite lightness is also counted as a failure above
+    worstL = max(worstL, abs(outL - inL))
+}
+check("ST5 lightness is unchanged within 1e-9, finite", worstL < 1e-9 && stFinite5, "worst \(worstL), finite \(stFinite5)")
+
+// ST6 balance moves the pivot: at L 0.55 the shadows weight is 0.5 at balance 0 and 1 at balance +1
+let st6Neutral = OkLab.lch(OkLab.fromWorking(splitRun(splitGrey(0.55), shH: 220, shS: 1))).y
+let st6Warm = OkLab.lch(OkLab.fromWorking(splitRun(splitGrey(0.55), shH: 220, shS: 1, balance: 1))).y
+check("ST6 balance 0 gives the chroma of pivot 0.5 within 1e-9",
+      abs(st6Neutral - 0.08 * (1 - ColorCommon.smoothstep(0.3, 0.7, 0.55))) < 1e-9, "\(st6Neutral)")
+check("ST6 balance +1 gives the chroma of pivot 0.75 within 1e-9",
+      abs(st6Warm - 0.08 * (1 - ColorCommon.smoothstep(0.55, 0.95, 0.55))) < 1e-9, "\(st6Warm)")
+check("ST6 balance +1 tints more than balance 0 at this grey", st6Warm > st6Neutral, "\(st6Warm) vs \(st6Neutral)")
+
+// ST7 past white: finite output
+let st7 = splitRun(SIMD3(4, 3, 2), shH: 220, shS: 1, hiH: 60, hiS: 1)
+check("ST7 past white stays finite", st7.x.isFinite && st7.y.isFinite && st7.z.isFinite, "\(st7)")
+
 print(failures == 0 ? "\nall checks passed" : "\n\(failures) failed")
 exit(failures == 0 ? 0 : 1)

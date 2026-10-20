@@ -339,21 +339,24 @@ extension CIModule {
                 return mixed.composited(over: image)
             }),
 
-        // Split toning, approximate: a warm tint for highlights and a cool one for shadows.
-        // Uses one tint over the image at the chosen strength; the two-tone split is not built.
+        // Split toning: a shadows tint and a highlights tint in OkLab, each with its own hue and saturation,
+        // split at a balance pivot. Checked by ST1-ST7 (darkroom-core-check), splitBuf (darkroom-metal-check)
+        // and E-ST (darkroom-engine-check).
         CIModule(
-            operation: "splittoning", name: "split-toning (approximate)", iopOrder: 63,
+            operation: "splittoning", name: "split-toning", iopOrder: 63,
             defaultEnabled: false,
-            fields: [field("strength", 0, 1, 0), field("hue", 0, 1, 0.1)],
+            fields: [
+                field("shadows_hue", 0, 360, 220), field("shadows_saturation", 0, 1, 0),
+                field("highlights_hue", 0, 360, 60), field("highlights_saturation", 0, 1, 0),
+                field("balance", -1, 1, 0),
+            ],
+            // DarkroomCore's SplitToning on the oracle-checked per-pixel kernel (darkroom-engine-check E-ST)
             apply: { image, v in
-                let hue = v["hue"] ?? 0.1
-                let tint = CIColor(red: CGFloat(0.5 + 0.5 * cos(2 * .pi * hue)),
-                                   green: CGFloat(0.5 + 0.5 * cos(2 * .pi * (hue - 1.0 / 3))),
-                                   blue: CGFloat(0.5 + 0.5 * cos(2 * .pi * (hue - 2.0 / 3))))
-                return image.applyingFilter("CIColorMonochrome", parameters: [
-                    kCIInputColorKey: tint,
-                    kCIInputIntensityKey: v["strength"] ?? 0,
-                ])
+                let pivot = 0.5 + 0.25 * (v["balance"] ?? 0)
+                let sh = (v["shadows_hue"] ?? 220) * .pi / 180, hh = (v["highlights_hue"] ?? 60) * .pi / 180
+                let ss = 0.08 * (v["shadows_saturation"] ?? 0), hs = 0.08 * (v["highlights_saturation"] ?? 0)
+                let uniforms: [Float] = [pivot, ss * cos(sh), ss * sin(sh), hs * cos(hh), hs * sin(hh)].map { Float($0) }
+                return try CIBridge.perPixel(image, source: MetalSplitToning.source, function: "splitTex", uniforms: uniforms)
             }),
 
         // Local contrast, approximate: unsharp masking at a radius, which lifts local detail.
