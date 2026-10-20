@@ -273,5 +273,18 @@ do {
     }
 }
 
+// E-CM channel mixer: a non-symmetric 3x3 through the engine (CIBridge.perPixel, mixerTex) against ChannelMixer, unclamped
+let cmRows: [[Double]] = [[0.9, 0.2, -0.1], [0.05, 1.1, -0.15], [-0.2, 0.3, 0.9]]
+let cmStack = [StackEntry(operation: "channelmixer", params: [
+    "red_r": .number(0.9), "red_g": .number(0.2), "red_b": .number(-0.1),
+    "green_r": .number(0.05), "green_g": .number(1.1), "green_b": .number(-0.15),
+    "blue_r": .number(-0.2), "blue_g": .number(0.3), "blue_b": .number(0.9),
+])]
+let cmOracle = scene.map { ChannelMixer.apply($0, rows: cmRows) }
+let cmOut = run(cmStack)
+let eCM = worst(cmOut, cmOracle), eCMLinear = worstLinear(cmOut, cmOracle)
+check("E-CM channel mixer matches the oracle within 1/255 and unclamped (relative 1e-5)", eCM < tol && eCMLinear < 1e-5,
+      "encoded \(eCM), linear \(eCMLinear)")
+
 print(failures == 0 ? "\nall checks passed" : "\n\(failures) failed")
 exit(failures == 0 ? 0 : 1)

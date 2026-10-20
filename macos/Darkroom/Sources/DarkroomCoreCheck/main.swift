@@ -471,5 +471,15 @@ do {
     check("G6 identity spec is the identity", GeometrySpec().isIdentity && close(GeometrySpec().map(SIMD2(5, 7), size: size), SIMD2(5, 7)))
 }
 
+// CM channel mixer: a 3x3 on linear RGB, nothing clamped
+let cmIdentity = [[1.0, 0, 0], [0, 1, 0], [0, 0, 1]]
+let cmGrid = (0..<4096).map { i in SIMD3(Double(i % 16) / 15 * 3, Double((i / 16) % 16) / 15 * 3, Double(i / 256) / 15 * 3) }
+check("CM1 identity rows give the input exactly on 4096 colours", cmGrid.allSatisfy { near(ChannelMixer.apply($0, rows: cmIdentity), $0, 1e-12) })
+check("CM2 swap red and blue", near(ChannelMixer.apply(SIMD3(0.7, 0.2, 0.1), rows: [[0, 0, 1], [0, 1, 0], [1, 0, 0]]), SIMD3(0.1, 0.2, 0.7), 1e-12))
+let cmMono = [[0.3, 0.6, 0.1], [0.3, 0.6, 0.1], [0.3, 0.6, 0.1]]
+check("CM3 a mono mix", near(ChannelMixer.apply(SIMD3(0.5, 0.25, 1.0), rows: cmMono), SIMD3(0.4, 0.4, 0.4), 1e-12))
+check("CM4 no clamp above white", near(ChannelMixer.apply(SIMD3(1.5, 0.2, 0.1), rows: [[2, 0, 0], [0, 2, 0], [0, 0, 2]]), SIMD3(3.0, 0.4, 0.2), 1e-12))
+check("CM4 no clamp below black", near(ChannelMixer.apply(SIMD3(0.4, 0.5, 0.6), rows: [[-1, 0, 0], [0, 1, 0], [0, 0, 1]]), SIMD3(-0.4, 0.5, 0.6), 1e-12))
+
 print(failures == 0 ? "\nall checks passed" : "\n\(failures) failed")
 exit(failures == 0 ? 0 : 1)
