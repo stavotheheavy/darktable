@@ -104,6 +104,8 @@ extension View {
 struct PhotoView: View {
     @Bindable var model: DarkroomModel
     @State private var lastDrag: CGSize = .zero
+    /// The stroke being painted, in view points, until the finger lifts.
+    @State private var live: [CGPoint] = []
 
     var body: some View {
         GeometryReader { geo in
@@ -118,6 +120,7 @@ struct PhotoView: View {
                         .frame(width: r.width, height: r.height)
                         .overlay(Rectangle().strokeBorder(Color.white.opacity(0.07), lineWidth: 1))
                         .shadow(color: .black.opacity(0.5), radius: 26, y: 10)
+                        .overlay { liveStroke(r) }
                         .position(x: r.midX, y: r.midY)
                         .accessibilityLabel("Photo")
                         .rig("photo")
@@ -142,6 +145,7 @@ struct PhotoView: View {
                     model.probe = nil
                 }
             }
+            .highPriorityGesture(paintGesture(in: size), including: model.paintModuleID != nil && model.canPaint ? .all : .none)
             .gesture(
                 DragGesture(minimumDistance: 2)
                     .onChanged { v in
@@ -162,6 +166,39 @@ struct PhotoView: View {
                 if model.zoom != .fit { model.requestRender() }
             }
         }
+    }
+
+    /// The brush stroke under the finger, white and soft, until it is committed.
+    @ViewBuilder private func liveStroke(_ r: CGRect) -> some View {
+        if !live.isEmpty {
+            let width = model.brushRadius * hypot(r.width, r.height) * 2
+            Path { p in
+                let pts = live.map { CGPoint(x: $0.x - r.minX, y: $0.y - r.minY) }
+                p.move(to: pts[0])
+                if pts.count == 1 { p.addLine(to: pts[0]) } else { p.addLines(Array(pts.dropFirst())) }
+            }
+            .stroke(Color.white.opacity(model.brushErase ? 0.25 : 0.55), style: StrokeStyle(lineWidth: width, lineCap: .round, lineJoin: .round))
+            .frame(width: r.width, height: r.height, alignment: .topLeading)
+            .clipped()
+            .allowsHitTesting(false)
+        }
+    }
+
+    private func paintGesture(in size: CGSize) -> some Gesture {
+        DragGesture(minimumDistance: 0)
+            .onChanged { v in
+                guard let f = model.frame else { return }
+                let r = imageRect(frame: f, in: size)
+                let p = CGPoint(x: min(max(v.location.x, r.minX), r.maxX), y: min(max(v.location.y, r.minY), r.maxY))
+                if live.last.map({ hypot($0.x - p.x, $0.y - p.y) > 1.5 }) ?? true { live.append(p) }
+            }
+            .onEnded { _ in
+                defer { live = [] }
+                guard let f = model.frame, !live.isEmpty else { return }
+                let r = imageRect(frame: f, in: size)
+                guard r.width > 0, r.height > 0 else { return }
+                model.paintStroke(live.map { CGPoint(x: ($0.x - r.minX) / r.width, y: ($0.y - r.minY) / r.height) })
+            }
     }
 
     /// Where the frame sits in the view, in points.

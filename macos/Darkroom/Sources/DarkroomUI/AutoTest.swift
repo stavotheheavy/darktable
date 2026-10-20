@@ -194,7 +194,18 @@ public enum AutoTest {
                 model.setBlend(ex, "mask_angle", to: .number(35), detail: "angle")
                 model.setBlend(ex, "mask_feather", to: .number(0.3), detail: "feather")
                 await shot("p13-\(label)-mask-overlay-gradient")
-                model.maskShowID = nil
+                model.setMask(ex, mode: 0, kind: nil)
+                // brush: two strokes on the subject, then Vision's subject and person
+                model.startBrush(ex)
+                model.brushRadius = 0.07; model.brushSoftness = 0.6
+                model.paintStroke([CGPoint(x: 0.35, y: 0.55), CGPoint(x: 0.5, y: 0.62), CGPoint(x: 0.65, y: 0.58)])
+                model.paintStroke([CGPoint(x: 0.5, y: 0.4), CGPoint(x: 0.5, y: 0.8)])
+                await shot("p16-\(label)-brush")
+                await model.detect(.subject, for: ex)
+                await shot("p17-\(label)-subject")
+                await model.detect(.face, for: ex)
+                await shot("p18-\(label)-face")
+                model.paintModuleID = nil
                 model.setMask(ex, mode: 0, kind: nil)
                 model.blendOpen = false
             }

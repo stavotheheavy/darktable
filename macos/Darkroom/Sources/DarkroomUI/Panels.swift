@@ -587,10 +587,13 @@ struct BlendSection: View {
     private var kind: MaskKind? { MaskKind(rawValue: Int(model.blendValue(module, "mask_kind")?.double ?? 0)) }
     private var opacity: Double { model.blendValue(module, "opacity")?.double ?? 100 }
 
+    private var isRaster: Bool { Int(model.blendValue(module, "mask_kind")?.double ?? 0) == 5 }
+    private var layer: MaskLayer? { isRaster ? model.maskLayer(for: module) : nil }
+
     private var summary: String {
         switch maskMode {
         case 0: return "off"
-        case 2 where model.localMasks: return "\(kind?.title ?? "mask") · \(Int(opacity.rounded()))%"
+        case 2 where model.localMasks: return "\(isRaster ? (layer?.name ?? "missing") : (kind?.title ?? "mask")) · \(Int(opacity.rounded()))%"
         default: return "uniform · \(Int(opacity.rounded()))%"
         }
     }
@@ -639,8 +642,40 @@ struct BlendSection: View {
                 .rig("mask-kind-\(c.title)")
             }
         }
-        if maskMode == 2, let kind {
-            ForEach(kind.controls, id: \.key) { c in MaskSlider(model: model, module: module, control: c) }
+        Text("Draw or find")
+            .font(.caption).foregroundStyle(.secondary).padding(.top, 2)
+        LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 6), count: 3), spacing: 6) {
+            ForEach(MaskLayerKind.allCases, id: \.self) { k in
+                let selected = maskMode == 2 && isRaster && layer?.kind == k
+                Button {
+                    if k == .brush { model.startBrush(module) } else if let v = k.vision { Task { await model.detect(v, for: module) } }
+                } label: {
+                    Text(k.title).font(.caption.weight(.medium)).lineLimit(1).minimumScaleFactor(0.8)
+                        .frame(maxWidth: .infinity, minHeight: 32)
+                        .background(selected ? Theme.selectedFill : Color.white.opacity(0.08), in: Capsule())
+                        .overlay(Capsule().strokeBorder(selected ? Theme.selectedRing : .clear, lineWidth: 1))
+                }
+                .buttonStyle(.plain)
+                .disabled(model.maskBusy != nil)
+                .accessibilityLabel(k == .brush ? "Paint a mask with the brush" : "Find the \(k.title) in the photo")
+                .accessibilityAddTraits(selected ? .isSelected : [])
+                .rig("mask-find-\(k.title)")
+            }
+        }
+        if let busy = model.maskBusy {
+            HStack(spacing: 6) { ProgressView().controlSize(.small); Text(busy).font(.caption).foregroundStyle(.secondary) }
+        }
+        if maskMode == 2, isRaster {
+            if let layer {
+                Text(layer.kind == .brush ? "\(layer.name) · \(layer.strokes.prefix(Int((model.blendValue(module, "mask_raster")?.option ?? "").split(separator: ".").last ?? "") ?? 0).count) strokes" : layer.name)
+                    .font(.footnote).foregroundStyle(.secondary)
+                if layer.kind == .brush { BrushControls(model: model, module: module) }
+            } else {
+                Text("This mask's picture is missing, so the edit does not apply.").font(.footnote).foregroundStyle(.orange)
+            }
+        }
+        if maskMode == 2, isRaster || kind != nil {
+            if let kind { ForEach(kind.controls, id: \.key) { c in MaskSlider(model: model, module: module, control: c) } }
             Toggle("Invert", isOn: Binding(
                 get: { (model.blendValue(module, "mask_invert")?.double ?? 0) != 0 },
                 set: { model.setBlend(module, "mask_invert", to: .number($0 ? 1 : 0), detail: "mask inverted: \($0 ? "on" : "off")") }))
@@ -722,6 +757,41 @@ struct BlendSection: View {
         .tint(Theme.accent)
         .accessibilityLabel("Opacity")
         .rig("blend-opacity")
+    }
+}
+
+/// The brush: size, softness, flow, erase, start over. Strokes are painted on the photo itself.
+struct BrushControls: View {
+    @Bindable var model: DarkroomModel
+    let module: ModuleInfo
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            row("size", $model.brushRadius, 0.005...0.15, "brush-size") { String(format: "%.1f%%", $0 * 100) }
+            row("softness", $model.brushSoftness, 0...1, "brush-softness") { String(format: "%.2f", $0) }
+            row("flow", $model.brushFlow, 0.05...1, "brush-flow") { String(format: "%.2f", $0) }
+            Toggle("Erase", isOn: $model.brushErase)
+                .font(.footnote).toggleStyle(.switch).tint(Theme.accent).rig("brush-erase")
+            HStack {
+                Button("Start over") { model.clearBrush(module) }.buttonStyle(.glass).controlSize(.small).rig("brush-clear")
+                Spacer()
+            }
+            Text(model.canPaint ? "Paint on the photo." : "Reset the crop and the zoom to paint: strokes go on the uncropped picture.")
+                .font(.caption2).foregroundStyle(.secondary)
+        }
+        .onAppear { model.paintModuleID = module.id }
+        .onDisappear { if model.paintModuleID == module.id { model.paintModuleID = nil } }
+    }
+
+    private func row(_ label: String, _ value: Binding<Double>, _ range: ClosedRange<Double>, _ id: String, _ text: @escaping (Double) -> String) -> some View {
+        VStack(spacing: 2) {
+            HStack {
+                Text(label).font(.footnote).foregroundStyle(.secondary)
+                Spacer()
+                Text(text(value.wrappedValue)).font(.footnote.monospacedDigit())
+            }
+            Slider(value: value, in: range).tint(Theme.accent).accessibilityLabel(label).rig(id)
+        }
     }
 }
 

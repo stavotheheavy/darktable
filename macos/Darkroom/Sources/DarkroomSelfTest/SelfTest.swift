@@ -77,6 +77,7 @@ struct SelfTest {
         let oneShot = take("--one-shot")
         let hdrJPEG = take("--hdr-jpeg")
         let scoreBench = has("--score-bench")
+        let visionMasks = take("--vision-masks")
         let previewVsExport = has("--preview-vs-export")
         // darktable is the default; `ci` runs the clean engine (only --bench supports it so far)
         let engineName = take("--engine") ?? "darktable"
@@ -100,6 +101,8 @@ struct SelfTest {
 
             if let oneShot {
                 try await runOneShot(engine: engine, sessionPath: path, other: oneShot)
+            } else if let visionMasks {
+                try runVisionMasks(path: path, out: visionMasks)
             } else if previewVsExport {
                 try await runPreviewVsExport(engine: engine, path: path)
             } else if scoreBench {
@@ -546,6 +549,44 @@ struct SelfTest {
 
     /// Renders `path` once with the stack in `file` and writes it to `out`. The same file drives either
     /// engine, so a darktable render of it is the clean engine's reference picture (named parameters only).
+    /// Apple Vision's masks on a real photo's embedded preview: each kind's coverage, and the mask and a red overlay written as
+    /// PNGs so they can be looked at. A kind that finds nothing is reported, not hidden.
+    static func runVisionMasks(path: String, out: String) throws {
+        guard let image = EmbeddedPreview.read(path: path, maxSide: 1200) else { throw EngineError("no embedded preview in \(path)") }
+        try FileManager.default.createDirectory(atPath: out, withIntermediateDirectories: true)
+        print("photo \(image.width)x\(image.height)")
+        for kind in VisionMasks.Kind.allCases {
+            let started = ContinuousClock.now
+            let picture = try VisionMasks.detect(kind, in: image)
+            let d = started.duration(to: .now)
+            let ms = Double(d.components.seconds) * 1000 + Double(d.components.attoseconds) / 1e15
+            guard let picture else { print("  \(kind.title): nothing found (\(Int(ms)) ms)"); continue }
+            print("  \(kind.title): covers \(String(format: "%.1f", picture.coverage * 100))% of the picture (\(Int(ms)) ms)")
+            // the mask as grey, and the photo with the mask in red
+            func png(_ cg: CGImage, _ name: String) {
+                guard let dest = CGImageDestinationCreateWithURL(URL(fileURLWithPath: "\(out)/\(name).png") as CFURL, UTType.png.identifier as CFString, 1, nil) else { return }
+                CGImageDestinationAddImage(dest, cg, nil); CGImageDestinationFinalize(dest)
+            }
+            let provider = CGDataProvider(data: Data(picture.pixels) as CFData)!
+            if let grey = CGImage(width: picture.width, height: picture.height, bitsPerComponent: 8, bitsPerPixel: 8, bytesPerRow: picture.width,
+                                  space: CGColorSpaceCreateDeviceGray(), bitmapInfo: CGBitmapInfo(rawValue: 0), provider: provider, decode: nil, shouldInterpolate: true, intent: .defaultIntent) {
+                png(grey, "mask-\(kind.title)")
+            }
+            var rgba = [UInt8](repeating: 0, count: image.width * image.height * 4)
+            if let ctx = CGContext(data: &rgba, width: image.width, height: image.height, bitsPerComponent: 8, bytesPerRow: image.width * 4,
+                                   space: CGColorSpace(name: CGColorSpace.sRGB)!, bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) {
+                ctx.draw(image, in: CGRect(x: 0, y: 0, width: image.width, height: image.height))
+                for i in 0..<(image.width * image.height) {
+                    let a = Double(picture.pixels[i]) / 255 * 0.55
+                    rgba[i * 4] = UInt8(Double(rgba[i * 4]) * (1 - a) + 255 * a)
+                    rgba[i * 4 + 1] = UInt8(Double(rgba[i * 4 + 1]) * (1 - a) + 30 * a)
+                    rgba[i * 4 + 2] = UInt8(Double(rgba[i * 4 + 2]) * (1 - a) + 30 * a)
+                }
+                if let cg = ctx.makeImage() { png(cg, "overlay-\(kind.title)") }
+            }
+        }
+    }
+
     /// Roadmap T9: a 25% preview and the 100% export of the same edit differ only by resampling. The export is shrunk to the
     /// preview's size and the two compared as 8-bit sRGB. Run with a plain stack (the floor set by the decoder's own
     /// downscale) and with the radius-based detail modules on (which must not widen the gap).
@@ -1493,6 +1534,83 @@ struct SelfTest {
                 while model.historyIndex > before { model.undo() }
                 await model.settle()
             } else { check(false, "PP16 exposure is in the module list") }
+            // PP19 the brush: strokes paint the mask, each is one history step, undo and redo walk them, a stroke after an undo
+            // cuts the undone ones off, and a reopened photo has the same strokes and the same frame, byte for byte
+            if let ex = model.modules.first(where: { $0.operation == "exposure" }), let exEntry = model.proMenu.flatMap(\.entries).first(where: { $0.modules.first?.operation == "exposure" }), let evField = field(model, ex, "exposure") {
+                func halvesNow() -> (Double, Double) {
+                    guard let f = model.frame, let l = f.cropping(to: CGRect(x: 0, y: 0, width: f.width / 2, height: f.height)),
+                          let r = f.cropping(to: CGRect(x: f.width / 2, y: 0, width: f.width / 2, height: f.height)) else { return (0, 0) }
+                    return (meanLuma(l), meanLuma(r))
+                }
+                model.addToPanel(exEntry)
+                let start = model.historyIndex
+                model.setParam(ex, evField, to: .number(0.0001))
+                await model.settle()
+                let base = halvesNow()
+                model.setParam(ex, evField, to: .number(2))
+                model.startBrush(ex)
+                await model.settle()
+                let emptyBrush = halvesNow()
+                // a fat stroke down the LEFT of the picture (normalised, upright), then one down the right
+                model.brushRadius = 0.12; model.brushSoftness = 0.2; model.brushFlow = 1
+                model.paintStroke([CGPoint(x: 0.25, y: 0.1), CGPoint(x: 0.25, y: 0.9)])
+                await model.settle()
+                let left = halvesNow()
+                let afterOne = bytes(model.frame)
+                let stepsOne = model.historyIndex
+                model.paintStroke([CGPoint(x: 0.75, y: 0.1), CGPoint(x: 0.75, y: 0.9)])
+                await model.settle()
+                let both = halvesNow()
+                check(abs(emptyBrush.0 - base.0) < 2 && abs(emptyBrush.1 - base.1) < 2, "PP19 an empty brush layer changes nothing (\(emptyBrush) vs \(base))")
+                check(left.0 > base.0 + 8 && abs(left.1 - base.1) < 8, "PP19 a stroke down the left brightens the left half and not the right (\(left) vs \(base))")
+                check(both.1 > base.1 + 8 && both.0 > base.0 + 8, "PP19 a second stroke down the right brightens the right too (\(both))")
+                check(model.historyIndex == stepsOne + 1, "PP19 each stroke is one history step")
+                model.undo(); await model.settle()
+                check(bytes(model.frame) == afterOne, "PP19 undo takes the second stroke off, byte for byte")
+                model.redo(); await model.settle()
+                check(halvesNow().1 > base.1 + 8, "PP19 redo puts it back")
+                model.undo(); await model.settle()
+                model.paintStroke([CGPoint(x: 0.5, y: 0.5)])
+                await model.settle()
+                let layer = model.maskLayer(for: ex)
+                check(layer?.strokes.count == 2, "PP19 a stroke after an undo cuts the undone one off (layer has \(layer?.strokes.count ?? -1) strokes, wanted 2)")
+                model.maskShowID = nil          // the red tint is on screen only; the reopened photo has none
+                await model.settle()
+                let before = bytes(model.frame)
+                await model.flushSave()
+                let sidecarText = (try? String(contentsOfFile: copy.path + ".darkroom.json", encoding: .utf8)) ?? ""
+                check(sidecarText.contains("\"version\" : 3") && sidecarText.contains("\"layers\""), "PP19 a photo with a painted layer is saved as sidecar format 3 with its layers")
+                let reopened = DarkroomModel(engine: engine)
+                await reopened.open(path: copy.path)
+                await reopened.settle()
+                check(reopened.maskLayers == model.maskLayers && bytes(reopened.frame) == before, "PP19 reopened, the painted layer and the frame are identical, byte for byte")
+                model.paintModuleID = nil
+                while model.historyIndex > start { model.undo() }
+                await model.settle()
+            } else { check(false, "PP19 the exposure module is there") }
+            // PP20 Vision: the person mask finds people, is saved next to the photo, and limits an exposure to them
+            if let ex = model.modules.first(where: { $0.operation == "exposure" }), let exEntry = model.proMenu.flatMap(\.entries).first(where: { $0.modules.first?.operation == "exposure" }), let evField = field(model, ex, "exposure") {
+                model.addToPanel(exEntry)
+                let start = model.historyIndex
+                model.setParam(ex, evField, to: .number(0.0001))
+                await model.settle()
+                func luma(_ rect: CGRect) -> Double {
+                    guard let f = model.frame, let c = f.cropping(to: CGRect(x: rect.minX * Double(f.width), y: rect.minY * Double(f.height), width: rect.width * Double(f.width), height: rect.height * Double(f.height))) else { return 0 }
+                    return meanLuma(c)
+                }
+                let tree = CGRect(x: 0.02, y: 0.05, width: 0.12, height: 0.12), body = CGRect(x: 0.40, y: 0.60, width: 0.2, height: 0.12)
+                let treeBefore = luma(tree), bodyBefore = luma(body)
+                model.setParam(ex, evField, to: .number(2))
+                await model.detect(.person, for: ex)
+                await model.settle()
+                let found = model.maskLayer(for: ex)
+                let file = found?.picture.map { URL(fileURLWithPath: copy.path + ".darkroom.masks/" + $0).path }
+                check(found?.kind == .person && file.map({ FileManager.default.fileExists(atPath: $0) }) == true, "PP20 Vision found the person and saved its mask next to the photo (\(model.status))")
+                check(luma(body) > bodyBefore + 10 && abs(luma(tree) - treeBefore) < 3, "PP20 the exposure brightens the person (\(bodyBefore) to \(luma(body))) and leaves the trees alone (\(treeBefore) to \(luma(tree)))")
+                model.setMask(ex, mode: 0, kind: nil)
+                while model.historyIndex > start { model.undo() }
+                await model.settle()
+            } else { check(false, "PP20 the exposure module is there") }
             model.mode = .simple
         } else {
             skip("pro panel", "the basics and their fields are the clean engine's")

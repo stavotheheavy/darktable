@@ -70,11 +70,23 @@ public final class DarkroomModel {
     public var moduleQuery = ""
     public var activeOnly = false
     public var showDeprecated = false
-    public var blendOpen = false { didSet { if !blendOpen { maskShowID = nil } } }
+    public var blendOpen = false { didSet { if !blendOpen { maskShowID = nil; paintModuleID = nil } } }
     /// Which of Pro's header menus is open (the popover under its button), or nil.
     public var proMenuOpen: ProMenuKind? { didSet { if proMenuOpen != oldValue { proMenuQuery = "" } } }
     /// What the Modules dropdown's search field holds.
     public var proMenuQuery = ""
+    /// The painted and detected masks of the open photo (saved in its sidecar and masks folder).
+    public private(set) var maskLayers: [MaskLayer] = []
+    /// The module whose brush layer takes strokes from the photo, and the brush.
+    public var paintModuleID: String?
+    public var brushRadius = 0.04
+    public var brushSoftness = 0.5
+    public var brushFlow = 1.0
+    public var brushErase = false
+    /// What a running detection is doing ("Finding the subject…"), or nil.
+    public private(set) var maskBusy: String?
+    private var rasterCache: [String: MaskPicture] = [:]
+    private var shippedRasterIDs: Set<String> = []
     /// Blown highlights red and crushed shadows blue on the picture (the J key). Display-only; exports never carry it.
     public var showClipping = false {
         didSet { if showClipping != oldValue { let on = showClipping; Task { await engine.setClippingOverlay(on); requestRender() } } }
@@ -121,7 +133,7 @@ public final class DarkroomModel {
     private var sidecarLocked: String?
     /// The history, step and algorithm versions as they are on disk (or as opened with no sidecar): a save that would
     /// write the same thing is skipped, so merely opening a photo never re-stamps its sidecar with this app's versions.
-    private var lastSaved: (history: [HistoryItem], index: Int)?
+    private var lastSaved: (history: [HistoryItem], index: Int, layers: [MaskLayer])?
     private var loadedAlgorithms: [String: Int]?
     private var loadedEdits: EditMap = [:]
 
@@ -240,6 +252,7 @@ public final class DarkroomModel {
             historyIndex = 0
             edits = [:]
             lastSaved = nil
+            maskLayers = []
             return
         }
 
@@ -252,7 +265,8 @@ public final class DarkroomModel {
             let known = Set(modules.map(\.id))
             edits = history[historyIndex].edits.filter { known.contains($0.key) }
             versionNotices = s.versionNotices(current: await engine.algorithmVersions())
-            lastSaved = (s.history, s.index)
+            lastSaved = (s.history, s.index, s.layers ?? [])
+            maskLayers = s.layers ?? []
             loadedAlgorithms = s.algorithms
             loadedEdits = history[historyIndex].edits
             if let first = versionNotices.first { status = versionNotices.count == 1 ? first : "\(first) (and \(versionNotices.count - 1) more)" }
@@ -264,7 +278,8 @@ public final class DarkroomModel {
             history = [HistoryItem(label: "original", detail: "", edits: [:])]
             historyIndex = 0
             edits = [:]
-            lastSaved = (history, 0)
+            lastSaved = (history, 0, [])
+            maskLayers = []
             loadedAlgorithms = nil
             loadedEdits = [:]
         }
@@ -408,6 +423,128 @@ public final class DarkroomModel {
 
     public func blendValue(_ m: ModuleInfo, _ key: String) -> ParamValue? {
         edits[m.id]?.blend[key] ?? blendBase(m, key)
+    }
+
+    // MARK: painted and detected masks
+
+    private static func newLayerID() -> String { String(UUID().uuidString.lowercased().prefix(8)) }
+
+    /// The layer a module's mask reads, if it reads one.
+    public func maskLayer(for m: ModuleInfo) -> MaskLayer? {
+        guard let ref = blendValue(m, "mask_raster")?.option else { return nil }
+        let id = String(ref.split(separator: ".").first ?? "")
+        return maskLayers.first { $0.id == id }
+    }
+
+    /// How many of a brush layer's strokes the module's edit counts.
+    private func strokeCount(_ m: ModuleInfo) -> Int {
+        Int((blendValue(m, "mask_raster")?.option ?? "").split(separator: ".").last ?? "") ?? 0
+    }
+
+    /// Whether strokes can be placed on the picture as shown: fit zoom, and no crop, straighten or flip that would move the
+    /// picture away from the upright photo the masks are drawn on.
+    public var canPaint: Bool {
+        zoom == .fit && ["crop", "ashift", "flip"].allSatisfy { op in !modules.filter { $0.operation == op }.contains { edits[$0.id]?.changesPicture == true } }
+    }
+
+    /// Points the module at a layer (revision `rev`): kind 5, its own picture, the shared settings kept. One history step.
+    private func attach(_ layer: MaskLayer, rev: Int, to m: ModuleInfo, detail: String) {
+        var e = edits[m.id] ?? ModuleEdit()
+        let shared: Set<String> = ["mask_feather", "mask_invert", "mask_refine"]
+        for k in Array(e.blend.keys) where k.hasPrefix("mask_") && !shared.contains(k) { e.blend[k] = nil }
+        e.blend["mask_mode"] = .number(2)
+        e.blend["mask_kind"] = .number(5)
+        e.blend["mask_raster"] = .option("\(layer.id).\(rev)")
+        if !m.enabled, e.enabled == nil { e.enabled = true }
+        commit(id: m.id, edit: e, label: title(m), detail: detail, target: nil)
+    }
+
+    /// A new empty brush layer for the module, ready to paint on (the mask is shown while painting).
+    public func startBrush(_ m: ModuleInfo) {
+        let n = maskLayers.filter { $0.kind == .brush }.count + 1
+        let layer = MaskLayer(id: Self.newLayerID(), name: "brush \(n)", kind: .brush)
+        maskLayers.append(layer)
+        attach(layer, rev: 0, to: m, detail: "mask: brush")
+        paintModuleID = m.id
+        maskShowID = m.id
+    }
+
+    /// One more stroke on the module's brush layer. A stroke after an undo cuts the undone strokes off first.
+    public func addStroke(_ stroke: BrushStroke, to m: ModuleInfo) {
+        guard let layer = maskLayer(for: m), layer.kind == .brush, let i = maskLayers.firstIndex(where: { $0.id == layer.id }) else { return }
+        maskLayers[i].strokes = Array(layer.strokes.prefix(strokeCount(m))) + [stroke]
+        attach(maskLayers[i], rev: maskLayers[i].strokes.count, to: m, detail: stroke.erase ? "erase" : "brush stroke")
+    }
+
+    /// A stroke from points on the shown picture (normalised 0...1, y down) with the current brush.
+    public func paintStroke(_ points: [CGPoint]) {
+        guard let id = paintModuleID, let m = modules.first(where: { $0.id == id }), canPaint, !points.isEmpty else { return }
+        let p = points.map { SIMD2(min(max(Double($0.x), 0), 1), min(max(Double($0.y), 0), 1)) }
+        addStroke(BrushStroke(points: p, radius: brushRadius, softness: brushSoftness, flow: brushFlow, erase: brushErase), to: m)
+    }
+
+    /// Starts the module's brush over with an empty layer (the old one stays in the history).
+    public func clearBrush(_ m: ModuleInfo) { startBrush(m) }
+
+    /// Finds `kind` in the photo with Vision (on this Mac) and points the module's mask at it.
+    public func detect(_ kind: VisionMasks.Kind, for m: ModuleInfo) async {
+        guard let path = filePath, maskBusy == nil else { return }
+        maskBusy = "Finding the \(kind.title)…"
+        defer { maskBusy = nil }
+        // the upright picture: the camera's embedded preview (orientation applied), else a small developed render
+        let image: CGImage?
+        if let preview = EmbeddedPreview.read(path: path, maxSide: 1200) { image = preview } else { image = try? await engine.render(path: path, maxSide: 1200, stack: []).image }
+        guard let image else { status = "Cannot read the picture to find the \(kind.title)"; return }
+        let found: VisionMasks.Picture?
+        do { found = try await Task.detached(priority: .userInitiated) { try VisionMasks.detect(kind, in: image) }.value } catch {
+            status = "Finding the \(kind.title) failed: \(error.localizedDescription)"; return
+        }
+        guard let found, filePath == path else { if found == nil { status = "No \(kind.title) found in this photo" }; return }
+        let layer = MaskLayer(id: Self.newLayerID(), name: kind.title, kind: MaskLayerKind(kind), strokes: [], picture: nil)
+        var stored = layer
+        stored.picture = "\(layer.id).png"
+        do { try MaskFiles.write(found.pixels, width: found.width, height: found.height, name: stored.picture!, for: path) } catch {
+            status = "Could not save the \(kind.title) mask: \(error.localizedDescription)"; return
+        }
+        rasterCache["\(stored.id).0"] = MaskPicture(id: "\(stored.id).0", width: found.width, height: found.height, pixels: found.pixels)
+        maskLayers.append(stored)
+        attach(stored, rev: 0, to: m, detail: "mask: \(kind.title)")
+        maskShowID = m.id
+        status = "\(kind.title.capitalized) found: \(Int((found.coverage * 100).rounded()))% of the picture"
+    }
+
+    /// The picture a mask reference names, made (brush) or read (detected) the first time and kept.
+    private func picture(forRef ref: String) -> MaskPicture? {
+        if let hit = rasterCache[ref] { return hit }
+        let parts = ref.split(separator: ".", maxSplits: 1).map(String.init)
+        guard parts.count == 2, let layer = maskLayers.first(where: { $0.id == parts[0] }) else { return nil }
+        let made: MaskPicture?
+        if layer.kind == .brush {
+            let rev = max(0, min(Int(parts[1]) ?? 0, layer.strokes.count))
+            let aspect = info.map { Double($0.processedWidth) / Double(max($0.processedHeight, 1)) } ?? 1.5
+            let size = Brush.rasterSize(aspect: aspect)
+            let r = Brush.rasterize(layer.strokes.prefix(rev), width: size.width, height: size.height, id: ref)
+            made = MaskPicture(id: ref, width: r.width, height: r.height, pixels: r.pixels)
+        } else if let file = layer.picture, let path = filePath, let p = MaskFiles.read(name: file, for: path) {
+            made = MaskPicture(id: ref, width: p.width, height: p.height, pixels: p.pixels)
+        } else { made = nil }
+        if let made {
+            if rasterCache.count > 32 { rasterCache.removeAll() }
+            rasterCache[ref] = made
+        }
+        return made
+    }
+
+    /// Hands the engine the pictures the stack's raster masks name (only when the set changed).
+    private func shipRasters(for entries: [StackEntry]) async {
+        var pictures: [MaskPicture] = []
+        for e in entries where e.blend["mask_mode"]?.double == 2 && e.blend["mask_kind"]?.double == 5 {
+            if let ref = e.blend["mask_raster"]?.option, let p = picture(forRef: ref) { pictures.append(p) }
+        }
+        let ids = Set(pictures.map(\.id))
+        guard ids != shippedRasterIDs else { return }
+        shippedRasterIDs = ids
+        await engine.setMaskRasters(pictures)
     }
 
     /// Picks how a module is limited: `mode` 0 off, 1 uniform (opacity only), 2 a local mask of `kind`. One history step.
@@ -628,6 +765,7 @@ public final class DarkroomModel {
             wantsRender = false
             guard filePath != nil else { return }
             let entries = stack(for: shownEdits, overlay: true)
+            await shipRasters(for: entries)
             // geometry changes the size the region maths below works in
             outputSize = try? await engine.sessionOutputSize(stack: entries)
             renderGeneration += 1
@@ -706,12 +844,12 @@ public final class DarkroomModel {
         guard let path = filePath else { return }
         // a sidecar this app could not read is somebody's edits (a newer app's): never write over it
         if let why = sidecarLocked { saveError = "Edits are not saved for this photo: \(why). The file was left untouched."; return }
-        if let last = lastSaved, last.history == history, last.index == historyIndex { return }   // nothing to write
+        if let last = lastSaved, last.history == history, last.index == historyIndex, last.layers == maskLayers { return }   // nothing to write
         let hasEdits = history.count > 1
         let url = Sidecar.url(for: path)
         do {
             if hasEdits {
-                var s = Sidecar(history: history, index: historyIndex)
+                var s = Sidecar(history: history, index: historyIndex, layers: maskLayers.isEmpty ? nil : maskLayers)
                 // this app's versions, except for a module whose edit is the one that was loaded: it keeps the version
                 // it was made with, so a notice about changed maths does not vanish by merely re-saving
                 var versions = await engine.algorithmVersions()
@@ -723,10 +861,10 @@ public final class DarkroomModel {
                 }
                 s.algorithms = versions.isEmpty ? nil : versions
                 try s.save(for: path)
-                lastSaved = (history, historyIndex)
+                lastSaved = (history, historyIndex, maskLayers)
             } else if FileManager.default.fileExists(atPath: url.path) {
                 try FileManager.default.removeItem(at: url)
-                lastSaved = (history, historyIndex)
+                lastSaved = (history, historyIndex, maskLayers)
             }
             saveError = nil
         } catch {
@@ -745,6 +883,7 @@ public final class DarkroomModel {
         do {
             if hdr {
                 // the engine's JPEG with an HDR gain map; an engine that cannot make one says so and the normal export runs
+                await shipRasters(for: buildStack())
                 if let data = try await engine.exportHDRJPEG(path: path, maxSide: bound, stack: buildStack(), headroom: 4) {
                     try data.write(to: url, options: .atomic)
                     status = "Exported \(url.lastPathComponent) with an HDR gain map"
@@ -752,6 +891,7 @@ public final class DarkroomModel {
                     return
                 }
             }
+            await shipRasters(for: buildStack())
             let result = try await engine.exportRender(path: path, maxSide: bound, stack: buildStack())
             guard let dest = CGImageDestinationCreateWithURL(
                 url as CFURL, UTType.jpeg.identifier as CFString, 1, nil)

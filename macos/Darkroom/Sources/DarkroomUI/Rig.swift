@@ -136,30 +136,47 @@ public final class Rig {
     }
 
     private func state() -> [String: Any] {
-        [
-            "screen": currentScreen() == .library ? "library" : "darkroom",
-            "mode": model.mode.rawValue.lowercased(),
-            "file": model.fileName,
-            "status": model.status,
-            "uiHidden": model.uiHidden,
-            "showingOriginal": model.showingOriginal,
-            "canUndo": model.canUndo, "canRedo": model.canRedo,
-            "historyCount": model.history.count, "historyIndex": model.historyIndex,
-            "lastRenderMs": model.lastMilliseconds ?? -1,
-            "zoom": model.zoom.rawValue,
-            // Pro's panel, in order: the section, its first operation, effect on, unfolded
-            "pro": model.proPanelEntries.map { ["name": $0.name, "op": $0.modules[0].operation,
-                                                "on": model.proEffectOn($0), "open": model.proOpen.contains($0.id)] as [String: Any] },
-            "curve": model.curveNodes ?? [],
-            "looksOpen": UserDefaults.standard.bool(forKey: SimplePanel.looksOpenKey),
-            "rssMB": Int(Self.rssMB()),
-            "clicks": clicks,
-            "library": ["order": library.shown.prefix(6).map { "\($0.name):\(Int($0.sharpness ?? -1))" }, "comparing": library.items.isEmpty ? false : (comparingNow?() ?? false),
-                        "items": library.items.count, "scored": library.scored, "failed": library.failed,
-                        "selected": library.selected ?? "",
-                        "selectedRating": library.items.first { $0.path == library.selected }?.rating ?? -1,
-                        "selectedRejected": library.items.first { $0.path == library.selected }?.rejected ?? false, "status": library.status],
-        ]
+        var s: [String: Any] = [:]
+        s["screen"] = currentScreen() == .library ? "library" : "darkroom"
+        s["mode"] = model.mode.rawValue.lowercased()
+        s["file"] = model.fileName
+        s["status"] = model.status
+        s["uiHidden"] = model.uiHidden
+        s["showingOriginal"] = model.showingOriginal
+        s["canUndo"] = model.canUndo
+        s["canRedo"] = model.canRedo
+        s["historyCount"] = model.history.count
+        s["historyIndex"] = model.historyIndex
+        s["lastRenderMs"] = model.lastMilliseconds ?? -1
+        s["zoom"] = model.zoom.rawValue
+        // Pro's panel, in order: the section, its first operation, effect on, unfolded
+        s["pro"] = model.proPanelEntries.map { e -> [String: Any] in
+            ["name": e.name, "op": e.modules[0].operation, "on": model.proEffectOn(e), "open": model.proOpen.contains(e.id)]
+        }
+        s["curve"] = model.curveNodes ?? []
+        s["looksOpen"] = UserDefaults.standard.bool(forKey: SimplePanel.looksOpenKey)
+        s["rssMB"] = Int(Self.rssMB())
+        s["clicks"] = clicks
+        s["maskLayers"] = model.maskLayers.map { "\($0.name):\($0.kind.rawValue):\($0.strokes.count)" }
+        s["painting"] = model.paintModuleID ?? ""
+        s["clipping"] = model.showClipping
+        s["library"] = libraryState()
+        return s
+    }
+
+    private func libraryState() -> [String: Any] {
+        var l: [String: Any] = [:]
+        l["order"] = library.shown.prefix(6).map { "\($0.name):\(Int($0.sharpness ?? -1))" }
+        l["comparing"] = library.items.isEmpty ? false : (comparingNow?() ?? false)
+        l["items"] = library.items.count
+        l["scored"] = library.scored
+        l["failed"] = library.failed
+        l["selected"] = library.selected ?? ""
+        let current = library.items.first { $0.path == library.selected }
+        l["selectedRating"] = current?.rating ?? -1
+        l["selectedRejected"] = current?.rejected ?? false
+        l["status"] = library.status
+        return l
     }
 
     // MARK: tree (the controls that tagged themselves with .rig)
@@ -343,6 +360,22 @@ public final class Rig {
                 default: return ["ok": false, "error": "menu modules|presets|history|close|query <text>"]
                 }
                 return ["ok": true, "menu": model.proMenuOpen.map { "\($0)" } ?? "closed", "query": model.proMenuQuery]
+            case "brush":
+                // brush start <op> | brush stroke <op> <x,y> <x,y> ... (normalised 0...1 on the upright picture)
+                guard parts.count > 2, let m = model.modules.first(where: { $0.operation == parts[2] }) else { return ["ok": false, "error": "brush start|stroke <op> [x,y ...]"] }
+                if parts[1] == "start" { model.startBrush(m) } else {
+                    let pts = parts.dropFirst(3).compactMap { s -> CGPoint? in
+                        let c = s.split(separator: ",").compactMap { Double($0) }
+                        return c.count == 2 ? CGPoint(x: c[0], y: c[1]) : nil
+                    }
+                    model.paintModuleID = m.id
+                    model.paintStroke(pts)
+                }
+                return ["ok": true, "layers": model.maskLayers.map { "\($0.name):\($0.strokes.count)" }]
+            case "detect":
+                guard parts.count > 2, let k = VisionMasks.Kind(rawValue: parts[1]), let m = model.modules.first(where: { $0.operation == parts[2] }) else { return ["ok": false, "error": "detect subject|person|face|eyes|lips <op>"] }
+                await model.detect(k, for: m)
+                return ["ok": true, "layers": model.maskLayers.map { "\($0.name):\($0.kind.rawValue)" }, "status": model.status]
             case "curve": guard parts.count > 2, let i = Int(parts[1]), let y = Double(parts[2]) else { return ["ok": false, "error": "curve <node> <0..1>"] }; model.setCurveNode(i, y)
             default: return ["ok": false, "error": "unknown pro action"]
             }

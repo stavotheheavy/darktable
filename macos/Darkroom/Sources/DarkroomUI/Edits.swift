@@ -31,16 +31,20 @@ public struct HistoryItem: Codable, Equatable, Sendable, Identifiable {
 
 /// The saved form of an image's edits, kept next to the raw like an XMP sidecar.
 ///
+/// Version 3 adds `layers` (painted and detected masks); a file with none stays version 2, so an app that predates layers
+/// still reads it, and a file with layers is left alone by that app (it cannot read them and would drop them).
+///
 /// Version 2 adds `algorithms`: the algorithm version of every module the history uses, as the engine that saved it
 /// reported (roadmap T11). Version 1 files (no `algorithms`) still load. A file with a version this app does not know
 /// is never read and never overwritten: its edits belong to a newer app.
 struct Sidecar: Codable {
-    static let currentVersion = 2
+    static let currentVersion = 3
 
-    var version = Sidecar.currentVersion
+    var version = 2
     var history: [HistoryItem]
     var index: Int
     var algorithms: [String: Int]?
+    var layers: [MaskLayer]?
 
     enum Loaded {
         case none
@@ -74,9 +78,12 @@ struct Sidecar: Codable {
     }
 
     func save(for rawPath: String) throws {
+        var s = self
+        if s.layers?.isEmpty == true { s.layers = nil }
+        s.version = s.layers == nil ? 2 : 3
         let enc = JSONEncoder()
         enc.outputFormatting = [.prettyPrinted, .sortedKeys]
-        try enc.encode(self).write(to: Self.url(for: rawPath), options: .atomic)
+        try enc.encode(s).write(to: Self.url(for: rawPath), options: .atomic)
     }
 
     /// What differs between the maths that made these edits and this app's, one sentence per module the history uses.
