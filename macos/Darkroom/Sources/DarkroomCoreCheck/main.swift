@@ -481,14 +481,18 @@ func hueErrorDegrees(_ lab: SIMD3<Double>, _ wantDegrees: Double) -> Double {
 }
 
 // ST1 zero saturations are the identity on 4096 colours
-var stWorstIdentity = 0.0
+var stWorstIdentity = 0.0, stFinite1 = true
 for i in 0..<4096 {
     let t = Double(i) / 4095, h = t * 37 * 2 * .pi, v = 0.002 + 2.5 * t
     let c = SIMD3(v * (0.6 + 0.4 * cos(h)), v * (0.6 + 0.4 * cos(h - 2.1)), v * (0.6 + 0.4 * cos(h + 2.1)))
     let out = splitRun(c)
-    for k in 0..<3 { stWorstIdentity = max(stWorstIdentity, abs(out[k] - c[k]) / max(1, abs(c[k]))) }
+    for k in 0..<3 {
+        // inputs are at least 0.0004, so dividing by |input| is safe; max() would drop a NaN, hence the explicit check
+        if !out[k].isFinite { stFinite1 = false }
+        stWorstIdentity = max(stWorstIdentity, abs(out[k] - c[k]) / abs(c[k]))
+    }
 }
-check("ST1 zero saturations are the identity within 1e-9", stWorstIdentity < 1e-9, "worst \(stWorstIdentity)")
+check("ST1 zero saturations are the identity within 1e-9 relative, finite", stWorstIdentity < 1e-9 && stFinite1, "worst \(stWorstIdentity), finite \(stFinite1)")
 
 // ST2 shadows take the shadow hue: grey at L 0.2 gets a chroma of 0.08 at 220 degrees
 let st2 = OkLab.fromWorking(splitRun(splitGrey(0.2), shH: 220, shS: 1))
@@ -506,16 +510,20 @@ let st4 = OkLab.fromWorking(splitRun(splitGrey(0.9), shH: 220, shS: 1))
 check("ST4 a shadow tint leaves a highlight grey neutral (chroma under 1e-9)", OkLab.lch(st4).y < 1e-9, "\(OkLab.lch(st4).y)")
 
 // ST5 lightness never changes, for ST2 to ST4 and a coloured input
-var worstL = 0.0
+var worstL = 0.0, stFinite5 = true
 let st5Cases: [(SIMD3<Double>, Double, Double, Double, Double)] = [
     (splitGrey(0.2), 220, 1, 0, 0), (splitGrey(0.9), 0, 0, 60, 1), (splitGrey(0.9), 220, 1, 0, 0), (SIMD3(0.6, 0.3, 0.1), 220, 1, 60, 1),
 ]
 for (c, shH, shS, hiH, hiS) in st5Cases {
     let inL = OkLab.fromWorking(c).x
-    let outL = OkLab.fromWorking(splitRun(c, shH: shH, shS: shS, hiH: hiH, hiS: hiS)).x
+    let out = splitRun(c, shH: shH, shS: shS, hiH: hiH, hiS: hiS)
+    if !(out.x.isFinite && out.y.isFinite && out.z.isFinite) { stFinite5 = false }
+    let outL = OkLab.fromWorking(out).x
+    if !outL.isFinite { stFinite5 = false }
+    // max() drops a NaN, so a non-finite lightness is also counted as a failure above
     worstL = max(worstL, abs(outL - inL))
 }
-check("ST5 lightness is unchanged within 1e-9", worstL < 1e-9, "worst \(worstL)")
+check("ST5 lightness is unchanged within 1e-9, finite", worstL < 1e-9 && stFinite5, "worst \(worstL), finite \(stFinite5)")
 
 // ST6 balance moves the pivot: at L 0.55 the shadows weight is 0.5 at balance 0 and 1 at balance +1
 let st6Neutral = OkLab.lch(OkLab.fromWorking(splitRun(splitGrey(0.55), shH: 220, shS: 1))).y
