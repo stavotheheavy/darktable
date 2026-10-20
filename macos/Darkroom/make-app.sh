@@ -17,8 +17,8 @@ cat > "$APP/Contents/Info.plist" <<'PLIST'
 <plist version="1.0">
 <dict>
   <key>CFBundleIdentifier</key><string>dev.stavo.darkroom</string>
-  <key>CFBundleName</key><string>Darkroom</string>
-  <key>CFBundleDisplayName</key><string>Darkroom</string>
+  <key>CFBundleName</key><string>Vantage</string>
+  <key>CFBundleDisplayName</key><string>Vantage</string>
   <key>CFBundleExecutable</key><string>Darkroom</string>
   <key>CFBundlePackageType</key><string>APPL</string>
   <key>CFBundleShortVersionString</key><string>0.1</string>

@@ -1246,8 +1246,16 @@ struct SelfTest {
             model.removeFromPanel(entryWith("vignette")!)
             await model.settle()
 
-            // PP14 the curve geometry helpers: not on clean/s1 yet, so this check waits for the curve-editor card
-            skip("PP14 curve geometry", "CurveGeometry is not on clean/s1 yet")
+            // PP14 the curve geometry helpers the graph uses: y is up (a flipped height fails), nodes round to the nearest quarter
+            let top: CGFloat = 12, plotH: CGFloat = 196, left: CGFloat = 12, plotW: CGFloat = 266
+            let hTop = CurveGeometry.height(atY: top, plotTop: top, plotHeight: plotH)
+            let hBottom = CurveGeometry.height(atY: top + plotH, plotTop: top, plotHeight: plotH)
+            let yOne = CurveGeometry.y(forHeight: 1, plotTop: top, plotHeight: plotH)
+            let n12 = CurveGeometry.nearestNode(toX: left + 0.12 * plotW, plotLeft: left, plotWidth: plotW)
+            let n13 = CurveGeometry.nearestNode(toX: left + 0.13 * plotW, plotLeft: left, plotWidth: plotW)
+            let clampLow = CurveGeometry.height(atY: top + plotH + 40, plotTop: top, plotHeight: plotH)
+            check(abs(hTop - 1) < 1e-12 && abs(hBottom) < 1e-12 && abs(yOne - top) < 1e-9 && n12 == 0 && n13 == 1 && clampLow == 0,
+                  "PP14 curve geometry: top is 1, bottom 0, height 1 draws at the top, 12% picks node 0 and 13% node 1, below the plot clamps (\(hTop), \(hBottom), \(yOne), \(n12), \(n13), \(clampLow))")
             model.mode = .simple
         } else {
             skip("pro panel", "the basics and their fields are the clean engine's")
