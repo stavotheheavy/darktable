@@ -742,9 +742,11 @@ do {
 do {
     let fw = 48, fh = 40
     let fix = DetailCommon.fixture(width: fw, height: fh)
+    // max that cannot hide a NaN: max(w, .nan) returns w, so a non-finite term makes the accumulator infinite
+    func absorb(_ acc: Double, _ term: Double) -> Double { term.isFinite ? max(acc, term) : .infinity }
     func maxDiff(_ a: [SIMD3<Double>], _ b: [SIMD3<Double>]) -> Double {
         var w = 0.0
-        for (p, q) in zip(a, b) { for c in 0..<3 { w = max(w, abs(p[c] - q[c])) } }
+        for (p, q) in zip(a, b) { for c in 0..<3 { w = absorb(w, abs(p[c] - q[c])) } }
         return a.count == b.count ? w : .infinity
     }
     func finite(_ a: [SIMD3<Double>]) -> Bool { a.allSatisfy { $0.x.isFinite && $0.y.isFinite && $0.z.isFinite } }
@@ -776,7 +778,7 @@ do {
     let sOut = DetailCommon.sqrtLuminance(out, width: fw, height: fh)
     var e2 = 0.0
     for i in fix.indices where 0.2126 * fix[i].x + 0.7152 * fix[i].y + 0.0722 * fix[i].z > 1e-6 {
-        e2 = max(e2, abs(sOut.values[i] - max(s.values[i] + 0.8 * (s.values[i] - ref.values[i]), 0)))
+        e2 = absorb(e2, abs(sOut.values[i] - max(s.values[i] + 0.8 * (s.values[i] - ref.values[i]), 0)))
     }
     check("LC2 sqrt(Y_out) equals max(s + 0.8 (s - guided), 0) within 1e-9", e2.isFinite && e2 < 1e-9, "\(e2)")
 
@@ -787,12 +789,12 @@ do {
     var dGuided = 0.0, dBox = 0.0
     for x in 19...20 {
         let i = 8 * 40 + x
-        dGuided = max(dGuided, abs(stepOut.values[i] - stepS.values[i]))
-        dBox = max(dBox, abs(stepS.values[i] - boxBase.values[i]))
+        dGuided = absorb(dGuided, abs(stepOut.values[i] - stepS.values[i]))
+        dBox = absorb(dBox, abs(stepS.values[i] - boxBase.values[i]))
     }
     let ratio3 = dGuided / dBox
     check("LC3 the boost at the step is under 0.3 times the box-base boost (edge-aware, no halo)",
-          ratio3.isFinite && ratio3 < 0.3, "guided \(dGuided), box \(dBox), ratio \(ratio3)")
+          dGuided.isFinite && dBox.isFinite && ratio3.isFinite && ratio3 < 0.3, "guided \(dGuided), box \(dBox), ratio \(ratio3)")
 
     // LC4 and LC5 positive detail boosts texture, negative detail flattens it
     let waveS = DetailCommon.sqrtLuminance(waveGrey, width: 60, height: 60)
@@ -808,7 +810,7 @@ do {
     var e6 = 0.0
     for (p, q) in zip(fixOut, fix) {
         let rx = p.x / q.x, ry = p.y / q.y, rz = p.z / q.z
-        e6 = max(e6, abs(rx - ry) / max(1, abs(rx)), abs(rx - rz) / max(1, abs(rx)))
+        e6 = absorb(absorb(e6, abs(rx - ry) / max(1, abs(rx))), abs(rx - rz) / max(1, abs(rx)))
     }
     check("LC6 each channel's ratio to its input is the same on every pixel (hue and chroma kept)", e6.isFinite && e6 < 1e-9, "\(e6)")
 
