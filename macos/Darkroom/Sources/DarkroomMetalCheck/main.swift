@@ -372,5 +372,26 @@ do {
     check("CC1-CC3 colour helpers ran", false, "\(error)")
 }
 
+// CB colour balance kernel against ColorBalance, on the same 4096 colours as CB1 in DarkroomCoreCheck
+do {
+    let cbPixels: [SIMD4<Float>] = (0..<4096).map { i in
+        let t = Double(i) / 4095, h = t * 37 * 2 * .pi, v = 0.002 + 2.5 * t
+        return SIMD4(Float(v * (0.6 + 0.4 * cos(h))), Float(v * (0.6 + 0.4 * cos(h - 2.1))), Float(v * (0.6 + 0.4 * cos(h + 2.1))), 1)
+    }
+    let cbOut = try MetalPerPixel.run(source: MetalColorBalance.source, function: "colorbalanceBuf", pixels: cbPixels,
+                                      uniforms: [0.3, 0.4, 0.5])
+    var cbFinite = cbOut.count == cbPixels.count, cbWorst = 0.0
+    for (g, p) in zip(cbOut, cbPixels) {
+        guard g.x.isFinite, g.y.isFinite, g.z.isFinite else { cbFinite = false; continue }
+        let input = SIMD3<Double>(Double(p.x), Double(p.y), Double(p.z))
+        let want = ColorBalance.apply(input, contrast: 0.3, saturation: 0.4, vibrance: 0.5)
+        for k in 0..<3 { cbWorst = max(cbWorst, abs(Double(g[k]) - want[k]) / max(1, abs(want[k]))) }
+    }
+    check("CB colorbalanceBuf is finite and matches ColorBalance within relative 1e-4 unclamped",
+          cbFinite && cbWorst < 1e-4, "finite \(cbFinite), worst relative error \(cbWorst)")
+} catch {
+    check("CB colorbalanceBuf kernel ran", false, "\(error)")
+}
+
 print(failures == 0 ? "\nall Metal checks passed" : "\n\(failures) failed")
 exit(failures == 0 ? 0 : 1)

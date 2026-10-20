@@ -53,11 +53,11 @@ extension CIModule {
                 try CIBridge.gain(image, scale: SIMD3(v["red"] ?? 1, v["green"] ?? 1, v["blue"] ?? 1))
             }),
 
-        // Colour balance, as an approximation: vibrance and global saturation and contrast
-        // from Core Image's own controls. Not darktable's colour balance rgb maths; the
-        // difference is a known gap, not a match.
+        // Colour balance in OkLab: contrast, global saturation and vibrance, the fields Simple's
+        // Contrast and Color sliders write. ColorBalance in DarkroomCore is the oracle, and the
+        // per-pixel kernel is checked against it (darkroom-engine-check E-CB).
         CIModule(
-            operation: "colorbalancergb", name: "color balance rgb (approximate)", iopOrder: 25,
+            operation: "colorbalancergb", name: "color balance (OkLab)", iopOrder: 25,
             defaultEnabled: false,
             fields: [
                 FieldSchema(name: "vibrance", description: "vibrance", kind: .float,
@@ -68,13 +68,9 @@ extension CIModule {
                             min: -1, max: 1, defaultValue: .number(0), options: []),
             ],
             apply: { image, v in
-                let vibrant = image.applyingFilter("CIVibrance", parameters: [
-                    kCIInputAmountKey: v["vibrance"] ?? 0,
-                ])
-                return vibrant.applyingFilter("CIColorControls", parameters: [
-                    kCIInputSaturationKey: 1 + (v["saturation_global"] ?? 0),
-                    kCIInputContrastKey: 1 + (v["contrast"] ?? 0),
-                ])
+                try CIBridge.perPixel(image, source: MetalColorBalance.source, function: "colorbalanceTex",
+                                      uniforms: [Float(v["contrast"] ?? 0), Float(v["saturation_global"] ?? 0),
+                                                 Float(v["vibrance"] ?? 0)])
             }),
 
         // Exposure in stops, applied as a gain on linear light.
