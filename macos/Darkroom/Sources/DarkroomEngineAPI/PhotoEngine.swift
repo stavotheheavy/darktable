@@ -28,6 +28,8 @@ public protocol PhotoEngine: Actor {
     /// The algorithm version of every module this engine can run, by operation. A module's version goes up when its maths
     /// changes, so a saved edit can tell it was made with other maths (roadmap T11). Engines that do not track it answer [:].
     func algorithmVersions() async -> [String: Int]
+    /// Paints blown and crushed pixels on the session's screen renders (not on exports). Engines without it ignore the call.
+    func setClippingOverlay(_ on: Bool) async
     /// A JPEG with an HDR gain map, or nil when the engine cannot make one.
     func exportHDRJPEG(path: String, maxSide: Int, stack: [StackEntry], headroom: Double) async throws -> Data?
 
@@ -49,6 +51,7 @@ extension PhotoEngine {
 
     public func exportHDRJPEG(path: String, maxSide: Int, stack: [StackEntry], headroom: Double) async throws -> Data? { nil }
     public func algorithmVersions() async -> [String: Int] { [:] }
+    public func setClippingOverlay(_ on: Bool) async {}
 
     /// Engines that cannot report it (darktable, for now) answer nil.
     public func sessionOutputSize(stack: [StackEntry]) async throws -> (width: Int, height: Int)? { nil }

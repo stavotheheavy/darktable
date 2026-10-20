@@ -222,12 +222,27 @@ struct ScopesCard: View {
             .rig("scope")
 
             if let s = model.scopes {
-                HStack {
-                    clip("shadows", s.shadowClip, .blue)
-                    Spacer()
-                    clip("highlights", s.highlightClip, .red)
+                // the readout is also the switch for the clipping warning: tap it (or press J) to paint those pixels on the photo
+                Button { model.showClipping.toggle() } label: {
+                    HStack {
+                        clip("shadows", s.shadowClip, .blue)
+                        Spacer()
+                        clip("highlights", s.highlightClip, .red)
+                    }
+                    .font(.caption2.monospaced())
+                    .padding(.horizontal, 8)
+                    .frame(height: 44)
+                    .background(model.showClipping ? Theme.selectedFill : Color.clear, in: Capsule())
+                    .overlay(Capsule().strokeBorder(model.showClipping ? Theme.selectedRing : Color.clear, lineWidth: 1))
+                    .contentShape(Capsule())
                 }
-                .font(.caption2.monospaced())
+                .buttonStyle(.plain)
+                .accessibilityLabel("Clipping warning")
+                .accessibilityValue(model.showClipping ? "on" : "off")
+                .help("Show clipped pixels on the photo (J)")
+                .rig("clipping-toggle")
+            } else if model.showClipping {
+                EmptyView()
             }
         }
         .padding(12)

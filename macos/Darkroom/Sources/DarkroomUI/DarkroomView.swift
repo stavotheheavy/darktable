@@ -54,6 +54,7 @@ public struct DarkroomView: View {
                 Button("") { if model.history.count > 1 { model.showingOriginal.toggle() } }
                     .keyboardShortcut("\\", modifiers: [.command])
                 Button("") { model.proMenuOpen = nil }.keyboardShortcut(.cancelAction)
+                Button("") { model.showClipping.toggle() }.keyboardShortcut("j", modifiers: [])
             }
             .opacity(0).frame(width: 0, height: 0).allowsHitTesting(false)
         }

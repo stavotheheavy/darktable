@@ -211,6 +211,11 @@ public enum AutoTest {
                 await shot("p14-\(label)-radial-light")
                 model.removeFromPanel(e)
             }
+            // the clipping warning
+            model.showClipping = true
+            try? await Task.sleep(for: .milliseconds(300))
+            await shot("p15-\(label)-clipping")
+            model.showClipping = false
         }
         while model.historyIndex > start { model.undo() }
         win.setFrame(previousFrame, display: true)

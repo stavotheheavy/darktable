@@ -1417,6 +1417,22 @@ struct SelfTest {
             let clampLow = CurveGeometry.height(atY: top + plotH + 40, plotTop: top, plotHeight: plotH)
             check(abs(hTop - 1) < 1e-12 && abs(hBottom) < 1e-12 && abs(yOne - top) < 1e-9 && n12 == 0 && n13 == 1 && clampLow == 0,
                   "PP14 curve geometry: top is 1, bottom 0, height 1 draws at the top, 12% picks node 0 and 13% node 1, below the plot clamps (\(hTop), \(hBottom), \(yOne), \(n12), \(n13), \(clampLow))")
+            // PP18 the clipping warning: J paints the clipped pixels on the screen render only, and off gives the same frame back
+            do {
+                await model.settle()
+                let clean = bytes(model.frame)
+                model.showClipping = true
+                try await Task.sleep(for: .milliseconds(200))
+                await model.settle()
+                let painted = bytes(model.frame)
+                let stackHasIt = model.buildStack().contains { $0.operation.contains("clip") }
+                model.showClipping = false
+                try await Task.sleep(for: .milliseconds(200))
+                await model.settle()
+                check(painted != nil && painted != clean, "PP18 the clipping warning paints the clipped pixels on screen")
+                check(!stackHasIt, "PP18 the export stack carries no clipping overlay")
+                check(bytes(model.frame) == clean, "PP18 turning it off gives back the same frame, byte for byte")
+            }
             // PP15 the header dropdowns: one open at a time, the search starts empty each time one opens, and the Modules
             // list narrows with the search (every module it keeps matches; none matching leaves nothing)
             model.proMenuOpen = .modules

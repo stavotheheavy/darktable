@@ -1539,5 +1539,30 @@ do {
           finite && RadialLight.apply([SIMD3(0, 0, 0)], width: 1, height: 1, ev: 3, spec: hard) == [SIMD3(0, 0, 0)])
 }
 
+// CL clipping warning: blown and crushed by the 8-bit encode, the rule the histogram readout counts
+do {
+    func enc(_ v: Double) -> Double { Transfer.srgbToLinear(v / 255) }
+    check("CL1 a channel that encodes to 255 is blown, to 254 is not; 0 is crushed, 1 is not",
+          Clipping.state(SIMD3(enc(255), 0.5, 0.5)) == .blown && Clipping.state(SIMD3(enc(254), 0.5, 0.5)) == .fine
+            && Clipping.state(SIMD3(0.5, enc(0), 0.5)) == .crushed && Clipping.state(SIMD3(0.5, enc(1), 0.5)) == .fine)
+    check("CL1 past white (scene values above 1) is blown; negative is crushed",
+          Clipping.state(SIMD3(3, 0.2, 0.2)) == .blown && Clipping.state(SIMD3(-0.1, 0.2, 0.2)) == .crushed)
+    check("CL2 blown wins when a pixel is both: pure red (1, 0, 0)", Clipping.state(SIMD3(1, 0, 0)) == .blown)
+    let mid = SIMD3(0.3, 0.4, 0.5)
+    check("CL3 a pixel that is neither keeps its colour exactly", Clipping.tint(mid) == mid)
+    let b = Clipping.tint(SIMD3(1.5, 0.5, 0.5)), c = Clipping.tint(SIMD3(0, 0.5, 0.5))
+    check("CL3 the tint is an 85% mix toward red for blown (\(b)) and blue for crushed (\(c))",
+          abs(b.x - (1.5 + (1 - 1.5) * 0.85)) < 1e-12 && abs(b.y - (0.5 + (0.1 - 0.5) * 0.85)) < 1e-12
+            && abs(c.z - (0.5 + (1 - 0.5) * 0.85)) < 1e-12 && abs(c.x - (0 + 0.15 * 0.85)) < 1e-12)
+    // the count the histogram makes (a channel at 255 / at 0 on an 8-bit frame) equals the count of this rule on the same values
+    var agree = true
+    for r in stride(from: 0, through: 255, by: 5) { for g in stride(from: 0, through: 255, by: 51) { for bl in [0, 1, 128, 254, 255] {
+        let lin = SIMD3(enc(Double(r)), enc(Double(g)), enc(Double(bl)))
+        let hist = r == 255 || g == 255 || bl == 255 ? Clipping.State.blown : (r == 0 || g == 0 || bl == 0 ? .crushed : .fine)
+        if Clipping.state(lin) != hist { agree = false }
+    } } }
+    check("CL4 the overlay and the histogram readout call the same pixels clipped (8-bit sweep)", agree)
+}
+
 print(failures == 0 ? "\nall checks passed" : "\n\(failures) failed")
 exit(failures == 0 ? 0 : 1)

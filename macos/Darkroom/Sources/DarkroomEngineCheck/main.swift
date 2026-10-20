@@ -1029,5 +1029,29 @@ do {
     } else { check("E-RL-camera renders", false) }
 }
 
+// E-CL the clipping overlay on the GPU against DarkroomCore.Clipping, on a sweep that has blown, crushed and fine pixels
+do {
+    let n = 64
+    var px: [SIMD4<Float>] = []
+    for i in 0..<(n * n) {
+        let t = Double(i) / Double(n * n - 1)
+        // channels walk different curves through 0 ... 2.5 and a little below 0, so all three states and their borders occur
+        let r = -0.05 + 2.6 * t, g = 1.1 - 1.2 * abs(sin(t * 37)), b = 0.5 + 0.55 * sin(t * 11)
+        px.append(SIMD4(Float(r), Float(g), Float(b), 1))
+    }
+    let got = (try? CIEngineProbe.filter(.clipping, pixels: px, width: n, height: n)) ?? []
+    var worstErr = got.count == px.count ? 0.0 : Double.infinity, states = Set<String>()
+    for (i, p) in px.enumerated() where i < got.count {
+        let rgb = SIMD3(Double(p.x), Double(p.y), Double(p.z))
+        // skip pixels within float rounding of a boundary: the CPU decides them in Double, the GPU in Float
+        let near = [Clipping.blownFrom, Clipping.crushedTo].contains { c in rgb.indices.contains { abs(rgb[$0] - c) < 2e-6 } }
+        if near { continue }
+        states.insert("\(Clipping.state(rgb))")
+        let want = Clipping.tint(rgb)
+        for c in 0..<3 { let d = abs(Double(got[i][c]) - want[c]); worstErr = got[i][c].isFinite ? max(worstErr, d) : .infinity }
+    }
+    check("E-CL1 the GPU clipping overlay matches the oracle on a sweep with blown, crushed and fine pixels (\(states.sorted()))", worstErr < 1e-5 && states.count == 3, "\(worstErr)")
+}
+
 print(failures == 0 ? "\nall checks passed" : "\n\(failures) failed")
 exit(failures == 0 ? 0 : 1)

@@ -75,6 +75,10 @@ public final class DarkroomModel {
     public var proMenuOpen: ProMenuKind? { didSet { if proMenuOpen != oldValue { proMenuQuery = "" } } }
     /// What the Modules dropdown's search field holds.
     public var proMenuQuery = ""
+    /// Blown highlights red and crushed shadows blue on the picture (the J key). Display-only; exports never carry it.
+    public var showClipping = false {
+        didSet { if showClipping != oldValue { let on = showClipping; Task { await engine.setClippingOverlay(on); requestRender() } } }
+    }
     /// The module whose mask is drawn over the photo (red), or nil. Render-only: exports never carry it.
     public var maskShowID: String? { didSet { if maskShowID != oldValue { requestRender() } } }
 
@@ -647,7 +651,7 @@ public final class DarkroomModel {
                 } else {
                     lastFullRender = .milliseconds(result.milliseconds)
                     status = "\(result.width) x \(result.height)"
-                    if !showingOriginal && maskShowID == nil { measureScopes(result.image) }   // the red overlay is not part of the picture
+                    if !showingOriginal && maskShowID == nil && !showClipping { measureScopes(result.image) }   // the red overlay is not part of the picture
                 }
             } catch is RenderCanceled {
                 // superseded: wantsRender is set and the loop renders the newest edit

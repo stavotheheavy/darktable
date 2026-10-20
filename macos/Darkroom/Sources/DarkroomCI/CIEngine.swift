@@ -39,6 +39,7 @@ public actor CIEngine: PhotoEngine {
 
     private var context: CIContext?
     private var session: Session?
+    private var clippingOverlay = false
 
     /// Set from any thread by `cancelRender()`; checked between decode and render.
     private let cancelFlag = Mutex(false)
@@ -79,7 +80,8 @@ public actor CIEngine: PhotoEngine {
         let s = try openedSession()
         cancelFlag.withLock { $0 = false }
         let started = ContinuousClock.now
-        let image = try edited(try decode(s, scale: s.fit * scale, stack: stack), stack, camera: s.camera, scale: s.fit * scale)
+        var image = try edited(try decode(s, scale: s.fit * scale, stack: stack), stack, camera: s.camera, scale: s.fit * scale)
+        if clippingOverlay { image = try CIBridge.clippingOverlay(image) }
         return try frame(image, crop: nil, since: started)
     }
 
@@ -88,7 +90,8 @@ public actor CIEngine: PhotoEngine {
         let s = try openedSession()
         cancelFlag.withLock { $0 = false }
         let started = ContinuousClock.now
-        let image = try edited(try decode(s, scale: s.fit * scale, stack: stack), stack, camera: s.camera, scale: s.fit * scale)
+        var image = try edited(try decode(s, scale: s.fit * scale, stack: stack), stack, camera: s.camera, scale: s.fit * scale)
+        if clippingOverlay { image = try CIBridge.clippingOverlay(image) }
         let ext = image.extent.integral
         // Core Image's origin is bottom left; the region is given top left.
         let wanted = CGRect(x: ext.minX + CGFloat(x), y: ext.maxY - CGFloat(y) - CGFloat(height),
@@ -148,6 +151,8 @@ public actor CIEngine: PhotoEngine {
                        blend: blends ? BlendInfo() : nil)
         }
     }
+
+    public func setClippingOverlay(_ on: Bool) async { clippingOverlay = on }
 
     public func algorithmVersions() async -> [String: Int] {
         Dictionary(uniqueKeysWithValues: CIModule.all.map { ($0.operation, $0.algorithmVersion) })

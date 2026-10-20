@@ -165,7 +165,7 @@ struct ProPanel: View {
         VStack(spacing: 12) {
             // a compact scope: the sections are what Pro is for, and the curve must be on screen at 860 pt
             ScopesCard(model: model)
-                .frame(height: 176)
+                .frame(height: 204)
             ScrollView {
                 VStack(alignment: .leading, spacing: 8) {
                     let entries = model.proPanelEntries
