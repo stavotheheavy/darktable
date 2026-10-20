@@ -7,8 +7,13 @@ public struct ModuleEdit: Codable, Equatable, Sendable {
     public var enabled: Bool?
     public var params: [String: ParamValue] = [:]
     public var blend: [String: ParamValue] = [:]
+    /// Pro mode's panel: true when added from the Modules menu, false when taken out, nil when the module
+    /// shows by default (a basic, applied, or edited). Kept with the edit so undo, redo and the sidecar carry it.
+    public var inPanel: Bool?
 
-    public var isEmpty: Bool { enabled == nil && params.isEmpty && blend.isEmpty }
+    /// A change to the picture (on/off, parameters, blend); panel membership alone is not one.
+    public var changesPicture: Bool { enabled != nil || !params.isEmpty || !blend.isEmpty }
+    public var isEmpty: Bool { !changesPicture && inPanel == nil }
 }
 
 public typealias EditMap = [String: ModuleEdit]   // key: ModuleInfo.id

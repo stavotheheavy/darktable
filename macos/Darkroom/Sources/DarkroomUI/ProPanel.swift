@@ -9,8 +9,10 @@ extension DarkroomModel {
     /// The ten modules most edits use, first in the Modules menu. "Crop and straighten" is crop and ashift together.
     static let proCommon: [[String]] = [
         ["temperature"], ["exposure"], ["tonecurve"], ["shadhi"], ["colorbalancergb"],
-        ["splittoning"], ["monochrome"], ["sharpen"], ["denoiseprofile"], ["crop", "ashift"],
+        ["splittoning"], ["monochrome"], ["sharpen"], ["denoiseprofile"], ["crop", "ashift", "flip"],
     ]
+    /// Shown and switched as one section: crop, straighten and the quarter turn its Rotate button writes.
+    static let geometryOperations: Set<String> = ["crop", "ashift", "flip"]
     /// A new photo starts with these in the panel, at neutral settings.
     public static let proBasics: Set<String> = ["temperature", "exposure", "tonecurve", "colorbalancergb"]
 
@@ -28,20 +30,15 @@ extension DarkroomModel {
     ]
 
     /// The module behind an operation (the first instance).
-    func proModule(_ operation: String) -> ModuleInfo? { modules.first { $0.operation == operation } }
+    func proModule(_ operation: String) -> ModuleInfo? { modules.first { $0.operation == operation && $0.multiPriority == 0 } ?? modules.first { $0.operation == operation } }
 
-    /// What "out of the panel" leaves a module at: no edits, switched off unless it is off by default anyway.
-    private func removalEdit(_ m: ModuleInfo) -> ModuleEdit {
-        var e = ModuleEdit()
-        if m.enabled && !m.hideEnableButton { e.enabled = false }
-        return e
-    }
-
-    /// In the panel: the basics, anything added from the menu, anything with edits, except a module taken out
-    /// that is still exactly as taking it out left it (editing it again, or undo, brings it back).
+    /// In the panel: what the Modules menu last said (stored with the edit, so undo, redo and the sidecar keep it);
+    /// otherwise by default: a basic (its first instance), anything edited, or anything the engine applies that can
+    /// be switched off (darktable turns several on by default, and the menu must match what is applied).
     public func inProPanel(_ m: ModuleInfo) -> Bool {
-        if proRemoved.contains(m.id), (edits[m.id] ?? ModuleEdit()) == removalEdit(m) { return false }
-        return Self.proBasics.contains(m.operation) || proAdded.contains(m.id) || isEdited(m)
+        if let decided = edits[m.id]?.inPanel { return decided }
+        if Self.proBasics.contains(m.operation) && m.multiPriority == 0 { return true }
+        return isEdited(m) || (isEnabled(m) && !m.hideEnableButton)
     }
 
     /// One panel entry per module, or per group of modules shown as one section (crop and straighten).
@@ -49,22 +46,23 @@ extension DarkroomModel {
         public let id: String
         public let name: String
         public let modules: [ModuleInfo]
+        /// For rig ids: the operation, plus the instance number past the first (URL-safe, unique).
+        var rigName: String { modules[0].multiPriority == 0 ? modules[0].operation : "\(modules[0].operation)-\(modules[0].multiPriority)" }
     }
 
     private func entry(for operations: [String]) -> ProEntry? {
         let ms = operations.compactMap(proModule)
         guard let first = ms.first else { return nil }
-        let name = operations == ["crop", "ashift"] ? "Crop and straighten" : first.title
+        let name = Set(operations) == Self.geometryOperations ? "Crop and straighten" : first.title
         return ProEntry(id: first.id, name: name, modules: ms)
     }
 
     /// The panel's sections, in the order the engine applies them.
     public var proPanelEntries: [ProEntry] {
         var seen = Set<String>(), out: [(Int, ProEntry)] = []
-        let combined = Set(["crop", "ashift"])
         for m in modules where inProPanel(m) && !seen.contains(m.id) {
-            if combined.contains(m.operation) {
-                guard let e = entry(for: ["crop", "ashift"]) else { continue }
+            if Self.geometryOperations.contains(m.operation) && m.multiPriority == 0 {
+                guard let e = entry(for: ["crop", "ashift", "flip"]) else { continue }
                 e.modules.forEach { seen.insert($0.id) }
                 out.append((e.modules.map(\.iopOrder).min() ?? m.iopOrder, e))
             } else {
@@ -80,7 +78,8 @@ extension DarkroomModel {
         let common = Self.proCommon.compactMap(entry(for:))
         let commonOps = Set(Self.proCommon.flatMap { $0 })
         var groups: [(String, [ProEntry])] = [("Common", common)]
-        let rest = modules.filter { !commonOps.contains($0.operation) && !$0.deprecated }
+        // every other module, including second instances of a common one (they get their own entries)
+        let rest = modules.filter { !(commonOps.contains($0.operation) && $0.multiPriority == 0) && !$0.deprecated }
         var used = Set<String>()
         for (name, ops) in Self.proGroups {
             let items = rest.filter { ops.contains($0.operation) }
@@ -94,30 +93,20 @@ extension DarkroomModel {
 
     public func inProPanel(_ e: ProEntry) -> Bool { e.modules.contains(where: inProPanel) }
 
-    /// The menu switch, on: into the panel, unfolded, its effect on.
+    /// The menu switch, on: into the panel, unfolded, its effect on. One history step.
     public func addToPanel(_ e: ProEntry) {
-        for m in e.modules {
-            proRemoved.remove(m.id)
-            proAdded.insert(m.id)
-        }
         proOpen.insert(e.id)
         grouped("Add \(e.name)", target: "pro.add.\(history.count)") {
-            for m in e.modules where !isEnabled(m) && !m.hideEnableButton { setEnabled(m, true) }
+            for m in e.modules { setInPanel(m, true) }
         }
         Task { for m in e.modules { await loadSchema(for: m) } }
     }
 
-    /// The menu switch, off: out of the panel and no longer applied, as one history step that undo reverses.
+    /// The menu switch, off: out of the panel, edits cleared and switched off, so it no longer applies.
+    /// One history step; undo puts it back as it was.
     public func removeFromPanel(_ e: ProEntry) {
         grouped("Remove \(e.name)", target: "pro.remove.\(history.count)") {
-            for m in e.modules {
-                resetModule(m)
-                if isEnabled(m) && !m.hideEnableButton { setEnabled(m, false) }
-            }
-        }
-        for m in e.modules {
-            proAdded.remove(m.id)
-            proRemoved.insert(m.id)
+            for m in e.modules { setInPanel(m, false) }
         }
         proOpen.remove(e.id)
     }
@@ -216,7 +205,7 @@ struct ProSection: View {
                 .buttonStyle(.plain)
                 .disabled(entry.modules.allSatisfy(\.hideEnableButton))
                 .accessibilityLabel(on ? "Turn \(entry.name) off" : "Turn \(entry.name) on")
-                .rig("pro-power-\(entry.modules[0].operation)")
+                .rig("pro-power-\(entry.rigName)")
 
                 Button { model.toggleProFold(entry) } label: {
                     HStack {
@@ -232,13 +221,13 @@ struct ProSection: View {
                 }
                 .buttonStyle(.plain)
                 .accessibilityLabel(open ? "Fold \(entry.name)" : "Unfold \(entry.name)")
-                .rig("pro-fold-\(entry.modules[0].operation)")
+                .rig("pro-fold-\(entry.rigName)")
 
                 if open && model.proEdited(entry) {
                     Button("Reset") { model.resetProEntry(entry) }
                         .buttonStyle(.glass)
                         .controlSize(.small)
-                        .rig("pro-reset-\(entry.modules[0].operation)")
+                        .rig("pro-reset-\(entry.rigName)")
                 }
             }
             if open {
@@ -256,9 +245,9 @@ struct ProSection: View {
     @ViewBuilder
     private func body(for e: DarkroomModel.ProEntry) -> some View {
         let op = e.modules[0].operation
-        if op == "tonecurve", model.curveNodes != nil {
+        if op == "tonecurve", e.modules[0].multiPriority == 0, model.curveNodes != nil {
             CurveSection(model: model, module: e.modules[0])
-        } else if e.modules.map(\.operation) == ["crop", "ashift"] || Set(e.modules.map(\.operation)) == ["crop", "ashift"] {
+        } else if Set(e.modules.map(\.operation)) == DarkroomModel.geometryOperations, model.proModule("ashift") != nil {
             ProGeometry(model: model)
         } else {
             ForEach(e.modules) { m in ParamList(model: model, module: m) }
