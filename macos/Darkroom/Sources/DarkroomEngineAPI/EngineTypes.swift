@@ -24,6 +24,18 @@ public struct StackEntry: Sendable {
     }
 }
 
+/// A painted or detected mask as the engine takes it: a grey picture of the upright photo (row 0 on top, 0...255), named by an
+/// id the edit's `mask_raster` blend option refers to.
+public struct MaskPicture: Sendable, Equatable {
+    public let id: String
+    public let width: Int
+    public let height: Int
+    public let pixels: [UInt8]
+    public init(id: String, width: Int, height: Int, pixels: [UInt8]) {
+        self.id = id; self.width = width; self.height = height; self.pixels = pixels
+    }
+}
+
 /// A session render stopped by `cancelRender()` because a newer edit superseded it.
 public struct RenderCanceled: Error, Sendable {
     public init() {}

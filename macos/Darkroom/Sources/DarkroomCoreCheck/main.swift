@@ -1564,5 +1564,72 @@ do {
     check("CL4 the overlay and the histogram readout call the same pixels clipped (8-bit sweep)", agree)
 }
 
+// RK / BR: raster masks (painted or detected pictures of the upright photo) and the brush that paints them
+do {
+    let r = MaskRaster(id: "t", width: 4, height: 2, pixels: [0, 85, 170, 255, 255, 170, 85, 0])
+    func s(_ x: Int, _ y: Int) -> Double { r.sample(u: (Double(x) + 0.5) / 4, v: (Double(y) + 0.5) / 2) }
+    check("RK1 sampling at a pixel centre gives that pixel", abs(s(1, 0) - 85.0 / 255) < 1e-12 && abs(s(3, 1) - 0) < 1e-12 && abs(s(0, 1) - 1) < 1e-12)
+    check("RK1 halfway between two pixels is their mean, in x and in y",
+          abs(r.sample(u: 0.5, v: 0.25) - 0.5) < 1e-12 && abs(r.sample(u: 0.125, v: 0.5) - 0.5) < 1e-12)
+    check("RK1 outside the picture clamps to the edge pixel; NaN is 0",
+          abs(r.sample(u: -3, v: 0.25) - 0) < 1e-12 && abs(r.sample(u: 9, v: 0.25) - 1) < 1e-12 && r.sample(u: .nan, v: 0.5) == 0)
+    var spec = Mask.spec(from: ["mask_mode": 2, "mask_kind": 5])!
+    check("RK2 a raster kind with no raster is 0 everywhere, inverted or not",
+          Mask.alpha(spec, x: 3, y: 3, width: 48, height: 40, rgb: SIMD3(0.3, 0.3, 0.3)) == 0
+            && { var i = spec; i.invert = true; return Mask.alpha(i, x: 3, y: 3, width: 48, height: 40, rgb: SIMD3(0.3, 0.3, 0.3)) == 0 }())
+    spec.raster = MaskRaster(id: "c", width: 2, height: 2, pixels: [255, 0, 0, 0])
+    func a(_ o: Orientation, _ x: Double, _ y: Double, invert: Bool = false) -> Double {
+        var sp = spec; sp.orientation = o; sp.invert = invert
+        return Mask.alpha(sp, x: x, y: y, width: 48, height: 40, rgb: SIMD3(0.3, 0.3, 0.3))
+    }
+    check("RK3 an upright frame reads the raster where the pixel is: top-left bright, bottom-right dark", a(.none, 1, 1) > 0.99 && a(.none, 47, 39) < 0.01)
+    check("RK3 in a CW 90 shot the picture's top-left is the sensor's bottom-left, not its top-left",
+          a(.rotateCW90, 1, 39) > 0.99 && a(.rotateCW90, 1, 1) < 0.05 && a(.rotateCW90, 40, 1) < 0.01)
+    check("RK3 invert is 1 - weight", abs(a(.none, 1, 1, invert: true) - (1 - a(.none, 1, 1))) < 1e-12)
+
+    // an asymmetric picture (the top half bright), so swapping x and y, or turning the frame the wrong way, cannot pass
+    var topHalf = Mask.spec(from: ["mask_mode": 2, "mask_kind": 5])!
+    topHalf.raster = MaskRaster(id: "h", width: 2, height: 2, pixels: [255, 255, 0, 0])
+    func h(_ o: Orientation, _ x: Double, _ y: Double) -> Double {
+        var sp = topHalf; sp.orientation = o
+        return Mask.alpha(sp, x: x, y: y, width: 48, height: 40, rgb: SIMD3(0.3, 0.3, 0.3))
+    }
+    check("RK4 an upright frame: the top half of the picture is the top half of the frame, at any x",
+          h(.none, 40, 1) > 0.99 && h(.none, 1, 1) > 0.99 && h(.none, 40, 39) < 0.01 && h(.none, 1, 39) < 0.01)
+    check("RK4 a CW 90 shot: the picture's top half is the sensor's LEFT half (x < 24), at any y",
+          h(.rotateCW90, 5, 20) > 0.99 && h(.rotateCW90, 5, 38) > 0.99 && h(.rotateCW90, 43, 20) < 0.01 && h(.rotateCW90, 43, 2) < 0.01)
+    check("RK4 a 180 shot: the picture's top half is the sensor's bottom half", h(.rotate180, 20, 39) > 0.99 && h(.rotate180, 20, 1) < 0.01)
+
+    func px(_ m: MaskRaster, _ x: Int, _ y: Int) -> Int { Int(m.pixels[y * m.width + x]) }
+    let one = BrushStroke(points: [SIMD2(0.5, 0.5)], radius: 0.1, softness: 0, flow: 1, erase: false)
+    let hard = Brush.rasterize([one][...], width: 100, height: 80, id: "b")
+    check("BR1 a hard dab: 255 at the centre and out to the radius, 0 beyond it", px(hard, 50, 40) == 255 && px(hard, 58, 40) == 255 && px(hard, 70, 40) == 0 && px(hard, 50, 5) == 0)
+    var softStroke = one; softStroke.softness = 1
+    let soft = Brush.rasterize([softStroke][...], width: 100, height: 80, id: "s")
+    check("BR2 a soft dab fades: about half weight halfway out (\(px(soft, 56, 40))), a hair under full at the centre (\(px(soft, 50, 40)))",
+          abs(px(soft, 56, 40) - 125) <= 4 && px(soft, 50, 40) >= 250 && px(soft, 50, 40) > px(soft, 56, 40) && px(soft, 56, 40) > px(soft, 62, 40))
+    var half = one; half.flow = 0.5
+    let flow = Brush.rasterize([half][...], width: 100, height: 80, id: "f")
+    check("BR3 flow caps the weight: 0.5 gives 128 at most", flow.pixels.max() == 128 || flow.pixels.max() == 127, "\(flow.pixels.max() ?? 0)")
+    let line = BrushStroke(points: [SIMD2(0.2, 0.5), SIMD2(0.8, 0.5)], radius: 0.1, softness: 0, flow: 1, erase: false)
+    let lined = Brush.rasterize([line][...], width: 100, height: 80, id: "l")
+    check("BR4 a stroke is continuous: every pixel on its path is full, none is skipped", (25...75).allSatisfy { px(lined, $0, 40) == 255 })
+    var eraser = one; eraser.erase = true
+    let erased = Brush.rasterize([line, eraser][...], width: 100, height: 80, id: "e")
+    check("BR5 an eraser removes weight where it passes and leaves the rest", px(erased, 50, 40) == 0 && px(erased, 30, 40) == 255 && px(erased, 70, 40) == 255)
+    let twice = Brush.rasterize([half, half][...], width: 100, height: 80, id: "t")
+    check("BR6 strokes combine with the over rule: two at flow 0.5 make 0.75 (\(px(twice, 50, 40)))", abs(px(twice, 50, 40) - 191) <= 1)
+    let first = Brush.rasterize([line, eraser][...].prefix(1), width: 100, height: 80, id: "p")
+    check("BR7 the first n strokes of a layer are exactly that layer at n (undo is a smaller n)", first.pixels == lined.pixels && erased.pixels != lined.pixels)
+    check("BR8 raster size keeps the picture's shape: 3:2 landscape is 1024 x 683, portrait 683 x 1024",
+          Brush.rasterSize(aspect: 1.5) == (1024, 683) && Brush.rasterSize(aspect: 2.0 / 3) == (683, 1024))
+    let hostile = BrushStroke(points: [SIMD2(.nan, 0.5), SIMD2(5, -4), SIMD2(0.5, .infinity)], radius: .nan, softness: .nan, flow: 7, erase: false)
+    let safe = Brush.rasterize([hostile][...], width: 64, height: 48, id: "h")
+    check("BR9 NaN, infinite and wild strokes cannot crash the rasteriser", safe.pixels.count == 64 * 48)
+    let data = try JSONEncoder().encode(line)
+    let back = try JSONDecoder().decode(BrushStroke.self, from: data)
+    check("BR10 a stroke round-trips through its compact JSON", back.points.count == 2 && abs(back.points[1].x - 0.8) < 1e-4 && back.radius == line.radius && back.erase == false && data.count < 150, "\(data.count) bytes")
+}
+
 print(failures == 0 ? "\nall checks passed" : "\n\(failures) failed")
 exit(failures == 0 ? 0 : 1)

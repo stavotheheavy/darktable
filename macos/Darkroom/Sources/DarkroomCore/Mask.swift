@@ -4,7 +4,8 @@
 // ECCV 2010) guided by the photo's own square-root luminance.
 //
 // Masks live in a stack entry's `blend` dictionary (numbers only, so history, undo and the sidecar already carry them):
-//   mask_mode 2 = local mask; mask_kind 0 whole frame (alpha 1; the plumbing checks use it), 1 gradient, 2 ellipse, 3 luminance range, 4 colour range;
+//   mask_mode 2 = local mask; mask_kind 0 whole frame (alpha 1; the plumbing checks use it), 1 gradient, 2 ellipse, 3 luminance range, 4 colour range,
+//   5 raster (a painted or detected picture of the upright photo, named by the blend option mask_raster);
 //   mask_invert 0/1; mask_refine = guided-filter radius in pixels (0 = off); opacity 0...100 as for every blend.
 // Each kind reads its own keys (MaskGradient ... MaskColour). Coordinates are pixels of the UPRIGHT picture as shot (the
 // camera's orientation applied, before the user's crop, straighten and flip), x right, y down, pixel centres at +0.5, so
@@ -22,6 +23,8 @@ public struct MaskSpec: Sendable, Equatable {
     /// The camera's orientation. A mask is drawn on the picture as you see it upright; the engine works on the sensor's frame,
     /// so every pixel is first mapped through this to where it sits in the upright picture. `.none` for a frame that is upright.
     public var orientation: Orientation = .none
+    /// The picture a raster kind (5: painted or detected) reads; without it that kind is 0 everywhere.
+    public var raster: MaskRaster?
     /// The kind's parameters, in the order its enum documents (at most 8).
     public var p: [Double]
 
@@ -60,6 +63,7 @@ public enum Mask {
         case 2: p = MaskEllipse.params(blend)
         case 3: p = MaskLuminance.params(blend)
         case 4: p = MaskColour.params(blend)
+        case 5: p = []
         default: return nil
         }
         return MaskSpec(kind: kind, invert: (blend["mask_invert"] ?? 0) != 0,
@@ -70,6 +74,8 @@ public enum Mask {
     /// The unrefined weight of one pixel: (x, y) its centre in frame pixels, `rgb` its working-space colour.
     public static func alpha(_ spec: MaskSpec, x sensorX: Double, y sensorY: Double, width sensorW: Double, height sensorH: Double,
                              rgb: SIMD3<Double>) -> Double {
+        // a raster kind with no raster (a missing file) changes nothing, inverted or not
+        if spec.kind == 5, spec.raster == nil { return 0 }
         // the position in the upright picture (identity for an upright frame)
         let frame = SIMD2(sensorW, sensorH)
         let u = spec.orientation.map(SIMD2(sensorX, sensorY), size: frame), size = spec.orientation.outputSize(frame)
@@ -80,6 +86,7 @@ public enum Mask {
         case 2: a = MaskEllipse.alpha(p: spec.p, x: x, y: y, width: width, height: height)
         case 3: a = MaskLuminance.alpha(p: spec.p, rgb: rgb)
         case 4: a = MaskColour.alpha(p: spec.p, rgb: rgb)
+        case 5: a = spec.raster?.sample(u: x / width, v: y / height) ?? 0
         default: a = 1
         }
         return spec.invert ? 1 - a : a

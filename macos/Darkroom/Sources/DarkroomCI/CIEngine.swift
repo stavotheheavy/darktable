@@ -40,6 +40,7 @@ public actor CIEngine: PhotoEngine {
     private var context: CIContext?
     private var session: Session?
     private var clippingOverlay = false
+    private var maskRasters: [String: MaskRaster] = [:]
 
     /// Set from any thread by `cancelRender()`; checked between decode and render.
     private let cancelFlag = Mutex(false)
@@ -154,6 +155,11 @@ public actor CIEngine: PhotoEngine {
 
     public func setClippingOverlay(_ on: Bool) async { clippingOverlay = on }
 
+    public func setMaskRasters(_ rasters: [MaskPicture]) async {
+        maskRasters = Dictionary(rasters.filter { $0.width > 0 && $0.height > 0 && $0.pixels.count == $0.width * $0.height }
+            .map { ($0.id, MaskRaster(id: $0.id, width: $0.width, height: $0.height, pixels: $0.pixels)) }) { $1 }
+    }
+
     public func algorithmVersions() async -> [String: Int] {
         Dictionary(uniqueKeysWithValues: CIModule.all.map { ($0.operation, $0.algorithmVersion) })
     }
@@ -171,8 +177,8 @@ public actor CIEngine: PhotoEngine {
         let peak = min(max(headroom, 1), 8)
         if Self.wantsSceneLinear(stack) {
             let decoded = try decode(s, scale: s.fit, stack: stack)
-            let sdr = try Self.process(decoded, stack, camera: s.camera, scale: s.fit)
-            let hdr = try Self.process(decoded, stack, camera: s.camera, hdrPeak: peak, scale: s.fit)
+            let sdr = try Self.process(decoded, stack, camera: s.camera, scale: s.fit, rasters: maskRasters)
+            let hdr = try Self.process(decoded, stack, camera: s.camera, hdrPeak: peak, scale: s.fit, rasters: maskRasters)
             return try Self.hdrJPEG(context: context, sdr: sdr, hdr: hdr, headroom: peak)
         }
         s.raw.extendedDynamicRangeAmount = 0
@@ -241,7 +247,7 @@ public actor CIEngine: PhotoEngine {
     }
 
     private func edited(_ image: CIImage, _ stack: [StackEntry], camera: Orientation, scale: Double = 1) throws -> CIImage {
-        try Self.process(image, stack, camera: camera, scale: scale)
+        try Self.process(image, stack, camera: camera, scale: scale, rasters: maskRasters)
     }
 
     /// The whole edit on a sensor-orientation image: the per-pixel stack, then geometry. Static so
@@ -252,14 +258,15 @@ public actor CIEngine: PhotoEngine {
     /// pixels (sharpen, local contrast, haze removal, mask refinement) take their radius as full-resolution pixels and
     /// shrink it by `scale`, so a preview looks like the export (roadmap T9).
     static func process(_ image: CIImage, _ stack: [StackEntry], camera: Orientation, hdrPeak: Double? = nil,
-                        scale: Double = 1) throws -> CIImage {
-        CIGeometry.apply(try CIGeometry.spec(stack, camera: camera), to: try applyStack(image, stack, hdrPeak: hdrPeak, scale: scale, camera: camera))
+                        scale: Double = 1, rasters: [String: MaskRaster] = [:]) throws -> CIImage {
+        CIGeometry.apply(try CIGeometry.spec(stack, camera: camera),
+                         to: try applyStack(image, stack, hdrPeak: hdrPeak, scale: scale, camera: camera, rasters: rasters))
     }
 
     /// Applies the enabled stack entries in pipeline order. An operation the clean engine
     /// does not have is an error, never a silent skip. Static so `CIEngineProbe` runs this exact code.
     static func applyStack(_ image: CIImage, _ stack: [StackEntry], hdrPeak: Double? = nil, scale: Double = 1,
-                           camera: Orientation = .none) throws -> CIImage {
+                           camera: Orientation = .none, rasters: [String: MaskRaster] = [:]) throws -> CIImage {
         let ordered = try stack.filter { $0.enabled && !CIGeometry.operations.contains($0.operation) }.map { entry -> (CIModule, StackEntry) in
             guard let m = CIModule.named(entry.operation) else {
                 throw EngineError("the clean engine has no module \(entry.operation) yet")
@@ -289,6 +296,7 @@ public actor CIEngine: PhotoEngine {
                     throw EngineError("the clean engine has no mask kind \(blend["mask_kind"] ?? 0)")
                 }
                 spec.orientation = camera   // masks are drawn on the upright picture; this frame is the sensor's
+                if spec.kind == 5 { spec.raster = entry.blend["mask_raster"]?.option.flatMap { rasters[$0] } }
                 if spec.refineRadius > 0 { spec.refineRadius = max(1, Int((Double(spec.refineRadius) * min(max(scale, 1e-3), 1)).rounded())) }
                 let matte = try CIBridge.localMask(before, spec: spec)
                 out = try CIBridge.blendMasked(before: before, after: out, mask: matte, opacity: spec.opacity)

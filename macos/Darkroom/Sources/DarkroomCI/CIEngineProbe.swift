@@ -19,7 +19,8 @@ public enum CIEngineProbe {
 
     /// Like `render`, for stacks that change the size: returns the output pixels and their size.
     public static func renderSized(stack: [StackEntry], pixels: [SIMD4<Float>], width: Int, height: Int,
-                                   camera: Orientation = .none, coreImageOrientation: UInt32? = nil, scale: Double = 1) throws
+                                   camera: Orientation = .none, coreImageOrientation: UInt32? = nil, scale: Double = 1,
+                                   rasters: [MaskPicture] = []) throws
         -> (pixels: [SIMD4<Float>], width: Int, height: Int) {
         guard pixels.count == width * height, width > 0, height > 0 else { throw EngineError("probe: size mismatch") }
         guard let space = CGColorSpace(name: CGColorSpace.extendedLinearSRGB),
@@ -35,7 +36,7 @@ public enum CIEngineProbe {
             let turned = input.oriented(o)
             output = turned.transformed(by: CGAffineTransform(translationX: -turned.extent.minX, y: -turned.extent.minY))
         } else {
-            output = try CIEngine.process(input, stack, camera: camera, scale: scale)
+            output = try CIEngine.process(input, stack, camera: camera, scale: scale, rasters: Dictionary(rasters.map { ($0.id, MaskRaster(id: $0.id, width: $0.width, height: $0.height, pixels: $0.pixels)) }) { $1 })
         }
         let context = CIContext(mtlDevice: device, options: [
             .workingColorSpace: space, .workingFormat: CIFormat.RGBAf, .cacheIntermediates: false,
@@ -84,12 +85,13 @@ public enum CIEngineProbe {
     /// Like `render`, but renders only `region` (x, y, width, height, top-left origin) of the output, so a module's
     /// tile seams can be compared with the full frame (darkroom-engine-check F-E4 does this for the bare filters).
     public static func renderRegion(stack: [StackEntry], pixels: [SIMD4<Float>], width: Int, height: Int,
-                                    region: (x: Int, y: Int, w: Int, h: Int)) throws -> [SIMD4<Float>] {
+                                    region: (x: Int, y: Int, w: Int, h: Int), rasters: [MaskPicture] = []) throws -> [SIMD4<Float>] {
         guard pixels.count == width * height, let space = CGColorSpace(name: CGColorSpace.extendedLinearSRGB),
               let device = MTLCreateSystemDefaultDevice() else { throw EngineError("probe: bad input") }
         let input = CIImage(bitmapData: pixels.withUnsafeBytes { Data($0) }, bytesPerRow: width * 16,
                             size: CGSize(width: width, height: height), format: .RGBAf, colorSpace: space)
-        let output = try CIEngine.process(input, stack, camera: .none)
+        let output = try CIEngine.process(input, stack, camera: .none,
+                                           rasters: Dictionary(rasters.map { ($0.id, MaskRaster(id: $0.id, width: $0.width, height: $0.height, pixels: $0.pixels)) }) { $1 })
         let r = region
         let bounds = CGRect(x: r.x, y: height - r.y - r.h, width: r.w, height: r.h)
         let context = CIContext(mtlDevice: device, options: [.workingColorSpace: space, .workingFormat: CIFormat.RGBAf, .cacheIntermediates: false])

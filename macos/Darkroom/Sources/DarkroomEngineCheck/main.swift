@@ -68,8 +68,8 @@ let detailW = 48, detailH = 40
 let detailImg = DetailCommon.fixture(width: detailW, height: detailH)
 let detailPx: [SIMD4<Float>] = detailImg.map { SIMD4(Float($0.x), Float($0.y), Float($0.z), 1) }
 
-func runDetail(_ stack: [StackEntry]) -> [SIMD4<Float>] {
-    do { return try CIEngineProbe.render(stack: stack, pixels: detailPx, width: detailW, height: detailH) } catch {
+func runDetail(_ stack: [StackEntry], rasters: [MaskPicture] = []) -> [SIMD4<Float>] {
+    do { return try CIEngineProbe.renderSized(stack: stack, pixels: detailPx, width: detailW, height: detailH, rasters: rasters).pixels } catch {
         print("FAIL  probe threw: \(error)")
         failures += 1
         return []
@@ -100,12 +100,12 @@ func maskedExposureOracle(_ spec: MaskSpec) -> [SIMD3<Double>] {
 
 /// Tile seams for a detail module: three regions rendered alone must equal the same pixels of the full frame, and
 /// the full frame must be the oracle's (so two blank renders cannot match each other).
-func detailSeams(_ stack: [StackEntry], oracle: [SIMD3<Double>]) -> (seam: Double, fullVsOracle: Double, ok: Bool) {
-    let full = runDetail(stack)
+func detailSeams(_ stack: [StackEntry], oracle: [SIMD3<Double>], rasters: [MaskPicture] = []) -> (seam: Double, fullVsOracle: Double, ok: Bool) {
+    let full = runDetail(stack, rasters: rasters)
     let fullErr = worstLinear(full, oracle)
     var seam = 0.0, ok = full.count == detailW * detailH && fullErr < 2e-4
     for reg in [(x: 17, y: 9, w: 20, h: 18), (x: 0, y: 0, w: 15, h: 15), (x: 30, y: 25, w: 18, h: 15)] {
-        guard let part = try? CIEngineProbe.renderRegion(stack: stack, pixels: detailPx, width: detailW, height: detailH, region: reg),
+        guard let part = try? CIEngineProbe.renderRegion(stack: stack, pixels: detailPx, width: detailW, height: detailH, region: reg, rasters: rasters),
               part.count == reg.w * reg.h, full.count == detailW * detailH else { ok = false; continue }
         for yy in 0..<reg.h { for xx in 0..<reg.w {
             let a = part[yy * reg.w + xx], b = full[(reg.y + yy) * detailW + reg.x + xx]
@@ -1051,6 +1051,52 @@ do {
         for c in 0..<3 { let d = abs(Double(got[i][c]) - want[c]); worstErr = got[i][c].isFinite ? max(worstErr, d) : .infinity }
     }
     check("E-CL1 the GPU clipping overlay matches the oracle on a sweep with blown, crushed and fine pixels (\(states.sorted()))", worstErr < 1e-5 && states.count == 3, "\(worstErr)")
+}
+
+// E-RS raster masks (brush and detected): the engine reads a painted picture where the pixel sits in the upright photo
+do {
+    // a painted raster: a thick diagonal stroke and an eraser nick, on a 3:2 upright picture
+    let strokes = [BrushStroke(points: [SIMD2(0.1, 0.15), SIMD2(0.5, 0.5), SIMD2(0.9, 0.85)], radius: 0.12, softness: 0.5, flow: 1, erase: false),
+                   BrushStroke(points: [SIMD2(0.5, 0.5)], radius: 0.05, softness: 0, flow: 1, erase: true)]
+    let size = Brush.rasterSize(aspect: Double(detailW) / Double(detailH))
+    let raster = Brush.rasterize(strokes[...], width: size.width, height: size.height, id: "layer1.2")
+    let picture = MaskPicture(id: raster.id, width: raster.width, height: raster.height, pixels: raster.pixels)
+    let blend: [String: ParamValue] = ["mask_mode": .number(2), "mask_kind": .number(5), "mask_raster": .option(raster.id)]
+    var spec = Mask.spec(from: ["mask_mode": 2, "mask_kind": 5])!
+    spec.raster = raster
+    func engine(_ stack: [StackEntry], camera: Orientation = .none, rasters: [MaskPicture] = [picture]) -> (pixels: [SIMD4<Float>], width: Int, height: Int)? {
+        try? CIEngineProbe.renderSized(stack: stack, pixels: detailPx, width: detailW, height: detailH, camera: camera, rasters: rasters)
+    }
+    let stack = [maskedExposure(blend)]
+    let want = maskedExposureOracle(spec)
+    let got = engine(stack)?.pixels ?? []
+    // the engine's matte is 8 bit, so allow a quantisation step of the weight in the picture
+    let eLin = worstLinear(got, want)
+    check("E-RS1 a painted raster mask through the engine matches the oracle (the 8-bit matte allows 6e-3)", eLin < 6e-3 && worst(got, want) < tol, "linear \(eLin), encoded \(worst(got, want))")
+    check("E-RS1 the paint really shows: the masked picture differs from the unmasked and from the all-masked one",
+          worstLinear(got, detailImg) > 0.05 && worstLinear(got, detailImg.map { $0 * 2 }) > 0.05)
+    let seams = detailSeams(stack, oracle: want, rasters: [picture])
+    check("E-RS2 a raster mask renders the same in a region as in the full frame (the matte is a cropped image)", seams.seam < 1e-6 && seams.fullVsOracle < 6e-3, "seam \(seams.seam), full vs oracle \(seams.fullVsOracle)")
+    var invBlend = blend; invBlend["mask_invert"] = .number(1)
+    var invSpec = spec; invSpec.invert = true
+    check("E-RS3 inverted, the raster mask is the complement", worstLinear(engine([maskedExposure(invBlend)])?.pixels ?? [], maskedExposureOracle(invSpec)) < 6e-3)
+    check("E-RS4 a missing raster changes nothing: the module has no effect where it has no mask",
+          worstLinear(engine(stack, rasters: [])?.pixels ?? [], detailImg) < 1e-6)
+    // a portrait-shot frame: the stroke runs where the UPRIGHT picture has it
+    var camSpec = spec; camSpec.orientation = .rotateCW90
+    let wantCam = Mask.apply(camSpec, to: detailImg, width: detailW, height: detailH) { $0.map { $0 * 2 } }
+    if let r = engine(stack, camera: .rotateCW90), r.width == detailH, r.height == detailW {
+        var e = 0.0
+        for y in 0..<detailH { for x in 0..<detailW {
+            let u = Orientation.rotateCW90.map(SIMD2(Double(x) + 0.5, Double(y) + 0.5), size: SIMD2(Double(detailW), Double(detailH)))
+            let p = r.pixels[Int(u.y) * r.width + Int(u.x)], o = wantCam[y * detailW + x]
+            for c in 0..<3 { let d = abs(Double(p[c]) - o[c]) / max(1, abs(o[c])); e = d.isFinite ? max(e, d) : .infinity }
+        } }
+        check("E-RS5 in a portrait-shot frame the painted mask lands where the upright picture has it", e < 6e-3, "\(e)")
+    } else { check("E-RS5 renders", false) }
+    var refined = blend; refined["mask_refine"] = .number(4)
+    var refinedSpec = spec; refinedSpec.refineRadius = 4
+    check("E-RS6 edge refine works on a raster mask (guided by the photo)", worstLinear(engine([maskedExposure(refined)])?.pixels ?? [], maskedExposureOracle(refinedSpec)) < 2e-2)
 }
 
 print(failures == 0 ? "\nall checks passed" : "\n\(failures) failed")

@@ -84,12 +84,54 @@ kernel void maskBlendTex(texture2d<float, access::read> before [[texture(0)]],
     }
 }
 
+/// The resampled raster mattes (a raster kind's weights for one picture size and orientation), kept so a render that only
+/// moves a slider does not resample a million pixels again.
+enum RasterMatteCache {
+    nonisolated(unsafe) private static var store: [String: Data] = [:]
+    nonisolated(unsafe) private static var order: [String] = []
+    private static let lock = NSLock()
+
+    static func plane(for spec: MaskSpec, width: Int, height: Int) -> Data {
+        let key = "\(spec.raster?.id ?? "-")|\(width)x\(height)|\(spec.orientation.rawValue)|\(spec.invert ? 1 : 0)"
+        lock.lock()
+        if let hit = store[key] { lock.unlock(); return hit }
+        lock.unlock()
+        var bytes = [UInt8](repeating: 0, count: width * height)
+        for y in 0..<height {
+            for x in 0..<width {
+                let a = Mask.alpha(spec, x: Double(x) + 0.5, y: Double(y) + 0.5, width: Double(width), height: Double(height), rgb: .zero)
+                bytes[y * width + x] = UInt8(min(max((a * 255).rounded(), 0), 255))
+            }
+        }
+        let data = Data(bytes)
+        lock.lock()
+        store[key] = data; order.append(key)
+        while order.count > 8 { store[order.removeFirst()] = nil }
+        lock.unlock()
+        return data
+    }
+}
+
 extension CIBridge {
     /// The finished mask for `image` (the module's input) as (a, a, a, 1): Mask.plane on the GPU.
     public static func localMask(_ image: CIImage, spec: MaskSpec) throws -> CIImage {
+        if spec.kind == 5 { return try rasterMatte(image, spec: spec) }
         let raw = try combine([image], source: MetalMask.source, function: "maskAlphaTex", uniforms: MetalMask.uniforms(spec))
         guard spec.refineRadius > 0 else { return raw }
         return try guided(raw, guide: image, radius: spec.refineRadius, eps: Mask.refineEps)
+    }
+
+    /// A raster kind's matte: the picture sampled where each pixel of `image` sits in the upright photo (DarkroomCore's own
+    /// sampler, so engine and oracle agree), as an 8-bit grey image, then refined to the photo's edges like any mask.
+    private static func rasterMatte(_ image: CIImage, spec: MaskSpec) throws -> CIImage {
+        let ext = image.extent.integral
+        let w = Int(ext.width), h = Int(ext.height)
+        guard w > 0, h > 0 else { throw CIBridgeError.badArguments }
+        let data = RasterMatteCache.plane(for: spec, width: w, height: h)
+        let grey = CIImage(bitmapData: data, bytesPerRow: w, size: CGSize(width: w, height: h), format: .L8, colorSpace: nil)
+            .transformed(by: CGAffineTransform(translationX: ext.minX, y: ext.minY))
+        guard spec.refineRadius > 0 else { return grey }
+        return try guided(grey, guide: image, radius: spec.refineRadius, eps: Mask.refineEps)
     }
 
     /// Mask.blend on the GPU.
