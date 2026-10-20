@@ -442,6 +442,32 @@ do {
     }
     check("G8 off keeps the whole bounding box", Straighten.cropFractions(size, degrees: 20, mode: .off) == .full)
     check("G8 no rotation needs no crop", Straighten.cropFractions(size, degrees: 0, mode: .largest) == .full)
+    // G9 composing orientations: four clockwise quarter turns are none; cw then ccw is none; mirror twice is none;
+    // and `then` agrees with mapping point by point for every pair
+    var o = Orientation.none
+    for _ in 0..<4 { o = o.then(.rotateCW90) }
+    check("G9 four clockwise quarter turns compose to none", o == .none)
+    check("G9 cw then ccw is none; mirror twice is none", Orientation.rotateCW90.then(.rotateCCW90) == .none
+          && Orientation.flipHorizontal.then(.flipHorizontal) == .none && Orientation.rotateCW90.then(.rotateCW90) == .rotate180)
+    var composesPointwise = true
+    for a in Orientation.allCases {
+        for b in Orientation.allCases {
+            let c = a.then(b), p = SIMD2<Double>(1.25, 0.5), mid = a.outputSize(size)
+            if !close(c.map(p, size: size), b.map(a.map(p, size: size), size: mid)) { composesPointwise = false }
+        }
+    }
+    check("G9 every pair composes point by point", composesPointwise)
+    check("G9 names round trip", Orientation.allCases.allSatisfy { Orientation(name: $0.name) == $0 })
+
+    // G10 centred aspect crops follow the picture's shape and are as large as fit
+    let land = CropRect.centred(longOverShort: 1.25, in: SIMD2(300, 200))   // landscape 3:2 to 5:4
+    let lw = (land.right - land.left) * 300, lh = (land.bottom - land.top) * 200
+    check("G10 landscape 4:5 is a landscape 5:4 at full height", abs(lw / lh - 1.25) < 1e-12 && abs(lh - 200) < 1e-9, "\(lw)x\(lh)")
+    let port = CropRect.centred(longOverShort: 16.0 / 9, in: SIMD2(200, 300))
+    let pw = (port.right - port.left) * 200, ph = (port.bottom - port.top) * 300
+    check("G10 portrait 16:9 is a portrait 9:16 at full height... or width", abs(ph / pw - 16.0 / 9) < 1e-12 && (abs(pw - 200) < 1e-9 || abs(ph - 300) < 1e-9), "\(pw)x\(ph)")
+    check("G10 centred", abs(land.left - (1 - land.right)) < 1e-12 && abs(port.top - (1 - port.bottom)) < 1e-12)
+    check("G10 a bad ratio is no crop", CropRect.centred(longOverShort: 0.5, in: SIMD2(3, 2)) == .full && CropRect.centred(longOverShort: .nan, in: SIMD2(3, 2)) == .full)
     check("G6 identity spec is the identity", GeometrySpec().isIdentity && close(GeometrySpec().map(SIMD2(5, 7), size: size), SIMD2(5, 7)))
 }
 

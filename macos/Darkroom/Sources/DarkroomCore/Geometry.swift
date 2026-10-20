@@ -41,6 +41,30 @@ public enum Orientation: Int, Sendable, CaseIterable {
         swapsAxes ? SIMD2(size.y, size.x) : size
     }
 
+    /// The flip module's symbolic name for this orientation.
+    public var name: String {
+        switch self {
+        case .none: "ORIENTATION_NONE"
+        case .flipVertical: "ORIENTATION_FLIP_VERTICALLY"
+        case .flipHorizontal: "ORIENTATION_FLIP_HORIZONTALLY"
+        case .rotate180: "ORIENTATION_ROTATE_180_DEG"
+        case .transpose: "ORIENTATION_TRANSPOSE"
+        case .rotateCW90: "ORIENTATION_ROTATE_CW_90_DEG"
+        case .rotateCCW90: "ORIENTATION_ROTATE_CCW_90_DEG"
+        case .transverse: "ORIENTATION_TRANSVERSE"
+        }
+    }
+
+    /// This orientation followed by `next`, as one orientation (the eight form a group). Found by
+    /// matching where three points of a non-square image land, so it needs no table of its own.
+    public func then(_ next: Orientation) -> Orientation {
+        let size = SIMD2<Double>(5, 3)
+        let points = [SIMD2<Double>(0, 0), SIMD2(5, 0), SIMD2(0, 3)]
+        let mid = outputSize(size)
+        let want = points.map { next.map(map($0, size: size), size: mid) }
+        return Orientation.allCases.first { c in zip(points, want).allSatisfy { c.map($0, size: size) == $1 } } ?? .none
+    }
+
     /// Where a point of a `size` image lands.
     public func map(_ p: SIMD2<Double>, size: SIMD2<Double>) -> SIMD2<Double> {
         let w = size.x, h = size.y
@@ -143,6 +167,16 @@ public struct CropRect: Sendable, Equatable {
     }
 
     public static let full = CropRect(left: 0, top: 0, right: 1, bottom: 1)
+
+    /// The largest centred crop with the aspect `longOverShort` (1 is square, 1.25 is 4:5, 1.5 is 3:2) inside
+    /// a `size` image, turned to match it: a landscape image gets a landscape crop, a portrait one a portrait crop.
+    public static func centred(longOverShort ratio: Double, in size: SIMD2<Double>) -> CropRect {
+        guard ratio.isFinite, ratio >= 1, size.x > 0, size.y > 0 else { return .full }
+        let target = size.x >= size.y ? ratio : 1 / ratio          // width over height
+        let w = min(size.x, size.y * target), h = w / target
+        let l = (1 - w / size.x) / 2, t = (1 - h / size.y) / 2
+        return CropRect(left: l, top: t, right: 1 - l, bottom: 1 - t)
+    }
 }
 
 /// The three steps in darktable's order: straighten (in the sensor's orientation), flip (the camera's

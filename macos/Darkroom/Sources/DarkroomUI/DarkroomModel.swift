@@ -1,5 +1,6 @@
 import AppKit
 import CoreGraphics
+import DarkroomCore
 import DarktableKit
 import Foundation
 import ImageIO
@@ -49,6 +50,9 @@ public final class DarkroomModel {
     /// straighten and flip change it); nil means `info`'s processed size holds.
     public private(set) var outputSize: (width: Int, height: Int)?
     /// The size zoom and pan work in: the output size when known, else the processed size.
+    /// The sensor frame at scale 1 and the camera's orientation, for Simple's geometry controls; nil when
+    /// the engine cannot report them (see `simpleGeometryReady`).
+    var geometryBase: (sensor: SIMD2<Double>, camera: Orientation)?
     public var imageSize: CGSize? {
         if let o = outputSize { return CGSize(width: o.width, height: o.height) }
         return info.map { CGSize(width: $0.processedWidth, height: $0.processedHeight) }
@@ -184,6 +188,13 @@ public final class DarkroomModel {
             modules = try await engine.sessionModules()
             info = await engine.sessionInfo()
             outputSize = nil
+            // an explicit flip to "none" shows the sensor frame, so its size is the sensor's
+            let sensorStack = [StackEntry(operation: "flip", params: ["orientation": .option("ORIENTATION_NONE")])]
+            if let s = try? await engine.sessionOutputSize(stack: sensorStack), let camera = info?.cameraOrientation {
+                geometryBase = (SIMD2(Double(s.width), Double(s.height)), Orientation(value: camera))
+            } else {
+                geometryBase = nil
+            }
             // the embedded preview shows at once as a draft; the full render replaces it.
             // A missing preview is not an error: the open continues and waits for the render.
             if let preview = try? await engine.sessionPreview() {

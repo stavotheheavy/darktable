@@ -63,7 +63,7 @@ extension DarkroomModel {
 
     /// Schemas arrive lazily; Simple needs a handful of them before its sliders mean anything.
     public func prepareSimple() async {
-        for op in Self.simpleOperations { if let m = module(op) { await loadSchema(for: m) } }
+        for op in Self.simpleOperations + Self.simpleGeometryOperations { if let m = module(op) { await loadSchema(for: m) } }
     }
 
     public var simpleReady: Bool {
@@ -157,7 +157,9 @@ extension DarkroomModel {
 
     /// Edited modules Simple has no slider for, so the panel can say what Pro changed.
     public var customEditCount: Int {
-        moduleRows.filter { $0.edited && !Self.simpleOperations.contains($0.module.operation) }.count
+        moduleRows.filter {
+            $0.edited && !Self.simpleOperations.contains($0.module.operation) && !Self.simpleGeometryOperations.contains($0.module.operation)
+        }.count
     }
 }
 

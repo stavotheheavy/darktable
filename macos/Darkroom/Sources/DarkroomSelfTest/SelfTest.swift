@@ -847,6 +847,35 @@ struct SelfTest {
             skip("geometry", "these checks rely on sessionOutputSize, which the darktable engine does not report")
         }
 
+        print("simple geometry (smoke)")
+        if clean {
+            model.mode = .simple
+            await model.prepareSimple()
+            check(model.simpleGeometryReady, "simple geometry controls are ready on the clean engine")
+            model.zoom = .fit
+            await model.settle()
+            let w0 = model.frame?.width ?? 0, h0 = model.frame?.height ?? 0
+            let step0 = model.historyIndex
+            model.setStraighten(6)
+            await model.settle()
+            check(abs(model.simpleStraighten - 6) < 1e-9, "straighten reads back 6 degrees")
+            check((model.frame?.width ?? 0) < w0 && (model.frame?.height ?? 0) < h0, "straighten crops inside the frame (\(w0)x\(h0) to \(model.frame?.width ?? 0)x\(model.frame?.height ?? 0))")
+            model.setAspect(.square)
+            await model.settle()
+            check(model.simpleAspect == .square && abs((model.frame?.width ?? 0) - (model.frame?.height ?? 1)) <= 1, "1:1 makes a square frame (\(model.frame?.width ?? 0)x\(model.frame?.height ?? 0))")
+            model.setAspect(.original)
+            model.rotate90()
+            await model.settle()
+            check(model.frame?.width ?? 0 > model.frame?.height ?? 0, "rotate turns the portrait frame landscape (\(model.frame?.width ?? 0)x\(model.frame?.height ?? 0))")
+            check(model.historyIndex == step0 + 4, "each control is one history step (\(model.historyIndex - step0) for 4)")
+            while model.historyIndex > step0 { model.undo() }
+            await model.settle()
+            check(model.frame?.width == w0 && model.frame?.height == h0, "undo restores the original frame")
+            model.mode = .pro
+        } else {
+            skip("simple geometry", "needs sessionOutputSize and the camera orientation, which the darktable engine does not report")
+        }
+
         print("simple mode")
         let simple = reopened
         simple.mode = .simple

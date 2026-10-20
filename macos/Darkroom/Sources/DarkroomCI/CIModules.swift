@@ -458,7 +458,7 @@ extension CIModule {
     static let geometryModules: [CIModule] = {
         func opt(_ name: String, _ value: Int, _ label: String) -> EnumOption { EnumOption(name: name, value: value, label: label) }
         let orientations = [
-            opt("ORIENTATION_NONE", 0, "none"), opt("ORIENTATION_FLIP_HORIZONTALLY", 2, "flip horizontally"),
+            opt("ORIENTATION_NULL", -1, "camera"), opt("ORIENTATION_NONE", 0, "none"), opt("ORIENTATION_FLIP_HORIZONTALLY", 2, "flip horizontally"),
             opt("ORIENTATION_FLIP_VERTICALLY", 1, "flip vertically"), opt("ORIENTATION_ROTATE_180_DEG", 3, "rotate 180 deg"),
             opt("ORIENTATION_ROTATE_CW_90_DEG", 5, "rotate cw 90 deg"), opt("ORIENTATION_ROTATE_CCW_90_DEG", 6, "rotate ccw 90 deg"),
             opt("ORIENTATION_TRANSPOSE", 4, "transpose"), opt("ORIENTATION_TRANSVERSE", 7, "transverse"),
@@ -468,7 +468,8 @@ extension CIModule {
         var flip = CIModule(
             operation: "flip", name: "orientation", iopOrder: 1, defaultEnabled: false,
             fields: [FieldSchema(name: "orientation", description: "orientation", kind: .enumeration, min: 0, max: 0,
-                                 defaultValue: .option("ORIENTATION_NONE"), options: orientations)],
+                                 // the camera's, so an explicit "none" differs from the default and is kept
+                                 defaultValue: .option("ORIENTATION_NULL"), options: orientations)],
             apply: { image, _ in image })
         var straighten = CIModule(
             operation: "ashift", name: "rotate and straighten", iopOrder: 95, defaultEnabled: false,

@@ -146,7 +146,8 @@ public actor CIEngine: PhotoEngine {
         let swaps = s.camera.swapsAxes
         return SessionInfo(
             processedWidth: frame.width, processedHeight: frame.height,
-            workWidth: Int(swaps ? s.native.height : s.native.width), workHeight: Int(swaps ? s.native.width : s.native.height))
+            workWidth: Int(swaps ? s.native.height : s.native.width), workHeight: Int(swaps ? s.native.width : s.native.height),
+            cameraOrientation: s.camera.rawValue)
     }
 
     public func sessionModules() async throws -> [ModuleInfo] {

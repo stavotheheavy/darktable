@@ -307,11 +307,15 @@ public struct SessionInfo: Sendable, Equatable {
     public let processedHeight: Int
     public let workWidth: Int
     public let workHeight: Int
+    /// The camera's orientation as the flip module's value (0...7), when the engine knows it. Simple mode's
+    /// rotate button needs it: an explicit flip is absolute, so turning by 90 degrees starts from it.
+    public let cameraOrientation: Int?
 
-    public init(processedWidth: Int, processedHeight: Int, workWidth: Int, workHeight: Int) {
+    public init(processedWidth: Int, processedHeight: Int, workWidth: Int, workHeight: Int, cameraOrientation: Int? = nil) {
         self.processedWidth = processedWidth
         self.processedHeight = processedHeight
         self.workWidth = workWidth
         self.workHeight = workHeight
+        self.cameraOrientation = cameraOrientation
     }
 }

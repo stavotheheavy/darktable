@@ -57,7 +57,7 @@ let package = Package(
         // model + SwiftUI views, a library so the self-test can render them offscreen
         .target(
             name: "DarkroomUI",
-            dependencies: ["DarktableKit", "DarkroomCI"]
+            dependencies: ["DarktableKit", "DarkroomCI", "DarkroomCore"]
         ),
 
         // headless check: start the engine, render, time it, write PNGs
