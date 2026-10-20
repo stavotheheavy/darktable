@@ -229,6 +229,84 @@ extension CIModule {
                     kCIInputRadiusKey: v["size"] ?? 10,
                 ])
             }),
+
+        // Invert: a negative of the image. No parameters.
+        CIModule(
+            operation: "invert", name: "invert", iopOrder: 3, defaultEnabled: false,
+            fields: [],
+            apply: { image, _ in image.applyingFilter("CIColorInvert") }),
+
+        // Gamma, approximate basecurve: a power curve on the image. 1.0 is the identity.
+        CIModule(
+            operation: "basecurve", name: "base curve (gamma, approximate)", iopOrder: 34,
+            defaultEnabled: false,
+            fields: [field("gamma", 0.2, 3, 1)],
+            apply: { image, v in
+                image.applyingFilter("CIGammaAdjust", parameters: [
+                    "inputPower": v["gamma"] ?? 1,
+                ])
+            }),
+
+        // Levels, approximate: black and white points clamp the range, then a gain restores it.
+        CIModule(
+            operation: "rgblevels", name: "rgb levels (approximate)", iopOrder: 33,
+            defaultEnabled: false,
+            fields: [field("black", 0, 0.5, 0), field("white", 0.5, 1, 1)],
+            apply: { image, v in
+                let black = v["black"] ?? 0
+                let white = max(v["white"] ?? 1, black + 0.01)
+                let clamped = image.applyingFilter("CIColorClamp", parameters: [
+                    "inputMinComponents": CIVector(x: black, y: black, z: black, w: 0),
+                    "inputMaxComponents": CIVector(x: white, y: white, z: white, w: 1),
+                ])
+                let gain = CGFloat(1 / (white - black))
+                return clamped.applyingFilter("CIColorMatrix", parameters: [
+                    "inputRVector": CIVector(x: gain, y: 0, z: 0, w: 0),
+                    "inputGVector": CIVector(x: 0, y: gain, z: 0, w: 0),
+                    "inputBVector": CIVector(x: 0, y: 0, z: gain, w: 0),
+                    "inputBiasVector": CIVector(x: -black * gain, y: -black * gain, z: -black * gain, w: 0),
+                ])
+            }),
+
+        // Colorize, approximate: tints the image towards a hue at a strength.
+        CIModule(
+            operation: "colorize", name: "colorize (approximate)", iopOrder: 46, defaultEnabled: false,
+            fields: [field("strength", 0, 1, 0), field("hue", 0, 1, 0)],
+            apply: { image, v in
+                let hue = v["hue"] ?? 0
+                let tint = CIColor(red: CGFloat(0.5 + 0.5 * cos(2 * .pi * hue)),
+                                   green: CGFloat(0.5 + 0.5 * cos(2 * .pi * (hue - 1.0 / 3))),
+                                   blue: CGFloat(0.5 + 0.5 * cos(2 * .pi * (hue - 2.0 / 3))))
+                return image.applyingFilter("CIColorMonochrome", parameters: [
+                    kCIInputColorKey: tint,
+                    kCIInputIntensityKey: v["strength"] ?? 0,
+                ])
+            }),
+
+        // Blur, approximate: a Gaussian blur over the image, mixed in by opacity.
+        CIModule(
+            operation: "blurs", name: "blurs (approximate)", iopOrder: 48, defaultEnabled: false,
+            fields: [field("radius", 0, 50, 0)],
+            apply: { image, v in
+                let radius = v["radius"] ?? 0
+                guard radius > 0 else { return image }
+                return image.clampedToExtent()
+                    .applyingFilter("CIGaussianBlur", parameters: [kCIInputRadiusKey: radius])
+                    .cropped(to: image.extent)
+            }),
+
+        // Low-pass, approximate: keeps the fine detail removed by a blur, as its detail.
+        CIModule(
+            operation: "lowpass", name: "lowpass (approximate)", iopOrder: 49, defaultEnabled: false,
+            fields: [field("radius", 0, 50, 0)],
+            apply: { image, v in
+                let radius = v["radius"] ?? 0
+                guard radius > 0 else { return image }
+                let blurred = image.clampedToExtent()
+                    .applyingFilter("CIGaussianBlur", parameters: [kCIInputRadiusKey: radius])
+                    .cropped(to: image.extent)
+                return blurred
+            }),
     ]
 
     /// A float field whose label is its own name, since darktable's descriptions are not carried here.
