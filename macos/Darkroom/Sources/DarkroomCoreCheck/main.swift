@@ -1192,5 +1192,17 @@ do {
           part[0] == after[0] && part[1] == img[1])
 }
 
+// M5: a hostile or corrupt sidecar cannot crash or exhaust the mask parser
+do {
+    let huge = Mask.spec(from: ["mask_mode": 2, "mask_kind": 0, "mask_refine": 1e18])
+    check("M5 a huge refine radius is clamped to \(Mask.maxRefineRadius)", huge?.refineRadius == Mask.maxRefineRadius, "\(String(describing: huge?.refineRadius))")
+    check("M5 a NaN or infinite refine radius is 0, not a trap",
+          Mask.spec(from: ["mask_mode": 2, "mask_kind": 0, "mask_refine": .nan])?.refineRadius == 0
+            && Mask.spec(from: ["mask_mode": 2, "mask_kind": 0, "mask_refine": .infinity])?.refineRadius == 0)
+    check("M5 a NaN, infinite or absurd mask kind is no mask, not a trap",
+          Mask.spec(from: ["mask_mode": 2, "mask_kind": .nan]) == nil && Mask.spec(from: ["mask_mode": 2, "mask_kind": .infinity]) == nil
+            && Mask.spec(from: ["mask_mode": 2, "mask_kind": 1e300]) == nil)
+}
+
 print(failures == 0 ? "\nall checks passed" : "\n\(failures) failed")
 exit(failures == 0 ? 0 : 1)

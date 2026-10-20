@@ -558,5 +558,17 @@ do {
           (try? CIEngineProbe.render(stack: [masked(bad)], pixels: detailPx, width: detailW, height: detailH)) == nil)
 }
 
+// E-M7 module values from a sidecar are held to the schema: a NaN or absurd radius renders like the default or the maximum
+do {
+    func lc(_ radius: Double) -> [SIMD4<Float>] {
+        runDetail([StackEntry(operation: "bilat", params: ["detail": .number(0.8), "radius": .number(radius)])])
+    }
+    func same(_ a: [SIMD4<Float>], _ b: [SIMD4<Float>]) -> Bool {
+        a.count == detailW * detailH && a.count == b.count && zip(a, b).allSatisfy { $0.x.isFinite && $0 == $1 }
+    }
+    check("E-M7 a NaN radius renders like the default radius (10)", same(lc(.nan), lc(10)))
+    check("E-M7 an absurd radius renders like the maximum radius (50)", same(lc(1e18), lc(50)))
+}
+
 print(failures == 0 ? "\nall checks passed" : "\n\(failures) failed")
 exit(failures == 0 ? 0 : 1)

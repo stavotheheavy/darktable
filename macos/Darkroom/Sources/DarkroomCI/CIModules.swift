@@ -27,7 +27,13 @@ struct CIModule: Sendable {
     func values(from params: [String: ParamValue]) -> [String: Double] {
         var out: [String: Double] = [:]
         for f in fields {
-            out[f.name] = params[f.name]?.double ?? f.defaultValue.double ?? 0
+            let fallback = f.defaultValue.double ?? 0
+            var v = params[f.name]?.double ?? fallback
+            // params come from sidecars and history: a value that is not a number falls back to the default, and a
+            // number outside the field's range is held to it (modules turn radii into loop counts and buffer sizes)
+            if !v.isFinite { v = fallback }
+            if (f.kind == .float || f.kind == .int), f.min < f.max { v = Swift.min(Swift.max(v, f.min), f.max) }
+            out[f.name] = v
         }
         return out
     }

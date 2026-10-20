@@ -30,6 +30,15 @@ public struct MaskSpec: Sendable, Equatable {
 public enum Mask {
     public static let refineEps = 0.01
 
+    /// The largest guided-filter radius a mask may ask for, in pixels (the box filters cost O(radius) per pixel and the
+    /// GPU reach grows with it); a sidecar value past it, or not a number, is clamped, never trusted.
+    public static let maxRefineRadius = 200
+
+    static func refineRadius(_ raw: Double) -> Int {
+        guard raw.isFinite else { return 0 }
+        return Int(min(max(raw.rounded(), 0), Double(maxRefineRadius)))
+    }
+
     /// 0 below `e0`, 1 above `e1`, smooth between; a hard step at `e0` when the edges meet or cross (feather 0).
     public static func ramp(_ e0: Double, _ e1: Double, _ x: Double) -> Double {
         guard e1 > e0 else { return x >= e0 ? 1 : 0 }
@@ -39,7 +48,8 @@ public enum Mask {
 
     /// The spec in a stack entry's blend values, or nil unless `mask_mode` is 2 with a known kind.
     public static func spec(from blend: [String: Double]) -> MaskSpec? {
-        guard blend["mask_mode"] == 2, let kind = blend["mask_kind"].map({ Int($0) }) else { return nil }
+        guard blend["mask_mode"] == 2, let rawKind = blend["mask_kind"], rawKind.isFinite, abs(rawKind) < 1000 else { return nil }
+        let kind = Int(rawKind)
         let p: [Double]
         switch kind {
         case 0: p = []
@@ -50,7 +60,7 @@ public enum Mask {
         default: return nil
         }
         return MaskSpec(kind: kind, invert: (blend["mask_invert"] ?? 0) != 0,
-                        refineRadius: max(0, Int((blend["mask_refine"] ?? 0).rounded())),
+                        refineRadius: refineRadius(blend["mask_refine"] ?? 0),
                         opacity: min(max(blend["opacity"] ?? 100, 0), 100) / 100, p: p)
     }
 
