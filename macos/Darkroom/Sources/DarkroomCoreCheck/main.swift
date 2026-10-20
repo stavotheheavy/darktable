@@ -1631,5 +1631,69 @@ do {
     check("BR10 a stroke round-trips through its compact JSON", back.points.count == 2 && abs(back.points[1].x - 0.8) < 1e-4 && back.radius == line.radius && back.erase == false && data.count < 150, "\(data.count) bytes")
 }
 
+// TP point curve: free points, uneven spacing, black and white points, and the safety net around them
+do {
+    // the first version's formula, written out independently, for five evenly spaced points
+    func legacyTangents(_ ys: [Double]) -> [Double] {
+        let h = 0.25
+        var d = [Double](repeating: 0, count: 4), m = [Double](repeating: 0, count: 5)
+        for k in 0..<4 { d[k] = (ys[k + 1] - ys[k]) / h }
+        m[0] = d[0]; m[4] = d[3]
+        for k in 1...3 { m[k] = d[k - 1] * d[k] > 0 ? (d[k - 1] + d[k]) / 2 : 0 }
+        for k in 0..<4 {
+            if d[k] == 0 { m[k] = 0; m[k + 1] = 0; continue }
+            let a = m[k] / d[k], b = m[k + 1] / d[k]
+            if a * a + b * b > 9 { let t = 3 / (a * a + b * b).squareRoot(); m[k] = t * a * d[k]; m[k + 1] = t * b * d[k] }
+        }
+        return m
+    }
+    var worstLegacy = 0.0
+    for ys in [[0, 0.15, 0.5, 0.85, 1], [0.05, 0.3, 0.55, 0.7, 0.9], [0, 0.4, 0.6, 0.65, 1], [0, 0, 0.5, 1, 1], [0.1, 0.1, 0.1, 0.1, 0.1]] as [[Double]] {
+        let a = ToneCurve.tangents(xs: ToneCurve.legacyXs, ys: ys), b = legacyTangents(ys)
+        for k in 0..<5 { worstLegacy = max(worstLegacy, abs(a[k] - b[k])) }
+    }
+    check("TP1 five evenly spaced points give the first version's tangents (weighted mean = plain mean)", worstLegacy < 1e-12, "\(worstLegacy)")
+
+    let xs = [0.0, 0.1, 0.35, 0.4, 0.8, 1.0], ys = [0.0, 0.05, 0.3, 0.55, 0.85, 1.0]
+    let m = ToneCurve.tangents(xs: xs, ys: ys)
+    check("TP2 an uneven six-point curve passes through every point", (0..<6).allSatisfy { abs(ToneCurve.curve(xs[$0], xs: xs, ys: ys, tangents: m) - ys[$0]) < 1e-12 })
+    var rising = true, inside = true, last = -Double.infinity
+    for i in 0...20000 {
+        let e = Double(i) / 20000
+        let v = ToneCurve.curve(e, xs: xs, ys: ys, tangents: m)
+        if v < last - 1e-12 { rising = false }
+        last = v
+        let k = min(xs.lastIndex { $0 <= e } ?? 0, 4)
+        if v < ys[k] - 1e-12 || v > ys[k + 1] + 1e-12 { inside = false }
+    }
+    check("TP3 monotone data with uneven spacing gives a curve that never decreases and never leaves the band between neighbouring points", rising && inside)
+    // a black point: the first point right of 0 and above 0 means inputs below it extend with the end tangent (and can go negative)
+    let bx = [0.1, 0.5, 1.0], by = [0.0, 0.5, 1.0], bm = ToneCurve.tangents(xs: bx, ys: by)
+    check("TP4 below the first point the curve extends linearly with its tangent: (0.05 gives y0 + m0 * -0.05), negative here",
+          abs(ToneCurve.curve(0.05, xs: bx, ys: by, tangents: bm) - (by[0] + bm[0] * -0.05)) < 1e-12 && ToneCurve.curve(0.05, xs: bx, ys: by, tangents: bm) < 0)
+    let wx = [0.0, 0.5, 0.9], wy = [0.0, 0.5, 0.8], wm = ToneCurve.tangents(xs: wx, ys: wy)
+    check("TP4 above the last point it extends linearly with its tangent", abs(ToneCurve.curve(1.2, xs: wx, ys: wy, tangents: wm) - (wy[2] + wm[2] * 0.3)) < 1e-12)
+    // sanitising
+    let valid = ToneCurve.sanitized(xs: xs, ys: ys)
+    check("TP5 a valid set comes back unchanged", valid.xs == xs && valid.ys == ys)
+    let hostile = ToneCurve.sanitized(xs: [.nan, 0.9, 0.2, -4, 7, 0.5, 0.5, 0.5, 0.5, 0.5], ys: [2, -1, .infinity, 0.3, 0.2, 0.9, .nan, 0.1, 0.2, 0.3])
+    var okShape = hostile.xs.count == 8 && hostile.ys.count == 8
+    for i in 1..<hostile.xs.count where okShape {
+        okShape = hostile.xs[i] - hostile.xs[i - 1] >= ToneCurve.minGap - 1e-12 && hostile.ys[i] >= hostile.ys[i - 1]
+    }
+    check("TP5 hostile points (NaN, infinity, out of range, unsorted, ten of them) become 8 safe ones: gaps kept, x in 0...1, y rising",
+          okShape && hostile.xs.allSatisfy { $0 >= 0 && $0 <= 1 } && hostile.ys.allSatisfy { $0 >= 0 && $0 <= 1 }, "\(hostile)")
+    check("TP5 fewer than two points is the identity pair", ToneCurve.sanitized(xs: [0.3], ys: [0.9]).xs == [0, 1] && ToneCurve.sanitized(xs: [], ys: []).ys == [0, 1])
+    let crowded = ToneCurve.sanitized(xs: [0.5, 0.5, 0.5, 0.5, 0.5], ys: [0, 0, 0, 0, 0])
+    check("TP5 five points all at x = 0.5 are spread out to fit inside 0...1 with the minimum gap", crowded.xs.last! <= 1 && crowded.xs[0] >= 0 && zip(crowded.xs, crowded.xs.dropFirst()).allSatisfy { $1 - $0 >= ToneCurve.minGap - 1e-12 })
+    // the uniforms the Metal kernel reads
+    let u = ToneCurve.uniforms(xs: xs, ys: ys)
+    check("TP6 the kernel's uniforms are [n, 8 xs, 8 ys, 8 tangents] with unused slots 0", u.count == 25 && u[0] == 6 && u[1] == Float(xs[0]) && u[6] == Float(xs[5]) && u[7] == 0 && u[8] == 0 && u[9] == Float(ys[0]) && u[14] == Float(ys[5]) && u[15] == 0 && u[16] == 0 && u[17] == Float(m[0]) && u[22] == Float(m[5]) && u[23] == 0)
+    // apply on a ramp: identity for the identity points, finite on hostile ones
+    var worstId = 0.0
+    for i in 0...400 { let v = 1.5 * Double(i) / 400; worstId = max(worstId, abs(ToneCurve.apply(v, xs: [0, 1], ys: [0, 1]) - v)) }
+    check("TP7 two points (0,0) and (1,1) are the identity, past white included", worstId < 1e-9, "\(worstId)")
+}
+
 print(failures == 0 ? "\nall checks passed" : "\n\(failures) failed")
 exit(failures == 0 ? 0 : 1)

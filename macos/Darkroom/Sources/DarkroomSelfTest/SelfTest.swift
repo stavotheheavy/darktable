@@ -1354,12 +1354,16 @@ struct SelfTest {
             model.setCurveNode(3, -0.3)
             await model.settle()
             let nodes2 = model.curveNodes ?? []
-            check(nodes2.count == 5 && abs(nodes2[1] - 1) < 1e-9 && abs(nodes2[3]) < 1e-9 && abs(nodes2[2] - 0.65) < 1e-9,
-                  "PP3 writes clamp to 0...1 and land on their node (1.4 reads \(nodes2.count == 5 ? nodes2[1] : -1), -0.3 reads \(nodes2.count == 5 ? nodes2[3] : -1), node 2 still \(nodes2.count == 5 ? nodes2[2] : -1))")
+            // a point never goes above the next one or below the one before (a curve does not reverse a tone), so 1.4 stops at the
+            // next point's height (0.65) and -0.3 at the previous one's (0.65)
+            check(nodes2.count == 5 && abs(nodes2[1] - 0.65) < 1e-9 && abs(nodes2[3] - 0.65) < 1e-9 && abs(nodes2[2] - 0.65) < 1e-9,
+                  "PP3 writes clamp to their neighbours and land on their node (1.4 reads \(nodes2.count == 5 ? nodes2[1] : -1), -0.3 reads \(nodes2.count == 5 ? nodes2[3] : -1), node 2 still \(nodes2.count == 5 ? nodes2[2] : -1))")
             // PP4 a drag of four values with no settle is one step; the last PP3 write was node 3, so this is a fresh step
             // (grouped merges a repeated target within 1.5 s), catches every move becoming its own step
             let s4 = model.historyIndex
-            for x in [0.55, 0.6, 0.65, 0.7] { model.setCurveNode(2, x) }
+            model.beginCurveDrag()   // the editor calls this where a drag starts
+            // node 3 has room above it (the point after is at 1.0); node 2 is pinned between two points at 0.65 after the PP3 writes
+            for x in [0.7, 0.75, 0.8, 0.85] { model.setCurveNode(3, x) }
             await model.settle()
             check(model.historyIndex == s4 + 1, "PP4 a drag is one history step (\(model.historyIndex - s4) for 4 values)")
             // PP5 the power button turns the curve's effect off and back on; the section stays (catches the power button
@@ -1534,6 +1538,76 @@ struct SelfTest {
                 while model.historyIndex > before { model.undo() }
                 await model.settle()
             } else { check(false, "PP16 exposure is in the module list") }
+            // PP21 the point curve: points move in x and y, the end points move too, you can add and remove points, the curve cannot fold
+            // back, and the editor's grab rule reaches the corner points (the top-right point used to be half outside the plot)
+            if model.curvePoints != nil {
+                let start = model.historyIndex
+                // geometry first: a plot as the panel gives it
+                let plot = CurveGeometry.plot(in: CGSize(width: 252, height: 196))
+                let ident = [DarkroomModel.CurvePoint(x: 0, y: 0), .init(x: 0.25, y: 0.25), .init(x: 0.5, y: 0.5), .init(x: 0.75, y: 0.75), .init(x: 1, y: 1)]
+                let corner = CurveGeometry.view(ident[4], plot: plot)
+                let inside = CGRect(x: 0, y: 0, width: 252, height: 196).contains(corner) && CGRect(x: 0, y: 0, width: 252, height: 196).contains(CurveGeometry.view(ident[0], plot: plot))
+                let nearCorner = [CGPoint(x: corner.x - 9, y: corner.y + 9), CGPoint(x: corner.x + 9, y: corner.y - 9), corner]
+                check(inside && nearCorner.allSatisfy { CurveGeometry.grab(at: $0, points: ident, plot: plot) == .point(4) },
+                      "PP21 the top-right point can be grabbed from either side of the corner, and both end points sit inside the view")
+                let between = CurveGeometry.view(.init(x: 0.375, y: 0.375), plot: plot)
+                let onCurve = CurveGeometry.grab(at: between, points: ident, plot: plot)
+                let faroff = CurveGeometry.grab(at: CGPoint(x: between.x, y: between.y - 80), points: ident, plot: plot)
+                var addsOnCurve = false
+                if case .insert(let x, _) = onCurve, abs(x - 0.375) < 0.02 { addsOnCurve = true }
+                check(addsOnCurve && faroff == .none, "PP21 pressing on the curve adds a point there; pressing far from it does nothing")
+                // the model: drag the top-right point left and down, the first point right (a black point), add and remove points
+                model.beginCurveDrag()
+                let nowCorner = CurveGeometry.value(CGPoint(x: plot.minX + plot.width * 0.7, y: plot.minY + plot.height * 0.2), plot: plot)
+                model.moveCurvePoint(4, x: nowCorner.x, y: nowCorner.y)
+                let moved = model.curvePoints ?? []
+                // the point before it is at x = 0.75, so it can come left as far as 0.75 + the minimum gap, and down to 0.8
+                check(moved.count == 5 && abs(moved[4].x - (0.75 + DarkroomModel.curveMinGap)) < 1e-9 && abs(moved[4].y - 0.8) < 1e-9, "PP21 the top-right point moves left and down: it is now at (\(moved.last?.x ?? -1), \(moved.last?.y ?? -1))")
+                model.beginCurveDrag()
+                model.moveCurvePoint(0, x: 0.1, y: 0.05)
+                let black = model.curvePoints ?? []
+                check(black.count == 5 && abs(black[0].x - 0.1) < 1e-9 && abs(black[0].y - 0.05) < 1e-9, "PP21 the first point moves right and up: a black point at (\(black.first?.x ?? -1), \(black.first?.y ?? -1))")
+                model.beginCurveDrag()
+                model.moveCurvePoint(2, x: 0.95, y: 0.1)
+                let squeezed = model.curvePoints ?? []
+                check(squeezed.count == 5 && abs(squeezed[2].x - (squeezed[3].x - DarkroomModel.curveMinGap)) < 1e-9 && squeezed[2].y >= squeezed[1].y - 1e-12,
+                      "PP21 a point stops at its neighbour (x \(squeezed[2].x) against the next at \(squeezed[3].x)) and cannot go below the one before")
+                let steps = model.historyIndex
+                let added = model.insertCurvePoint(x: 0.6, y: 0.5)
+                let withAdded = model.curvePoints ?? []
+                check(added != nil && withAdded.count == 6 && model.historyIndex == steps + 1 && zip(withAdded, withAdded.dropFirst()).allSatisfy { $1.x - $0.x >= DarkroomModel.curveMinGap - 1e-12 },
+                      "PP21 a point can be added: six points now, one history step")
+                check(model.insertCurvePoint(x: withAdded[1].x + 0.005, y: 0.3) == nil, "PP21 a point cannot be added closer than the minimum gap to another")
+                var more = 0
+                while model.insertCurvePoint(x: Double.random(in: 0.1...0.9), y: 0.5) != nil { more += 1; if more > 20 { break } }
+                check((model.curvePoints?.count ?? 0) <= DarkroomModel.curveMaxPoints, "PP21 the curve never has more than \(DarkroomModel.curveMaxPoints) points (it has \(model.curvePoints?.count ?? -1))")
+                let full = model.curvePoints ?? []
+                model.removeCurvePoint(0)
+                model.removeCurvePoint(full.count - 1)
+                check(model.curvePoints == full, "PP21 the two end points cannot be removed")
+                model.removeCurvePoint(1)
+                check((model.curvePoints?.count ?? 0) == full.count - 1, "PP21 a middle point can be removed")
+                model.undo()
+                check(model.curvePoints == full, "PP21 undo puts the removed point back")
+                await model.settle()
+                let drawn = bytes(model.frame)
+                // an edit saved before point curves (five heights only) is the same picture as the same five points in the new format
+                while model.historyIndex > start { model.undo() }
+                await model.settle()
+                if let m = model.modules.first(where: { $0.operation == "tonecurve" }), let schema = model.schema(for: m) {
+                    for (name, v) in [("y1", 0.15), ("y2", 0.5), ("y3", 0.85)] { if let f = schema.fields.first(where: { $0.name == name }) { model.setParam(m, f, to: .number(v)) } }
+                    await model.settle()
+                    let oldStyle = bytes(model.frame), oldPoints = model.curvePoints ?? []
+                    while model.historyIndex > start { model.undo() }
+                    model.setCurveNode(1, 0.15); model.setCurveNode(2, 0.5); model.setCurveNode(3, 0.85)
+                    await model.settle()
+                    check(oldPoints.count == 5 && abs(oldPoints[1].y - 0.15) < 1e-9 && oldStyle == bytes(model.frame) && oldStyle != nil,
+                          "PP21 an old five-height edit shows as five points and renders exactly like the new format")
+                }
+                check(drawn != nil, "PP21 the edited curve rendered")
+                while model.historyIndex > start { model.undo() }
+                await model.settle()
+            } else { check(false, "PP21 the tone curve has points") }
             // PP19 the brush: strokes paint the mask, each is one history step, undo and redo walk them, a stroke after an undo
             // cuts the undone ones off, and a reopened photo has the same strokes and the same frame, byte for byte
             if let ex = model.modules.first(where: { $0.operation == "exposure" }), let exEntry = model.proMenu.flatMap(\.entries).first(where: { $0.modules.first?.operation == "exposure" }), let evField = field(model, ex, "exposure") {

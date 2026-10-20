@@ -135,6 +135,9 @@ public enum CIEngineProbe {
 
     private static let goldenOverrides: [String: [String: Double]] = [
         "hazeremoval": ["strength": 1, "radius": 3, "airlight": 1],
+        // a point curve with an S, a raised black point and a lowered white point
+        "tonecurve": ["n": 6, "x0": 0.04, "x1": 0.22, "x2": 0.45, "x3": 0.68, "x4": 0.85, "x5": 0.97,
+                      "y0": 0.06, "y1": 0.15, "y2": 0.42, "y3": 0.72, "y4": 0.9, "y5": 0.96],
     ]
 
     /// Every catalogue module's operation and display name, for the parity list's checks.

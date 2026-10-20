@@ -156,16 +156,27 @@ extension CIModule {
         // its own input value.
         CIModule(
             operation: "tonecurve", name: "tone curve", iopOrder: 36, defaultEnabled: false,
+            // `n` 0 is the first version's curve: five heights y0...y4 at x = 0, 0.25, 0.5, 0.75, 1 (an old edit has only those).
+            // `n` 2...8 is a point curve: points 0..<n at (x_i, y_i), as the editor writes them.
             fields: [
-                field("y0", 0, 1, 0), field("y1", 0, 1, 0.25), field("y2", 0, 1, 0.5),
-                field("y3", 0, 1, 0.75), field("y4", 0, 1, 1),
+                field("n", 0, 8, 0),
+                field("y0", 0, 1, 0), field("y1", 0, 1, 0.25), field("y2", 0, 1, 0.5), field("y3", 0, 1, 0.75), field("y4", 0, 1, 1),
+                field("y5", 0, 1, 1), field("y6", 0, 1, 1), field("y7", 0, 1, 1),
+                field("x0", 0, 1, 0), field("x1", 0, 1, 0.25), field("x2", 0, 1, 0.5), field("x3", 0, 1, 0.75), field("x4", 0, 1, 1),
+                field("x5", 0, 1, 1), field("x6", 0, 1, 1), field("x7", 0, 1, 1),
             ],
             // DarkroomCore's ToneCurve on the oracle-checked per-pixel kernel (darkroom-engine-check E-TC)
             apply: { image, v in
-                let ys: [Double] = [v["y0"] ?? 0, v["y1"] ?? 0.25, v["y2"] ?? 0.5, v["y3"] ?? 0.75, v["y4"] ?? 1]
-                let tangents: [Double] = ToneCurve.tangents(ys)
-                let uniforms: [Float] = (ys + tangents).map { Float($0) }
-                return try CIBridge.perPixel(image, source: MetalToneCurve.source, function: "tonecurveTex", uniforms: uniforms)
+                let n = Int((v["n"] ?? 0).rounded())
+                let points: (xs: [Double], ys: [Double])
+                if n >= 2 {
+                    let count = min(n, ToneCurve.maxPoints)
+                    points = ToneCurve.sanitized(xs: (0..<count).map { v["x\($0)"] ?? 1 }, ys: (0..<count).map { v["y\($0)"] ?? 1 })
+                } else {
+                    points = ToneCurve.sanitized(xs: ToneCurve.legacyXs, ys: [v["y0"] ?? 0, v["y1"] ?? 0.25, v["y2"] ?? 0.5, v["y3"] ?? 0.75, v["y4"] ?? 1])
+                }
+                return try CIBridge.perPixel(image, source: MetalToneCurve.source, function: "tonecurveTex",
+                                             uniforms: ToneCurve.uniforms(xs: points.xs, ys: points.ys))
             }),
 
         // Contrast, brightness and saturation, as darktable's contrast brightness saturation

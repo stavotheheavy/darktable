@@ -75,6 +75,8 @@ public final class DarkroomModel {
     public var proMenuOpen: ProMenuKind? { didSet { if proMenuOpen != oldValue { proMenuQuery = "" } } }
     /// What the Modules dropdown's search field holds.
     public var proMenuQuery = ""
+    /// Which drag on the tone curve is running (one history step per drag).
+    var curveDragSerial = 0
     /// The painted and detected masks of the open photo (saved in its sidecar and masks folder).
     public private(set) var maskLayers: [MaskLayer] = []
     /// The module whose brush layer takes strokes from the photo, and the brush.

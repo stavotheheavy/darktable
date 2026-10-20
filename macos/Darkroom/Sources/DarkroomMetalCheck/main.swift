@@ -272,7 +272,7 @@ do {
 // C1 tone curve: the per-pixel buffer kernel (MetalToneCurve) on a 64 by 64 ramp from 0 to 1.5, against ToneCurve
 do {
     let ys = [0, 0.15, 0.5, 0.85, 1.0]
-    let uniforms = (ys + ToneCurve.tangents(ys)).map { Float($0) }
+    let uniforms = ToneCurve.uniforms(xs: ToneCurve.legacyXs, ys: ys)
     let ramp = (0..<(n * n)).map { i -> SIMD4<Float> in
         let v = Float(i) / Float(n * n - 1) * 1.5
         return SIMD4(v, v, v, 1)
@@ -296,10 +296,35 @@ do {
     check("C1 tone curve kernel ran", false, "\(error)")
 }
 
+// C3 point curve: seven uneven points with a raised black point and a lowered white point, on the Metal kernel against the oracle
+do {
+    let sane = ToneCurve.sanitized(xs: [0.05, 0.18, 0.31, 0.52, 0.7, 0.86, 0.95], ys: [0.08, 0.2, 0.25, 0.6, 0.66, 0.92, 0.97])
+    let uniforms = ToneCurve.uniforms(xs: sane.xs, ys: sane.ys)
+    let count = 4096
+    let pixels = (0..<count).map { i -> SIMD4<Float> in
+        let t = Double(i) / Double(count - 1)
+        return SIMD4(Float(-0.2 + 4.2 * t), Float(4.0 - 4.2 * t), Float(1.5 * t), 1)
+    }
+    let out = try MetalPerPixel.run(source: MetalToneCurve.source, function: "tonecurveBuf", pixels: pixels, uniforms: uniforms)
+    var worstRel = 0.0, allFinite = out.count == count
+    for (i, px) in pixels.enumerated() where i < out.count {
+        let cpu = ToneCurve.apply(SIMD3(Double(px.x), Double(px.y), Double(px.z)), xs: sane.xs, ys: sane.ys)
+        let gpu = SIMD3(Double(out[i].x), Double(out[i].y), Double(out[i].z))
+        for c in 0..<3 {
+            if !gpu[c].isFinite { allFinite = false }
+            worstRel = Swift.max(worstRel, Swift.abs(gpu[c] - cpu[c]) / Swift.max(1, Swift.abs(cpu[c])))
+        }
+    }
+    check("C3 a seven-point curve with uneven points on Metal matches the CPU oracle (unclamped, -0.2...4.0)",
+          allFinite && worstRel < 1e-4, "finite \(allFinite), worst relative error \(worstRel)")
+} catch {
+    check("C3 point curve kernel ran", false, "\(error)")
+}
+
 // C2 tone curve extrapolation: channels span -0.2...4.0 linear, unclamped, with the asymmetric curve from TC6
 do {
     let ys = [0.05, 0.3, 0.55, 0.7, 0.9]
-    let uniforms = (ys + ToneCurve.tangents(ys)).map { Float($0) }
+    let uniforms = ToneCurve.uniforms(xs: ToneCurve.legacyXs, ys: ys)
     let count = 4096
     let pixels = (0..<count).map { i -> SIMD4<Float> in
         let t = Double(i) / Double(count - 1)

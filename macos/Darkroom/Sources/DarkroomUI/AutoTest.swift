@@ -162,6 +162,12 @@ public enum AutoTest {
             model.setCurveNode(1, 0.18)
             model.setCurveNode(3, 0.84)
             await shot("p2-\(label)-curve")
+            // the point curve: a point added, a black point, the top-right point moved in and down
+            if let e = model.proPanelEntries.first(where: { $0.modules.first?.operation == "tonecurve" }) { model.proOpen = [e.id] }
+            model.insertCurvePoint(x: 0.4, y: 0.52)
+            model.beginCurveDrag(); model.moveCurvePoint(0, x: 0.06, y: 0.03)
+            model.beginCurveDrag(); model.moveCurvePoint(model.curvePoints.map { $0.count - 1 } ?? 4, x: 0.92, y: 0.95)
+            await shot("p2b-\(label)-curve-points")
             for op in ["shadhi", "vignette"] {
                 if let e = model.proMenu.flatMap(\.entries).first(where: { $0.modules[0].operation == op }) { model.addToPanel(e) }
             }

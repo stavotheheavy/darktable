@@ -134,24 +134,101 @@ extension DarkroomModel {
         for e in proPanelEntries { for m in e.modules { await loadSchema(for: m) } }
     }
 
-    // MARK: the tone curve's five nodes (the clean engine's tonecurve fields y0...y4)
+    // MARK: the tone curve's points (the clean engine's tonecurve fields n, x0...x7, y0...y7)
 
-    /// The heights of the five nodes at x = 0, 0.25, 0.5, 0.75, 1, or nil when this tone curve has no such fields.
-    public var curveNodes: [Double]? {
-        guard let m = proModule("tonecurve") else { return nil }
-        var ys: [Double] = []
-        for i in 0..<5 {
-            guard let f = schemas["tonecurve"]?.fields.first(where: { $0.name == "y\(i)" }), let v = value(m, f).double else { return nil }
-            ys.append(v)
-        }
-        return ys
+    public static let curveMaxPoints = ToneCurve.maxPoints
+    public static let curveMinGap = ToneCurve.minGap
+
+    public struct CurvePoint: Equatable, Sendable {
+        public var x: Double
+        public var y: Double
+        public init(x: Double, y: Double) { self.x = x; self.y = y }
     }
 
-    /// Moves node `index` to height `y` (0...1). Dragging one node is one history step (the same field merges).
+    /// The curve's points, safe to draw and evaluate: the point curve when `n` is 2 or more, else the five heights an earlier
+    /// version saved (at x = 0, 0.25, 0.5, 0.75, 1). Nil when this tone curve has no such fields (the darktable engine's).
+    public var curvePoints: [CurvePoint]? {
+        guard let m = proModule("tonecurve"), let fields = schemas["tonecurve"]?.fields else { return nil }
+        func v(_ name: String) -> Double? { fields.first { $0.name == name }.flatMap { value(m, $0).double } }
+        guard v("y0") != nil else { return nil }
+        let n = Int((v("n") ?? 0).rounded())
+        let xs: [Double], ys: [Double]
+        if n >= 2 {
+            let count = min(n, ToneCurve.maxPoints)
+            xs = (0..<count).map { v("x\($0)") ?? 1 }
+            ys = (0..<count).map { v("y\($0)") ?? 1 }
+        } else {
+            xs = ToneCurve.legacyXs
+            ys = (0..<5).map { v("y\($0)") ?? Double($0) / 4 }
+        }
+        let s = ToneCurve.sanitized(xs: xs, ys: ys)
+        return zip(s.xs, s.ys).map { CurvePoint(x: $0, y: $1) }
+    }
+
+    /// The heights of the curve's points, left to right (five for an untouched curve).
+    public var curveNodes: [Double]? { curvePoints?.map(\.y) }
+
+    /// Called when a drag on the curve starts, so the moves of one drag are one history step and the next drag is another.
+    public func beginCurveDrag() { curveDragSerial += 1 }
+
+    /// Writes `points` (made safe) into the curve's fields as one history step; `target` merges repeated writes of one drag.
+    private func writeCurve(_ points: [CurvePoint], label: String, target: String) {
+        guard let m = proModule("tonecurve"), let fields = schemas["tonecurve"]?.fields else { return }
+        let s = ToneCurve.sanitized(xs: points.map(\.x), ys: points.map(\.y))
+        // every slot is written: used ones get their value, unused ones their default (which removes the key from the edit)
+        var writes: [(FieldSchema, Double)] = []
+        func queue(_ name: String, _ value: Double?) {
+            guard let f = fields.first(where: { $0.name == name }) else { return }
+            writes.append((f, value ?? f.defaultValue.double ?? 0))
+        }
+        queue("n", Double(s.xs.count))
+        for i in 0..<ToneCurve.maxPoints {
+            queue("x\(i)", i < s.xs.count ? s.xs[i] : nil)
+            queue("y\(i)", i < s.ys.count ? s.ys[i] : nil)
+        }
+        grouped(label, target: target) {
+            for (f, v) in writes { setParam(m, f, to: .number(v)) }
+        }
+    }
+
+    /// Moves point `index` to (x, y), both 0...1. A point stays between its neighbours (at least `ToneCurve.minGap` apart in x,
+    /// never lower than the one before or higher than the one after), so the curve never folds back or reverses a tone. The end
+    /// points can move too: the first right of 0 is a black point, the last left of 1 a white point.
+    public func moveCurvePoint(_ index: Int, x: Double, y: Double) {
+        guard var pts = curvePoints, pts.indices.contains(index), x.isFinite, y.isFinite else { return }
+        let gap = ToneCurve.minGap, last = pts.count - 1
+        let xLo = index == 0 ? 0 : pts[index - 1].x + gap, xHi = index == last ? 1 : pts[index + 1].x - gap
+        let yLo = index == 0 ? 0 : pts[index - 1].y, yHi = index == last ? 1 : pts[index + 1].y
+        pts[index].x = min(max(x, xLo), max(xLo, xHi))
+        pts[index].y = min(max(y, yLo), max(yLo, yHi))
+        guard pts != curvePoints else { return }
+        writeCurve(pts, label: "Tone curve", target: "tonecurve.drag.\(curveDragSerial)")
+    }
+
+    /// Adds a point at (x, y) (clamped between its new neighbours). Returns its index, or nil when the curve has eight already or
+    /// the spot is closer than `ToneCurve.minGap` to another point.
+    @discardableResult
+    public func insertCurvePoint(x: Double, y: Double) -> Int? {
+        guard var pts = curvePoints, pts.count < ToneCurve.maxPoints, x.isFinite, y.isFinite else { return nil }
+        let gap = ToneCurve.minGap
+        guard let j = pts.firstIndex(where: { $0.x > x }), j > 0 else { return nil }
+        guard x - pts[j - 1].x >= gap, pts[j].x - x >= gap else { return nil }
+        pts.insert(CurvePoint(x: x, y: min(max(y, pts[j - 1].y), pts[j].y)), at: j)
+        writeCurve(pts, label: "Add curve point", target: "tonecurve.add.\(history.count)")
+        return j
+    }
+
+    /// Takes point `index` out. The two end points stay, and so do two points in all.
+    public func removeCurvePoint(_ index: Int) {
+        guard var pts = curvePoints, pts.count > 2, (1..<(pts.count - 1)).contains(index) else { return }
+        pts.remove(at: index)
+        writeCurve(pts, label: "Remove curve point", target: "tonecurve.remove.\(history.count)")
+    }
+
+    /// Moves point `index` to height `y` keeping its place along the curve (the rig and the self-test use this).
     public func setCurveNode(_ index: Int, _ y: Double) {
-        guard (0..<5).contains(index), let m = proModule("tonecurve"),
-              let f = schemas["tonecurve"]?.fields.first(where: { $0.name == "y\(index)" }) else { return }
-        setParam(m, f, to: .number(min(max(y, 0), 1)))
+        guard let pts = curvePoints, pts.indices.contains(index) else { return }
+        moveCurvePoint(index, x: pts[index].x, y: y)
     }
 }
 
@@ -270,7 +347,7 @@ struct CurveSection: View {
 
     var body: some View {
         CurveEditor(model: model)
-            .frame(height: 220)
+            .frame(height: 244)
     }
 }
 

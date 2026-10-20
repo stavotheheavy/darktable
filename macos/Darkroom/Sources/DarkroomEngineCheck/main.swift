@@ -1099,5 +1099,32 @@ do {
     check("E-RS6 edge refine works on a raster mask (guided by the photo)", worstLinear(engine([maskedExposure(refined)])?.pixels ?? [], maskedExposureOracle(refinedSpec)) < 2e-2)
 }
 
+// E-TP the point curve through the engine: points against the oracle, an old five-height edit equal to its new-format twin,
+// hostile values made safe, tile seams
+do {
+    func entry(_ params: [String: Double]) -> StackEntry { StackEntry(operation: "tonecurve", params: params.mapValues { .number($0) }) }
+    func oracle(_ xs: [Double], _ ys: [Double]) -> [SIMD3<Double>] {
+        let s = ToneCurve.sanitized(xs: xs, ys: ys)
+        return detailImg.map { ToneCurve.apply($0, xs: s.xs, ys: s.ys) }
+    }
+    let xs = [0.03, 0.2, 0.31, 0.55, 0.8, 0.97], ys = [0.05, 0.14, 0.3, 0.62, 0.88, 0.97]
+    var p: [String: Double] = ["n": 6]
+    for i in 0..<6 { p["x\(i)"] = xs[i]; p["y\(i)"] = ys[i] }
+    let want = oracle(xs, ys), got = runDetail([entry(p)])
+    check("E-TP1 a six-point curve through the engine matches the oracle (1/255 and 2e-4 unclamped)", worst(got, want) < tol && worstLinear(got, want) < 2e-4, "\(worst(got, want)) \(worstLinear(got, want))")
+    check("E-TP1 and it really moves the picture", worstLinear(detailPx, want) > 0.03)
+    let seams = detailSeams([entry(p)], oracle: want)
+    check("E-TP2 the point curve renders the same in a region as in the full frame", seams.ok, "seam \(seams.seam), full vs oracle \(seams.fullVsOracle)")
+    // an edit saved before point curves (only y0...y4) is the same picture as the same five points in the new format
+    let legacy = entry(["y1": 0.15, "y2": 0.5, "y3": 0.85])
+    let twin = entry(["n": 5, "x0": 0, "x1": 0.25, "x2": 0.5, "x3": 0.75, "x4": 1, "y0": 0, "y1": 0.15, "y2": 0.5, "y3": 0.85, "y4": 1])
+    check("E-TP3 an old five-height edit renders exactly as its new-format twin", runDetail([legacy]) == runDetail([twin]) && runDetail([legacy]) != detailPx)
+    let hostile = entry(["n": 11, "x0": 0.9, "x1": 0.1, "x2": 5, "x3": -2, "y0": 7, "y1": -3, "y2": 0.4, "y3": 0.9, "x4": 0.5, "y4": 0.2, "x5": 0.5, "y5": 0.2, "x6": 0.5, "y6": 0.2, "x7": 0.5, "y7": 0.2])
+    let h = runDetail([hostile])
+    check("E-TP4 a point count of 11 with unsorted, out-of-range points renders a finite picture", h.count == detailW * detailH && h.allSatisfy { $0.x.isFinite && $0.y.isFinite && $0.z.isFinite })
+    check("E-TP5 n = 1 or a NaN count falls back to the old five-height path", runDetail([entry(["n": 1, "y2": 0.4])]) == runDetail([entry(["y2": 0.4])]))
+    check("E-TP6 two points (0,0) and (1,1) change nothing (within float rounding)", worstLinear(runDetail([entry(["n": 2, "x0": 0, "y0": 0, "x1": 1, "y1": 1])]), detailImg) < 1e-4)
+}
+
 print(failures == 0 ? "\nall checks passed" : "\n\(failures) failed")
 exit(failures == 0 ? 0 : 1)

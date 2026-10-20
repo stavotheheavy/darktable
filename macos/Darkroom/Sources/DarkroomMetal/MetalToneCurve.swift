@@ -5,7 +5,7 @@
 // decode are written out here, unclamped, the same formulas as Transfer in DarkroomCore.
 // Checked against the CPU oracle by darkroom-metal-check (C1), and through Core Image by darkroom-engine-check (E-TC).
 //
-// Uniforms: u[0...4] = the node heights y0...y4, u[5...9] = the five tangents.
+// Uniforms (ToneCurve.uniforms): u[0] the point count n, u[1...8] the x values, u[9...16] the y values, u[17...24] the tangents.
 
 public enum MetalToneCurve {
     public static let source = #"""
@@ -21,14 +21,20 @@ public enum MetalToneCurve {
     }
 
     static float tonecurve_curve(float e, constant float *u) {
-        if (e < 0.0f) { return u[0] + u[5] * e; }
-        if (e > 1.0f) { return u[4] + u[9] * (e - 1.0f); }
-        int k = min(int(e / 0.25f), 3);
-        float s = (e - 0.25f * float(k)) / 0.25f;
+        int n = int(u[0] + 0.5f);
+        constant float *xs = u + 1;
+        constant float *ys = u + 9;
+        constant float *ms = u + 17;
+        if (e < xs[0]) { return ys[0] + ms[0] * (e - xs[0]); }
+        if (e > xs[n - 1]) { return ys[n - 1] + ms[n - 1] * (e - xs[n - 1]); }
+        int k = 0;
+        while (k < n - 2 && e >= xs[k + 1]) { k++; }
+        float h = xs[k + 1] - xs[k];
+        float s = (e - xs[k]) / h;
         float s2 = s * s, s3 = s2 * s;
         float h00 = 2.0f * s3 - 3.0f * s2 + 1.0f, h10 = s3 - 2.0f * s2 + s;
         float h01 = -2.0f * s3 + 3.0f * s2, h11 = s3 - s2;
-        return h00 * u[k] + h10 * 0.25f * u[5 + k] + h01 * u[k + 1] + h11 * 0.25f * u[6 + k];
+        return h00 * ys[k] + h10 * h * ms[k] + h01 * ys[k + 1] + h11 * h * ms[k + 1];
     }
 
     static float3 tonecurve_apply(float3 c, constant float *u) {
