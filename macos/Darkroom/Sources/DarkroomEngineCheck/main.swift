@@ -645,5 +645,32 @@ do {
 }
 
 
+// CO: the colour range mask (kind 4)
+do {
+    let b1: [String: ParamValue] = ["mask_mode": .number(2), "mask_kind": .number(4), "mask_hue": .number(60),
+                                    "mask_hue_width": .number(60), "mask_chroma_min": .number(0.02), "mask_feather": .number(0.5)]
+    let b2: [String: ParamValue] = ["mask_mode": .number(2), "mask_kind": .number(4), "mask_hue": .number(250),
+                                    "mask_hue_width": .number(90), "mask_chroma_min": .number(0.01), "mask_feather": .number(0.6)]
+    func specOf(_ b: [String: ParamValue]) -> MaskSpec { Mask.spec(from: b.compactMapValues { $0.double })! }
+    let s1 = specOf(b1), s2 = specOf(b2)
+    let m1 = maskMatteError(s1), m2 = maskMatteError(s2)
+    check("E-CO-matte the GPU colour matte equals the oracle for two specs", m1 < 1e-4 && m2 < 1e-4, "\(m1) \(m2)")
+    let gpu = (try? CIEngineProbe.filter(.mask(s1), pixels: detailPx, width: detailW, height: detailH)) ?? []
+    let lo = gpu.map { Double($0.x) }.min() ?? .nan, hi = gpu.map { Double($0.x) }.max() ?? .nan
+    check("E-CO-varies the matte has a value under 0.1 and one over 0.9", lo < 0.1 && hi > 0.9, "min \(lo) max \(hi)")
+    let got = runDetail([maskedExposure(b1)])
+    let want = maskedExposureOracle(s1)
+    let eT = worst(got, want), eL = worstLinear(got, want)
+    check("E-CO-stack a colour-masked exposure equals the oracle", eT < tol && eL < 2e-4, "\(eT) \(eL)")
+    let seam = detailSeams([maskedExposure(b1)], oracle: want)
+    check("E-CO-seam regions render the same as the full frame", seam.ok, "seam \(seam.seam), full vs oracle \(seam.fullVsOracle)")
+    var inv = b1; inv["mask_invert"] = .number(1)
+    var sInv = s1; sInv.invert = true
+    let gotI = runDetail([maskedExposure(inv)])
+    let wantI = maskedExposureOracle(sInv)
+    let eIT = worst(gotI, wantI), eIL = worstLinear(gotI, wantI)
+    check("E-CO-invert the inverted colour mask equals the oracle", eIT < tol && eIL < 2e-4, "\(eIT) \(eIL)")
+}
+
 print(failures == 0 ? "\nall checks passed" : "\n\(failures) failed")
 exit(failures == 0 ? 0 : 1)
