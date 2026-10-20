@@ -356,16 +356,14 @@ extension CIModule {
                 return try CIBridge.perPixel(image, source: MetalSplitToning.source, function: "splitTex", uniforms: uniforms)
             }),
 
-        // Local contrast, approximate: unsharp masking at a radius, which lifts local detail.
+        // Local contrast: a guided filter on square-root luminance, so the boost stops at strong edges (no halos).
+        // LocalContrast in DarkroomCore is the oracle, and the GPU path is checked against it (darkroom-engine-check E-LC).
         CIModule(
-            operation: "bilat", name: "local contrast (approximate)", iopOrder: 47,
+            operation: "bilat", name: "local contrast", iopOrder: 47,
             defaultEnabled: false,
-            fields: [field("detail", 0, 2, 0), field("radius", 1, 50, 10)],
+            fields: [field("detail", -1, 2, 0), field("radius", 1, 50, 10)],
             apply: { image, v in
-                image.applyingFilter("CIUnsharpMask", parameters: [
-                    kCIInputRadiusKey: v["radius"] ?? 10,
-                    kCIInputIntensityKey: v["detail"] ?? 0,
-                ])
+                try CIBridge.localContrast(image, detail: v["detail"] ?? 0, radius: v["radius"] ?? 10)
             }),
 
         // RGB curve, approximate: the same five-node curve as tone curve, applied to every channel.

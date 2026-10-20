@@ -441,5 +441,28 @@ do {
           e0 < tol && el0 < 2e-4, "encoded \(e0), linear \(el0)")
 }
 
+// E-LC local contrast (DarkroomCore.LocalContrast) through the engine, on the textured fixture
+do {
+    let stack = [StackEntry(operation: "bilat", params: ["detail": .number(0.8), "radius": .number(5)])]
+    let oracle = LocalContrast.apply(detailImg, width: detailW, height: detailH, detail: 0.8, radius: 5)
+    let got = runDetail(stack)
+    let e = worst(got, oracle), el = worstLinear(got, oracle)
+    check("E-LC local contrast (detail 0.8, radius 5) matches the oracle within 1/255 and 2e-4 unclamped",
+          e < tol && el < 2e-4, "encoded \(e), linear \(el)")
+    let seams = detailSeams(stack, oracle: oracle)
+    check("E-LC-seam local contrast renders the same in a region as in the full frame, and the full frame is the oracle's",
+          seams.ok, "seam \(seams.seam), full vs oracle \(seams.fullVsOracle)")
+}
+
+// E-LC-neg local contrast flattens at negative detail
+do {
+    let stack = [StackEntry(operation: "bilat", params: ["detail": .number(-1), "radius": .number(3)])]
+    let oracle = LocalContrast.apply(detailImg, width: detailW, height: detailH, detail: -1, radius: 3)
+    let got = runDetail(stack)
+    let e = worst(got, oracle), el = worstLinear(got, oracle)
+    check("E-LC-neg local contrast (detail -1, radius 3) matches the oracle within 1/255 and 2e-4 unclamped",
+          e < tol && el < 2e-4, "encoded \(e), linear \(el)")
+}
+
 print(failures == 0 ? "\nall checks passed" : "\n\(failures) failed")
 exit(failures == 0 ? 0 : 1)
