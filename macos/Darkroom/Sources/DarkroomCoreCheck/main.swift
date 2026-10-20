@@ -500,5 +500,18 @@ let moFinite = [moHotOut, moZero].allSatisfy { $0.x.isFinite && $0.y.isFinite &&
 check("MO6 past white and black give finite outputs", moFinite, "\(moHotOut) \(moZero)")
 check("MO6 black stays black", moZero == SIMD3(0, 0, 0), "\(moZero)")
 
+// MO7 the chroma fade: at chroma 0.075 (half of the 0.15 full fade) the filter's factor is 1 + 0.5 * 0.5 = 1.25
+// on its own hue and 1 - 0.5 * 0.5 = 0.75 on the opposite hue; without the fade both would be 1.5 and 0.5
+func moFadeColour(_ hueDegrees: Double) -> SIMD3<Double> {
+    OkLab.toWorking(OkLab.lab(SIMD3(0.6, 0.075, hueDegrees * .pi / 180)))
+}
+let moFadeHot = moFadeColour(30), moFadeCold = moFadeColour(210)
+let fadeHotRatio = Monochrome.apply(moFadeHot, intensity: 1, filterHueDegrees: 30, filterStrength: 0.5).x
+    / Monochrome.apply(moFadeHot, intensity: 1, filterHueDegrees: 30, filterStrength: 0).x
+let fadeColdRatio = Monochrome.apply(moFadeCold, intensity: 1, filterHueDegrees: 30, filterStrength: 0.5).x
+    / Monochrome.apply(moFadeCold, intensity: 1, filterHueDegrees: 30, filterStrength: 0).x
+check("MO7 half chroma: the filter's own hue is lighter by 1.25", abs(fadeHotRatio - 1.25) < 1e-9, "\(fadeHotRatio)")
+check("MO7 half chroma: the opposite hue is darker by 0.75", abs(fadeColdRatio - 0.75) < 1e-9, "\(fadeColdRatio)")
+
 print(failures == 0 ? "\nall checks passed" : "\n\(failures) failed")
 exit(failures == 0 ? 0 : 1)
