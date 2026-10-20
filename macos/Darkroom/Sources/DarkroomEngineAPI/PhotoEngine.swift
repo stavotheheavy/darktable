@@ -25,6 +25,9 @@ public protocol PhotoEngine: Actor {
     func sessionOutputSize(stack: [StackEntry]) async throws -> (width: Int, height: Int)?
     func sessionModules() async throws -> [ModuleInfo]
     func exportRender(path: String, maxSide: Int, stack: [StackEntry]) async throws -> RenderedFrame
+    /// The algorithm version of every module this engine can run, by operation. A module's version goes up when its maths
+    /// changes, so a saved edit can tell it was made with other maths (roadmap T11). Engines that do not track it answer [:].
+    func algorithmVersions() async -> [String: Int]
     /// A JPEG with an HDR gain map, or nil when the engine cannot make one.
     func exportHDRJPEG(path: String, maxSide: Int, stack: [StackEntry], headroom: Double) async throws -> Data?
 
@@ -45,6 +48,7 @@ extension PhotoEngine {
     public func sessionPreview() async throws -> RenderedFrame? { nil }
 
     public func exportHDRJPEG(path: String, maxSide: Int, stack: [StackEntry], headroom: Double) async throws -> Data? { nil }
+    public func algorithmVersions() async -> [String: Int] { [:] }
 
     /// Engines that cannot report it (darktable, for now) answer nil.
     public func sessionOutputSize(stack: [StackEntry]) async throws -> (width: Int, height: Int)? { nil }

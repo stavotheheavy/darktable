@@ -16,6 +16,9 @@ struct CIModule: Sendable {
     let apply: @Sendable (CIImage, [String: Double]) throws -> CIImage
     /// Wants the decoder's scene-linear output (no boost tone curve) when enabled.
     var sceneReferred = false
+    /// Goes up whenever the module's maths changes. Saved with an edit (the sidecar), so a later app can tell the picture
+    /// would now look different; darkroom-engine-check's golden images (T11) fail until the new version has goldens.
+    var algorithmVersion = 1
     /// Geometry (flip, straighten, crop): skipped by the per-pixel loop, applied once by `CIGeometry`.
     var geometry = false
 

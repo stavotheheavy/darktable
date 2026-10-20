@@ -145,6 +145,10 @@ public actor CIEngine: PhotoEngine {
         }
     }
 
+    public func algorithmVersions() async -> [String: Int] {
+        Dictionary(uniqueKeysWithValues: CIModule.all.map { ($0.operation, $0.algorithmVersion) })
+    }
+
     public func exportRender(path: String, maxSide: Int, stack: [StackEntry]) async throws -> RenderedFrame {
         return try await render(path: path, maxSide: maxSide, stack: stack)
     }

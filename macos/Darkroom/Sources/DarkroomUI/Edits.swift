@@ -30,28 +30,67 @@ public struct HistoryItem: Codable, Equatable, Sendable, Identifiable {
 }
 
 /// The saved form of an image's edits, kept next to the raw like an XMP sidecar.
+///
+/// Version 2 adds `algorithms`: the algorithm version of every module the history uses, as the engine that saved it
+/// reported (roadmap T11). Version 1 files (no `algorithms`) still load. A file with a version this app does not know
+/// is never read and never overwritten: its edits belong to a newer app.
 struct Sidecar: Codable {
-    var version = 1
+    static let currentVersion = 2
+
+    var version = Sidecar.currentVersion
     var history: [HistoryItem]
     var index: Int
+    var algorithms: [String: Int]?
+
+    enum Loaded {
+        case none
+        case loaded(Sidecar)
+        /// A sidecar this app cannot read (a newer format, or damaged): left on disk untouched.
+        case unreadable(String)
+    }
 
     static func url(for rawPath: String) -> URL {
         URL(fileURLWithPath: rawPath + ".darkroom.json")
     }
 
+    static func read(for rawPath: String) -> Loaded {
+        guard let data = try? Data(contentsOf: url(for: rawPath)) else { return .none }
+        struct Header: Decodable { var version: Int? }
+        guard let version = (try? JSONDecoder().decode(Header.self, from: data))?.version else {
+            return .unreadable("its sidecar is not a Vantage file")
+        }
+        guard (1...currentVersion).contains(version) else {
+            return .unreadable("its edits were saved by a newer Vantage (sidecar format \(version))")
+        }
+        guard let s = try? JSONDecoder().decode(Sidecar.self, from: data), !s.history.isEmpty else {
+            return .unreadable("its sidecar is damaged")
+        }
+        return .loaded(s)
+    }
+
     static func load(for rawPath: String) -> Sidecar? {
-        guard
-            let data = try? Data(contentsOf: url(for: rawPath)),
-            let s = try? JSONDecoder().decode(Sidecar.self, from: data),
-            s.version == 1, !s.history.isEmpty
-        else { return nil }
-        return s
+        if case .loaded(let s) = read(for: rawPath) { return s }
+        return nil
     }
 
     func save(for rawPath: String) throws {
         let enc = JSONEncoder()
         enc.outputFormatting = [.prettyPrinted, .sortedKeys]
         try enc.encode(self).write(to: Self.url(for: rawPath), options: .atomic)
+    }
+
+    /// What differs between the maths that made these edits and this app's, one sentence per module the history uses.
+    /// A module saved at a higher version than this app knows is "newer"; at a lower one, "changed since".
+    func versionNotices(current: [String: Int]) -> [String] {
+        guard let saved = algorithms, !current.isEmpty else { return [] }
+        let used = Set(history[min(max(0, index), history.count - 1)].edits.filter { $0.value.changesPicture }.keys
+            .map { String($0.split(separator: "#").first ?? "") })
+        return used.sorted().compactMap { op in
+            guard let was = saved[op], let now = current[op], was != now else { return nil }
+            return was > now
+                ? "\(op): edited with a newer algorithm (version \(was); this app has \(now)), so it may look different"
+                : "\(op): the algorithm changed since you edited (version \(was), now \(now)), so it may look different"
+        }
     }
 }
 

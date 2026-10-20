@@ -953,6 +953,45 @@ struct SelfTest {
         check(reopened.edits == saved && reopened.history.count == model.history.count,
               "a reopened image restores its edits and history")
         check(abs(luma(reopened) - dark) < 1.0, "and renders the same frame")
+        // T12 sidecar round trip: the frame after reopening is the frame before, byte for byte
+        await model.settle()
+        check(bytes(reopened.frame) != nil && bytes(reopened.frame) == bytes(model.frame),
+              "T12 a reopened image renders identical frame bytes")
+        // T11 sidecar versions: what the sidecar records, and what happens when the maths or the format moved on
+        let sidecarURL = URL(fileURLWithPath: copy.path + ".darkroom.json")
+        let sidecarBytes = try Data(contentsOf: sidecarURL)
+        if clean {
+            let saved = (try JSONSerialization.jsonObject(with: sidecarBytes) as? [String: Any]) ?? [:]
+            let algos = saved["algorithms"] as? [String: Int] ?? [:]
+            check((saved["version"] as? Int) == 2 && algos["exposure"] == 1 && algos.count >= 30,
+                  "the sidecar is format 2 and records every module's algorithm version (\(algos.count) modules)")
+            // the same sidecar claiming newer and older algorithms for the modules it uses
+            for (label, value, word) in [("newer", 1000, "newer algorithm"), ("older", 0, "algorithm changed")] {
+                var obj = saved
+                var changed = algos
+                for key in model.edits.filter({ $0.value.changesPicture }).keys {
+                    changed[String(key.split(separator: "#").first ?? "")] = value
+                }
+                obj["algorithms"] = changed
+                try JSONSerialization.data(withJSONObject: obj).write(to: sidecarURL)
+                let other = DarkroomModel(engine: engine)
+                await other.open(path: copy.path)
+                check(!other.versionNotices.isEmpty && other.versionNotices.allSatisfy { $0.contains(word) },
+                      "a sidecar saved with \(label) algorithms says so (\(other.versionNotices.first ?? "no notice"))")
+            }
+        }
+        // a sidecar from a newer format is never read and never overwritten
+        let future = Data(#"{"version": 99, "history": [], "index": 0, "note": "from the future"}"#.utf8)
+        try future.write(to: sidecarURL)
+        let guarded = DarkroomModel(engine: engine)
+        await guarded.open(path: copy.path)
+        if let exposure = module(guarded, "exposure"), let ev = field(guarded, exposure, "exposure") {
+            guarded.setParam(exposure, ev, to: .number(1))
+        }
+        await guarded.flushSave()
+        check((try? Data(contentsOf: sidecarURL)) == future && guarded.saveError != nil,
+              "a sidecar from a newer format is left byte for byte as it was, and the user is told")
+        try sidecarBytes.write(to: sidecarURL)
 
         print("geometry")
         if clean, let crop = module(model, "crop") {

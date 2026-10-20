@@ -100,6 +100,10 @@ public final class DarkroomModel {
     public private(set) var scopes: ScopeData?
     public var probe: PixelProbe?
     public private(set) var saveError: String?
+    /// One sentence per module whose algorithm differs from the one that made the saved edits (empty when they match).
+    public private(set) var versionNotices: [String] = []
+    /// Set when the image's sidecar could not be read (a newer format, or damaged): the file is left alone and not saved over.
+    private var sidecarLocked: String?
 
     private let engine: any PhotoEngine
     private var rendering = false
@@ -209,12 +213,21 @@ public final class DarkroomModel {
             return
         }
 
-        if let s = Sidecar.load(for: path) {
+        sidecarLocked = nil
+        versionNotices = []
+        let loaded = Sidecar.read(for: path)
+        if case .loaded(let s) = loaded {
             history = s.history
             historyIndex = min(max(0, s.index), s.history.count - 1)
             let known = Set(modules.map(\.id))
             edits = history[historyIndex].edits.filter { known.contains($0.key) }
+            versionNotices = s.versionNotices(current: await engine.algorithmVersions())
+            if let first = versionNotices.first { status = versionNotices.count == 1 ? first : "\(first) (and \(versionNotices.count - 1) more)" }
         } else {
+            if case .unreadable(let why) = loaded {
+                sidecarLocked = why
+                saveError = "Edits are not saved for this photo: \(why). The file was left untouched."
+            }
             history = [HistoryItem(label: "original", detail: "", edits: [:])]
             historyIndex = 0
             edits = [:]
@@ -637,11 +650,16 @@ public final class DarkroomModel {
     public func flushSave() async {
         saveTask?.cancel()
         guard let path = filePath else { return }
+        // a sidecar this app could not read is somebody's edits (a newer app's): never write over it
+        if let why = sidecarLocked { saveError = "Edits are not saved for this photo: \(why). The file was left untouched."; return }
         let hasEdits = history.count > 1
         let url = Sidecar.url(for: path)
         do {
             if hasEdits {
-                try Sidecar(history: history, index: historyIndex).save(for: path)
+                var s = Sidecar(history: history, index: historyIndex)
+                let versions = await engine.algorithmVersions()
+                s.algorithms = versions.isEmpty ? nil : versions
+                try s.save(for: path)
             } else if FileManager.default.fileExists(atPath: url.path) {
                 try FileManager.default.removeItem(at: url)
             }
