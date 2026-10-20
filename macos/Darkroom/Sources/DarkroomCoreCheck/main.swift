@@ -760,6 +760,8 @@ do {
         }
         return m
     }
+    /// `max(acc, term)` that keeps a non-finite term: `max` would return `acc` for a NaN term and lose the NaN.
+    func maxFinite(_ acc: Double, _ term: Double) -> Double { term.isFinite ? max(acc, term) : .infinity }
     func popStd(_ v: [Double]) -> Double {
         let mean = v.reduce(0, +) / Double(v.count)
         return (v.reduce(0) { $0 + ($1 - mean) * ($1 - mean) } / Double(v.count)).squareRoot()
@@ -801,13 +803,13 @@ do {
     let sOut = lumaOut.map { ColorCommon.luminance($0).squareRoot() }
     let sStd = popStd(sOut) / 0.03
     check("NR3 output s has std \(String(format: "%.4f", sStd)) x the noise (under 0.1; the card expects 0.035)", sStd < 0.1, "\(sStd)")
-    let spread = lumaOut.map { max(abs($0.x - $0.y), abs($0.y - $0.z)) }.max() ?? .infinity
+    let spread = lumaOut.reduce(0.0) { maxFinite(maxFinite($0, abs($1.x - $1.y)), abs($1.y - $1.z)) }
     check("NR3 the grey stays grey (all channels equal within 1e-12)", spread < 1e-12, "\(spread)")
 
     // NR4 shrinkage is bounded by the sum of the thresholds
     let lumaOut1 = NoiseReduction.apply(lumaImg, width: ln, height: ln, luma: 0.1, chroma: 0)
     var maxMove = 0.0
-    for (o, s) in zip(lumaOut1, lumaS) { maxMove = max(maxMove, abs(ColorCommon.luminance(o).squareRoot() - s)) }
+    for (o, s) in zip(lumaOut1, lumaS) { maxMove = maxFinite(maxMove, abs(ColorCommon.luminance(o).squareRoot() - s)) }
     let bound = 3 * 0.1 * 0.1 * (0.890 + 0.201 + 0.086 + 0.041) + 1e-9
     check("NR4 the largest move of s is \(String(format: "%.5f", maxMove)), at most \(String(format: "%.5f", bound))",
           maxMove <= bound, "\(maxMove)")
@@ -817,7 +819,7 @@ do {
     var lumaErr = 0.0
     for (o, i) in zip(chromaOut, chromaImg) {
         let yo = ColorCommon.luminance(o), yi = ColorCommon.luminance(i)
-        lumaErr = max(lumaErr, abs(yo - yi) / yi)
+        lumaErr = maxFinite(lumaErr, abs(yo - yi) / yi)
     }
     check("NR5 the output luminance equals the input luminance (relative error \(lumaErr))", lumaErr < 1e-9, "\(lumaErr)")
     for c in 0..<3 {
@@ -836,7 +838,7 @@ do {
     var ratioErr = 0.0
     for (o, i) in zip(lumaOnly, chromaImg) {
         let yo = ColorCommon.luminance(o), yi = ColorCommon.luminance(i)
-        for c in 0..<3 { ratioErr = max(ratioErr, abs(o[c] / yo - i[c] / yi)) }
+        for c in 0..<3 { ratioErr = maxFinite(ratioErr, abs(o[c] / yo - i[c] / yi)) }
     }
     check("NR6b luma only keeps every pixel's ratios (out / Y equals in / Y)", ratioErr < 1e-9, "\(ratioErr)")
 
