@@ -490,5 +490,22 @@ do {
           "count \(zeroEngine.count) of \(detailPx.count)")
 }
 
+// E-NR the wavelet noise reduction through the engine against DarkroomCore.NoiseReduction on the textured fixture
+let nrCases: [(name: String, luma: Double, chroma: Double)] = [
+    ("E-NR", 0.4, 0.6), ("E-NR-luma", 0.8, 0), ("E-NR-chroma", 0, 0.8),
+]
+for c in nrCases {
+    let stack = [StackEntry(operation: "denoiseprofile", params: ["luma": .number(c.luma), "chroma": .number(c.chroma)])]
+    let got = runDetail(stack)
+    let want = NoiseReduction.apply(detailImg, width: detailW, height: detailH, luma: c.luma, chroma: c.chroma)
+    let eEnc = worst(got, want), eLin = worstLinear(got, want)
+    check("\(c.name) noise reduction luma \(c.luma) chroma \(c.chroma) matches the oracle (encoded \(eEnc), linear \(eLin))",
+          eEnc < tol && eLin < 2e-4, "encoded \(eEnc), linear \(eLin)")
+}
+let nrStack = [StackEntry(operation: "denoiseprofile", params: ["luma": .number(0.4), "chroma": .number(0.6)])]
+let nrSeam = detailSeams(nrStack, oracle: NoiseReduction.apply(detailImg, width: detailW, height: detailH, luma: 0.4, chroma: 0.6))
+check("E-NR-seam noise reduction regions match the full frame, and the full frame is the oracle's (seam \(nrSeam.seam), full vs oracle \(nrSeam.fullVsOracle))",
+      nrSeam.ok, "seam \(nrSeam.seam), full vs oracle \(nrSeam.fullVsOracle)")
+
 print(failures == 0 ? "\nall checks passed" : "\n\(failures) failed")
 exit(failures == 0 ? 0 : 1)

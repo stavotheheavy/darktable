@@ -99,18 +99,17 @@ extension CIModule {
                 try CIBridge.sharpen2D(image, amount: v["amount"] ?? 0.4, radius: v["radius"] ?? 1.5)
             }),
 
-        // Noise reduction, approximate: Core Image's luminance noise reduction. Zero is off.
+        // Wavelet noise reduction: luminance and colour strength, each 0...1. Zero is off, and both zero is the identity
+        // (darkroom-core-check NR1, darkroom-engine-check E-NR). DarkroomCore's NoiseReduction is the oracle.
         CIModule(
-            operation: "denoiseprofile", name: "denoise (profiled, approximate)", iopOrder: 5,
+            operation: "denoiseprofile", name: "noise reduction", iopOrder: 5,
             defaultEnabled: false,
             fields: [
-                field("strength", 0, 1, 0),
+                field("luma", 0, 1, 0),
+                field("chroma", 0, 1, 0),
             ],
             apply: { image, v in
-                image.applyingFilter("CINoiseReduction", parameters: [
-                    "inputNoiseLevel": v["strength"] ?? 0,
-                    "inputSharpness": 0.4,
-                ])
+                try CIBridge.noiseReduction(image, luma: v["luma"] ?? 0, chroma: v["chroma"] ?? 0)
             }),
 
         // Channel mixer: a 3x3 matrix on RGB; the identity leaves the image unchanged.
