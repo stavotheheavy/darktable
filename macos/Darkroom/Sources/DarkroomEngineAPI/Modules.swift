@@ -27,7 +27,7 @@ public enum ParamValue: Sendable, Hashable, Codable {
     }
 
     /// What goes into a stack entry's JSON.
-    var jsonObject: Any {
+    public var jsonObject: Any {
         switch self {
         case .number(let d): d
         case .bool(let b): b
@@ -126,7 +126,7 @@ public struct ModuleInfo: Sendable, Identifiable, Equatable {
         multiNameHandEdited && !multiName.isEmpty ? "\(name) · \(multiName)" : name
     }
 
-    static func parse(_ data: Data) throws -> [ModuleInfo] {
+    public static func parse(_ data: Data) throws -> [ModuleInfo] {
         guard let arr = try JSONSerialization.jsonObject(with: data) as? [[String: Any]] else {
             throw EngineError("module list is not an array")
         }
@@ -191,7 +191,7 @@ public struct ModuleSchema: Sendable {
     public let operation: String
     public let fields: [FieldSchema]
 
-    static func parse(_ data: Data) throws -> ModuleSchema {
+    public static func parse(_ data: Data) throws -> ModuleSchema {
         guard
             let o = try JSONSerialization.jsonObject(with: data) as? [String: Any],
             let op = o["operation"] as? String,
@@ -260,4 +260,11 @@ public struct SessionInfo: Sendable, Equatable {
     public let processedHeight: Int
     public let workWidth: Int
     public let workHeight: Int
+
+    public init(processedWidth: Int, processedHeight: Int, workWidth: Int, workHeight: Int) {
+        self.processedWidth = processedWidth
+        self.processedHeight = processedHeight
+        self.workWidth = workWidth
+        self.workHeight = workHeight
+    }
 }

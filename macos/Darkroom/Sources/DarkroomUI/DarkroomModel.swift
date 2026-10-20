@@ -87,7 +87,7 @@ public final class DarkroomModel {
     public var probe: PixelProbe?
     public private(set) var saveError: String?
 
-    private let engine: Engine
+    private let engine: any PhotoEngine
     private var rendering = false
     private var wantsRender = false
     private var renderGeneration = 0
@@ -119,7 +119,7 @@ public final class DarkroomModel {
     private var saveTask: Task<Void, Never>?
     public let backingScale: Double = Double(NSScreen.main?.backingScaleFactor ?? 2)
 
-    public init(engine: Engine = Engine()) {
+    public init(engine: any PhotoEngine = Engine()) {
         self.engine = engine
     }
 

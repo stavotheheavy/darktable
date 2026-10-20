@@ -3,44 +3,14 @@ import CoreGraphics
 import Foundation
 import Synchronization
 
-public struct EngineError: Error, CustomStringConvertible, Sendable {
-    public let description: String
-    public init(_ description: String) { self.description = description }
-}
-
-/// One edit to apply on top of the image's imported state.
-public struct StackEntry: Sendable {
-    public var operation: String
-    public var multiPriority: Int
-    public var params: [String: ParamValue]
-    public var blend: [String: ParamValue]
-    public var enabled: Bool
-
-    public init(operation: String, multiPriority: Int = 0, params: [String: ParamValue] = [:],
-                blend: [String: ParamValue] = [:], enabled: Bool = true) {
-        self.operation = operation
-        self.multiPriority = multiPriority
-        self.params = params
-        self.blend = blend
-        self.enabled = enabled
-    }
-}
-
-/// A session render stopped by `Engine.cancelRender()` because a newer edit superseded it.
-public struct RenderCanceled: Error, Sendable {}
-
-public struct RenderedFrame: @unchecked Sendable {
-    public let image: CGImage
-    public let width: Int
-    public let height: Int
-    public let milliseconds: Double
-}
+// Callers keep importing DarktableKit and get the shared types with it.
+@_exported import DarkroomEngineAPI
 
 /// Owns darktable's headless engine.
 ///
 /// darktable's core was written for one UI thread, so every call is pinned to a
 /// single serial queue instead of hopping around the cooperative pool.
-public actor Engine {
+public actor Engine: PhotoEngine {
     private let queue = DispatchSerialQueue(label: "darktable.engine", qos: .userInitiated)
     public nonisolated var unownedExecutor: UnownedSerialExecutor { queue.asUnownedSerialExecutor() }
 
@@ -207,7 +177,7 @@ public actor Engine {
 
     /// Render a file (scratch-imported, never written next to the original) into a CGImage
     /// fitted inside `maxSide` x `maxSide`. Builds and discards a pipeline every call.
-    public func render(path: String, maxSide: Int, stack: [StackEntry] = []) throws -> RenderedFrame {
+    public func render(path: String, maxSide: Int, stack: [StackEntry]) throws -> RenderedFrame {
         guard started else { throw EngineError("engine not started") }
 
         let stackJSON: String? = stack.isEmpty ? nil : try Self.json(stack)

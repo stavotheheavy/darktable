@@ -24,10 +24,14 @@ let package = Package(
         // header-only view of src/swiftbridge/dtb.h (plain C types only)
         .systemLibrary(name: "CDtBridge", path: "Sources/CDtBridge"),
 
+        // what every engine speaks: the protocol, shared value types, module schema.
+        // No darktable here, so the clean engine can depend on it alone.
+        .target(name: "DarkroomEngineAPI"),
+
         // the engine wrapper
         .target(
             name: "DarktableKit",
-            dependencies: ["CDtBridge"],
+            dependencies: ["CDtBridge", "DarkroomEngineAPI"],
             linkerSettings: [
                 .unsafeFlags(["-L\(libdir)", "-Xlinker", "-rpath", "-Xlinker", libdir]),
             ]

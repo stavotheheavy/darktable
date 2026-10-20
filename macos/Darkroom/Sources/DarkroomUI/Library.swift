@@ -73,13 +73,13 @@ public final class LibraryModel {
     /// Grid columns as drawn, so up and down arrows move a row.
     public var columns = 5
 
-    private let engine: Engine
+    private let engine: any PhotoEngine
     private var store = RatingStore.load()
     private var loading: Task<Void, Never>?
     static let extensions: Set<String> = ["cr2", "cr3", "nef", "arw", "dng", "raf", "orf", "rw2", "jpg", "jpeg", "tif", "tiff", "png"]
     static let lastFolderKey = "darkroom.library.folder"
 
-    public init(engine: Engine) {
+    public init(engine: any PhotoEngine) {
         self.engine = engine
     }
 
@@ -223,7 +223,7 @@ public final class LibraryModel {
     }
 
     /// A 480 pixel developed copy, cached on disk until the file changes.
-    static func thumbnail(for path: String, engine: Engine) async -> CGImage? {
+    static func thumbnail(for path: String, engine: any PhotoEngine) async -> CGImage? {
         let cache = FileManager.default.homeDirectoryForCurrentUser.appending(path: ".cache/darktable-fork/thumbs")
         let mtime = ((try? FileManager.default.attributesOfItem(atPath: path)[.modificationDate]) as? Date)?.timeIntervalSince1970 ?? 0
         let key = path.utf8.reduce(UInt64(5381)) { ($0 << 5) &+ $0 &+ UInt64($1) }
