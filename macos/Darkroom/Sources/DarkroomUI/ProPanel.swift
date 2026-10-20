@@ -310,6 +310,8 @@ struct ProGeometry: View {
 /// The header's three Pro menus: Modules (in or out of the panel), Presets, History.
 struct ProMenus: View {
     @Bindable var model: DarkroomModel
+    /// The narrow header: icons with tooltips instead of words.
+    var compact = false
 
     var body: some View {
         HStack(spacing: 2) {
@@ -349,11 +351,14 @@ struct ProMenus: View {
     private func menuLabel(_ title: String, _ symbol: String) -> some View {
         HStack(spacing: 6) {
             Image(systemName: symbol)
-            Text(title).font(.callout.weight(.medium))
+            // words keep their size, so the header's wide layout is only chosen when they fit
+            if !compact { Text(title).font(.callout.weight(.medium)).lineLimit(1).fixedSize() }
             Image(systemName: "chevron.down").font(.caption2.weight(.semibold)).foregroundStyle(.secondary)
         }
-        .padding(.horizontal, 10)
+        .padding(.horizontal, compact ? 6 : 10)
         .frame(height: 40)
         .contentShape(Rectangle())
+        .help(title)
+        .accessibilityLabel(title)
     }
 }

@@ -178,17 +178,19 @@ struct TopBar: View {
             // the first layout that fits wins; at the narrowest window the zoom group and the
             // button labels give way instead of wrapping or clipping
             ViewThatFits(in: .horizontal) {
-                row(compact: false)
-                row(compact: true)
+                row(compact: false, menuWords: true)
+                // the zoom group and side labels give way before the Pro menus lose their words
+                row(compact: true, menuWords: true)
+                row(compact: true, menuWords: false)
             }
         }
     }
 
-    private func row(compact: Bool) -> some View {
+    private func row(compact: Bool, menuWords: Bool) -> some View {
         HStack(spacing: 12) {
             fileCapsule.chrome(hidden: model.uiHidden)
             ModeSwitch(model: model).chrome(hidden: model.uiHidden)
-            if model.mode == .pro { ProMenus(model: model).chrome(hidden: model.uiHidden) }
+            if model.mode == .pro { ProMenus(model: model, compact: !menuWords).chrome(hidden: model.uiHidden) }
             Spacer(minLength: 8)
             toolsCapsule(compact: compact).chrome(hidden: model.uiHidden)
             Spacer(minLength: 8)
@@ -303,7 +305,7 @@ struct TopBar: View {
             if Rig.canary("smalltarget") {
                 Button { } label: { Image(systemName: "gearshape").font(.system(size: 9)) }.buttonStyle(.plain).frame(width: 14, height: 14).rig("canary-gear")
             }
-            Button(action: export) { Text("Export") }
+            Button(action: export) { Text("Export").lineLimit(1).fixedSize() }
                 .buttonStyle(PrimaryCapsuleStyle())
                 .disabled(model.frame == nil)
                 .rig("export")
