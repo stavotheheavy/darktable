@@ -655,11 +655,20 @@ public final class DarkroomModel {
 
     /// Full-size JPEG of the current edit. The bound is the sensor's own long side, so
     /// darktable's upscale flag cannot enlarge the picture beyond the original.
-    public func export(to url: URL) async {
+    public func export(to url: URL, hdr: Bool = false) async {
         guard let path = filePath else { return }
         status = "Exporting…"
         let bound = Self.longSide(of: path) ?? 4096
         do {
+            if hdr {
+                // the engine's JPEG with an HDR gain map; an engine that cannot make one says so and the normal export runs
+                if let data = try await engine.exportHDRJPEG(path: path, maxSide: bound, stack: buildStack(), headroom: 4) {
+                    try data.write(to: url, options: .atomic)
+                    status = "Exported \(url.lastPathComponent) with an HDR gain map"
+                    requestRender()
+                    return
+                }
+            }
             let result = try await engine.exportRender(path: path, maxSide: bound, stack: buildStack())
             guard let dest = CGImageDestinationCreateWithURL(
                 url as CFURL, UTType.jpeg.identifier as CFString, 1, nil)

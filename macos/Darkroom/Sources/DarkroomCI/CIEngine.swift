@@ -164,6 +164,27 @@ public actor CIEngine: PhotoEngine {
         return try await render(path: path, maxSide: maxSide, stack: stack)
     }
 
+    /// The export as a JPEG with an HDR gain map, `headroom` times SDR white at the brightest. With the display
+    /// transform on, the HDR version is that transform with a higher peak; without it, Apple's own RAW HDR rendition.
+    public func exportHDRJPEG(path: String, maxSide: Int, stack: [StackEntry], headroom: Double) async throws -> Data? {
+        guard let context else { throw EngineError("engine not started") }
+        let s = try Self.makeSession(path: path, maxSide: maxSide)
+        cancelFlag.withLock { $0 = false }
+        let peak = min(max(headroom, 1), 8)
+        if Self.wantsSceneLinear(stack) {
+            let decoded = try decode(s, scale: s.fit, stack: stack)
+            let sdr = try Self.process(decoded, stack, camera: s.camera)
+            let hdr = try Self.process(decoded, stack, camera: s.camera, hdrPeak: peak)
+            return try Self.hdrJPEG(context: context, sdr: sdr, hdr: hdr, headroom: peak)
+        }
+        s.raw.extendedDynamicRangeAmount = 0
+        let sdr = try edited(try decode(s, scale: s.fit, stack: stack), stack, camera: s.camera)
+        s.raw.extendedDynamicRangeAmount = 1
+        let hdr = try edited(try decode(s, scale: s.fit, stack: stack), stack, camera: s.camera)
+        s.raw.extendedDynamicRangeAmount = 0
+        return try Self.hdrJPEG(context: context, sdr: sdr, hdr: hdr, headroom: peak)
+    }
+
     // MARK: one-shot
 
     public func render(path: String, maxSide: Int, stack: [StackEntry]) async throws -> RenderedFrame {
@@ -202,19 +223,40 @@ public actor CIEngine: PhotoEngine {
 
     /// `camera` is the orientation of the file being rendered: a one-shot render (thumbnails, export) has
     /// its own, never the open session's.
+    /// A JPEG of the SDR render that carries an HDR gain map (Core Image computes the single-channel map from the ratio of
+    /// the HDR version to the SDR one). `sdr` and `hdr` are the same edit rendered with and without the display
+    /// transform's peak; a viewer that knows gain maps shows `headroom` times SDR white at the brightest, any other
+    /// shows the SDR picture. Static so `CIEngineProbe` runs this exact code.
+    static func hdrJPEG(context: CIContext, sdr: CIImage, hdr: CIImage, headroom: Double, quality: Double = 0.92) throws -> Data {
+        guard let space = CGColorSpace(name: CGColorSpace.sRGB) else { throw EngineError("no sRGB colour space") }
+        let rect = sdr.extent.integral
+        let base = sdr.cropped(to: rect)
+        let lifted = hdr.cropped(to: rect).settingContentHeadroom(Float(max(headroom, 1)))
+        let options: [CIImageRepresentationOption: Any] = [
+            .hdrImage: lifted,
+            CIImageRepresentationOption(rawValue: kCGImageDestinationLossyCompressionQuality as String): quality,
+        ]
+        guard let data = context.jpegRepresentation(of: base, colorSpace: space, options: options) else {
+            throw EngineError("could not write the HDR JPEG")
+        }
+        return data
+    }
+
     private func edited(_ image: CIImage, _ stack: [StackEntry], camera: Orientation) throws -> CIImage {
         try Self.process(image, stack, camera: camera)
     }
 
     /// The whole edit on a sensor-orientation image: the per-pixel stack, then geometry. Static so
     /// `CIEngineProbe` runs this exact code.
-    static func process(_ image: CIImage, _ stack: [StackEntry], camera: Orientation) throws -> CIImage {
-        CIGeometry.apply(try CIGeometry.spec(stack, camera: camera), to: try applyStack(image, stack))
+    /// `hdrPeak` (linear, SDR white = 1) renders the HDR version of the image: the display transform lets highlights
+    /// past 1 up to that peak; nil is the ordinary SDR render.
+    static func process(_ image: CIImage, _ stack: [StackEntry], camera: Orientation, hdrPeak: Double? = nil) throws -> CIImage {
+        CIGeometry.apply(try CIGeometry.spec(stack, camera: camera), to: try applyStack(image, stack, hdrPeak: hdrPeak))
     }
 
     /// Applies the enabled stack entries in pipeline order. An operation the clean engine
     /// does not have is an error, never a silent skip. Static so `CIEngineProbe` runs this exact code.
-    static func applyStack(_ image: CIImage, _ stack: [StackEntry]) throws -> CIImage {
+    static func applyStack(_ image: CIImage, _ stack: [StackEntry], hdrPeak: Double? = nil) throws -> CIImage {
         let ordered = try stack.filter { $0.enabled && !CIGeometry.operations.contains($0.operation) }.map { entry -> (CIModule, StackEntry) in
             guard let m = CIModule.named(entry.operation) else {
                 throw EngineError("the clean engine has no module \(entry.operation) yet")
@@ -227,7 +269,9 @@ public actor CIEngine: PhotoEngine {
         for (m, entry) in ordered {
             let maskMode = entry.blend["mask_mode"]?.double ?? 0
             let before = out
-            out = try m.apply(out, m.values(from: entry.params))
+            var values = m.values(from: entry.params)
+            if let hdrPeak, m.operation == "display" { values["peak"] = hdrPeak }
+            out = try m.apply(out, values)
             if maskMode == 2 {
                 // a local mask (DarkroomCore.Mask): cut from the module's input, then the output is mixed over it
                 let blend = entry.blend.compactMapValues { $0.double }

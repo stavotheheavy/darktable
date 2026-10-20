@@ -26,7 +26,7 @@ final class BridgeKernels: @unchecked Sendable {
     private let library: MTLLibrary
     private var pipelines: [String: MTLComputePipelineState] = [:]
     private let lock = NSLock()
-    private var toneTables: [Double: MTLBuffer] = [:]
+    private var toneTables: [SIMD2<Double>: MTLBuffer] = [:]
     /// Libraries compiled from a card's own source, keyed by that source.
     private var cardLibraries: [String: MTLLibrary] = [:]
     private var cardPipelines: [String: MTLComputePipelineState] = [:]
@@ -48,6 +48,7 @@ final class BridgeKernels: @unchecked Sendable {
                                      constant float4 &params [[buffer(0)]],
                                      constant float4 *columns [[buffer(1)]],
                                      device const float *table [[buffer(2)]],
+                                     constant float &peak [[buffer(3)]],
                                      uint2 gid [[thread_position_in_grid]]) {
         if (gid.x >= dst.get_width() || gid.y >= dst.get_height()) { return; }
         float4 c = src.read(gid);
@@ -55,7 +56,7 @@ final class BridgeKernels: @unchecked Sendable {
                               toneLookup(c.g, params, table),
                               toneLookup(c.b, params, table));
         float3x3 m = float3x3(columns[0].xyz, columns[1].xyz, columns[2].xyz);
-        dst.write(float4(clamp(m * toned, 0.0f, 1.0f), c.a), gid);
+        dst.write(float4(clamp(m * toned, 0.0f, peak), c.a), gid);   // peak 1 = SDR; an HDR render lets highlights past 1
     }
     """#
 
@@ -94,14 +95,15 @@ final class BridgeKernels: @unchecked Sendable {
     }
 
     /// The ToneMap table for one contrast value, uploaded once and reused.
-    func toneTable(contrast: Double) -> MTLBuffer? {
+    func toneTable(contrast: Double, peak: Double = 1) -> MTLBuffer? {
         lock.lock()
         defer { lock.unlock() }
-        if let b = toneTables[contrast] { return b }
-        let table = ToneMap(contrast: contrast).table.map { Float($0) }
+        let key = SIMD2(contrast, peak)
+        if let b = toneTables[key] { return b }
+        let table = ToneMap(contrast: contrast, peak: peak).table.map { Float($0) }
         let b = device.makeBuffer(bytes: table, length: table.count * MemoryLayout<Float>.stride, options: .storageModeShared)
         if toneTables.count > 32 { toneTables.removeAll() }
-        toneTables[contrast] = b
+        toneTables[key] = b
         return b
     }
 
@@ -170,8 +172,10 @@ final class ToneDisplayProcessor: CIImageProcessorKernel {
     override class func process(with inputs: [CIImageProcessorInput]?, arguments: [String: Any]?,
                                 output: CIImageProcessorOutput) throws {
         guard let input = inputs?.first, let contrast = arguments?["contrast"] as? Double else { throw CIBridgeError.badArguments }
+        let peak = max((arguments?["peak"] as? Double) ?? 1, 1)
         let kernels = try BridgeKernels.shared.get()
-        guard let table = kernels.toneTable(contrast: contrast) else { throw CIBridgeError.badArguments }
+        guard let table = kernels.toneTable(contrast: contrast, peak: peak) else { throw CIBridgeError.badArguments }
+        var peakF = Float(peak)
         var p = SIMD4<Float>(Float(ToneMap.grey), Float(ToneMap.minEV), Float(ToneMap.maxEV), Float(ToneMap.tableSize - 1))
         let m = ColorSpaces.rec2020ToSRGB.m
         // columns of the row-major matrix
@@ -180,6 +184,7 @@ final class ToneDisplayProcessor: CIImageProcessorKernel {
             enc.setBytes(&p, length: MemoryLayout<SIMD4<Float>>.size, index: 0)
             enc.setBytes(cols, length: cols.count * MemoryLayout<SIMD4<Float>>.stride, index: 1)
             enc.setBuffer(table, offset: 0, index: 2)
+            enc.setBytes(&peakF, length: MemoryLayout<Float>.size, index: 3)
         }
     }
 }
@@ -250,9 +255,11 @@ public enum CIBridge {
 
     /// Scene-linear working-space image in, display-linear sRGB (0...1) out: converts to linear Rec.2020,
     /// runs the ToneMap per channel and the display matrix. Core Image applies the sRGB encode on output.
-    public static func toneDisplay(_ image: CIImage, contrast: Double) throws -> CIImage {
+    /// `peak` is linear with SDR white = 1: above 1 the tone map lifts highlights past SDR white (an HDR rendition;
+    /// below its knee it is identical to the SDR one, ToneMap's own rule).
+    public static func toneDisplay(_ image: CIImage, contrast: Double, peak: Double = 1) throws -> CIImage {
         guard let rec2020 = CGColorSpace(name: CGColorSpace.extendedLinearITUR_2020) else { throw CIBridgeError.badArguments }
         let scene = image.matchedFromWorkingSpace(to: rec2020) ?? image
-        return try ToneDisplayProcessor.apply(withExtent: image.extent, inputs: [scene], arguments: ["contrast": contrast])
+        return try ToneDisplayProcessor.apply(withExtent: image.extent, inputs: [scene], arguments: ["contrast": contrast, "peak": peak])
     }
 }

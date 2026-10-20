@@ -467,7 +467,7 @@ extension CIModule {
                 FieldSchema(name: "contrast", description: "contrast", kind: .float,
                             min: -100, max: 100, defaultValue: .number(0), options: []),
             ],
-            apply: { image, v in try CIBridge.toneDisplay(image, contrast: v["contrast"] ?? 0) })
+            apply: { image, v in try CIBridge.toneDisplay(image, contrast: v["contrast"] ?? 0, peak: v["peak"] ?? 1) })
         m.sceneReferred = true
         return m
     }()

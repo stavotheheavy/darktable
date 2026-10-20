@@ -50,6 +50,34 @@ public enum CIEngineProbe {
         return (out, ow, oh)
     }
 
+    /// Renders `stack` as the HDR export does: the SDR picture and an HDR version (display transform peak `headroom`),
+    /// written as a JPEG with a gain map. For darkroom-engine-check's T10.
+    public static func hdrJPEG(stack: [StackEntry], pixels: [SIMD4<Float>], width: Int, height: Int, headroom: Double) throws -> Data {
+        guard pixels.count == width * height, let space = CGColorSpace(name: CGColorSpace.extendedLinearSRGB),
+              let device = MTLCreateSystemDefaultDevice() else { throw EngineError("probe: bad input") }
+        let input = CIImage(bitmapData: pixels.withUnsafeBytes { Data($0) }, bytesPerRow: width * 16,
+                            size: CGSize(width: width, height: height), format: .RGBAf, colorSpace: space)
+        let context = CIContext(mtlDevice: device, options: [.workingColorSpace: space, .workingFormat: CIFormat.RGBAh, .cacheIntermediates: false])
+        let sdr = try CIEngine.process(input, stack, camera: .none)
+        let hdr = try CIEngine.process(input, stack, camera: .none, hdrPeak: headroom)
+        return try CIEngine.hdrJPEG(context: context, sdr: sdr, hdr: hdr, headroom: headroom)
+    }
+
+    /// `render` with the HDR peak: the pixels a viewer with `headroom` of display headroom should see (linear, unclamped).
+    public static func renderHDR(stack: [StackEntry], pixels: [SIMD4<Float>], width: Int, height: Int, headroom: Double) throws -> [SIMD4<Float>] {
+        guard pixels.count == width * height, let space = CGColorSpace(name: CGColorSpace.extendedLinearSRGB),
+              let device = MTLCreateSystemDefaultDevice() else { throw EngineError("probe: bad input") }
+        let input = CIImage(bitmapData: pixels.withUnsafeBytes { Data($0) }, bytesPerRow: width * 16,
+                            size: CGSize(width: width, height: height), format: .RGBAf, colorSpace: space)
+        let output = try CIEngine.process(input, stack, camera: .none, hdrPeak: headroom)
+        let context = CIContext(mtlDevice: device, options: [.workingColorSpace: space, .workingFormat: CIFormat.RGBAf, .cacheIntermediates: false])
+        var out = [SIMD4<Float>](repeating: .zero, count: width * height)
+        out.withUnsafeMutableBytes { buf in
+            context.render(output, toBitmap: buf.baseAddress!, rowBytes: width * 16, bounds: output.extent, format: .RGBAf, colorSpace: space)
+        }
+        return out
+    }
+
     /// The neighbourhood filters the detail modules use, for darkroom-engine-check's F-E series.
     public enum Filter: Sendable { case box(Int), atrous(Int), guided(Int, Double), sqrtLuminance, sqrtLuminanceRoundTrip, mask(MaskSpec), min(Int) }
 

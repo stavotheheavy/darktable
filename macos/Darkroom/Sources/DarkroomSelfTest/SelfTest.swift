@@ -75,6 +75,7 @@ struct SelfTest {
         let stackFile = take("--stack")
         let schemaOp = take("--schema")
         let oneShot = take("--one-shot")
+        let hdrJPEG = take("--hdr-jpeg")
         // darktable is the default; `ci` runs the clean engine (only --bench supports it so far)
         let engineName = take("--engine") ?? "darktable"
         guard let path = args.first else {
@@ -97,6 +98,8 @@ struct SelfTest {
 
             if let oneShot {
                 try await runOneShot(engine: engine, sessionPath: path, other: oneShot)
+            } else if let hdrJPEG {
+                try await runHDRJPEG(engine: engine, path: path, maxSide: maxSide, out: hdrJPEG)
             } else if let schemaOp {
                 // a module's public parameter list, from the engine's introspection
                 try await engine.openSession(path: path, maxSide: 400)
@@ -537,6 +540,37 @@ struct SelfTest {
 
     /// Renders `path` once with the stack in `file` and writes it to `out`. The same file drives either
     /// engine, so a darktable render of it is the clean engine's reference picture (named parameters only).
+    /// The HDR export on a real RAW, with the display transform on and with it off (Apple's own RAW HDR): each file must
+    /// read back with a gain map, expand to the headroom, and show highlights past white that the SDR picture clips.
+    static func runHDRJPEG(engine: any PhotoEngine, path: String, maxSide: Int, out: String) async throws {
+        var failed = false
+        for (label, stack) in [("display transform", [StackEntry(operation: "display", params: ["contrast": .number(0)])]),
+                               ("Apple RAW HDR", [StackEntry]())] {
+            guard let data = try await engine.exportHDRJPEG(path: path, maxSide: maxSide, stack: stack, headroom: 4) else {
+                print("FAIL  \(label): the engine cannot write an HDR JPEG"); failed = true; continue
+            }
+            let file = URL(fileURLWithPath: out).deletingPathExtension().appendingPathExtension(label == "Apple RAW HDR" ? "apple.jpg" : "display.jpg")
+            try data.write(to: file)
+            guard let src = CGImageSourceCreateWithData(data as CFData, nil),
+                  CGImageSourceCopyAuxiliaryDataInfoAtIndex(src, 0, kCGImageAuxiliaryDataTypeHDRGainMap) != nil,
+                  let ci = CIImage(data: data, options: [.expandToHDR: true]),
+                  let space = CGColorSpace(name: CGColorSpace.extendedLinearSRGB) else {
+                print("FAIL  \(label): no gain map in \(file.lastPathComponent)"); failed = true; continue
+            }
+            let context = CIContext(options: [.workingColorSpace: space, .workingFormat: CIFormat.RGBAf])
+            let side = 64
+            var px = [SIMD4<Float>](repeating: .zero, count: side * side)
+            let scaled = ci.transformed(by: CGAffineTransform(scaleX: CGFloat(side) / ci.extent.width, y: CGFloat(side) / ci.extent.height))
+            px.withUnsafeMutableBytes { context.render(scaled, toBitmap: $0.baseAddress!, rowBytes: side * 16, bounds: CGRect(x: 0, y: 0, width: side, height: side), format: .RGBAf, colorSpace: space) }
+            let brightest = px.map { max($0.x, $0.y, $0.z) }.max() ?? 0
+            let finite = px.allSatisfy { $0.x.isFinite && $0.y.isFinite && $0.z.isFinite }
+            let ok = finite && abs(ci.contentHeadroom - 4) < 0.1 && brightest > 1.0
+            print("\(ok ? "PASS" : "FAIL")  \(label): \(data.count / 1024) KB, headroom \(ci.contentHeadroom), brightest expanded value \(String(format: "%.2f", brightest)) (needs > 1), \(file.lastPathComponent)")
+            if !ok { failed = true }
+        }
+        if failed { throw EngineError("HDR export check failed") }
+    }
+
     static func runStack(engine: any PhotoEngine, path: String, maxSide: Int, file: String, out: String?) async throws {
         let entries = try JSONDecoder().decode([StackFileEntry].self, from: Data(contentsOf: URL(fileURLWithPath: file)))
         let stack = entries.map {

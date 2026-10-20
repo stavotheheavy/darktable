@@ -319,8 +319,19 @@ struct TopBar: View {
         panel.allowedContentTypes = [.jpeg]
         let stem = URL(fileURLWithPath: model.fileName).deletingPathExtension().lastPathComponent
         panel.nameFieldStringValue = stem + ".jpg"
+        // an optional HDR gain map: a viewer that knows it shows highlights past white, any other shows the same picture.
+        // Remembered between exports; the clean engine writes it, the darktable engine cannot (the box is then ignored).
+        let key = "exportHDRGainMap"
+        let box = NSButton(checkboxWithTitle: "Include HDR gain map (4 stops of highlight headroom)", target: nil, action: nil)
+        box.state = UserDefaults.standard.bool(forKey: key) ? .on : .off
+        let holder = NSView(frame: NSRect(x: 0, y: 0, width: 420, height: 36))
+        box.frame = NSRect(x: 12, y: 8, width: 400, height: 20)
+        holder.addSubview(box)
+        panel.accessoryView = holder
         panel.begin { response in
-            if response == .OK, let url = panel.url { Task { await model.export(to: url) } }
+            let hdr = box.state == .on
+            if response == .OK { UserDefaults.standard.set(hdr, forKey: key) }
+            if response == .OK, let url = panel.url { Task { await model.export(to: url, hdr: hdr) } }
         }
     }
 }

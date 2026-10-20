@@ -25,6 +25,8 @@ public protocol PhotoEngine: Actor {
     func sessionOutputSize(stack: [StackEntry]) async throws -> (width: Int, height: Int)?
     func sessionModules() async throws -> [ModuleInfo]
     func exportRender(path: String, maxSide: Int, stack: [StackEntry]) async throws -> RenderedFrame
+    /// A JPEG with an HDR gain map, or nil when the engine cannot make one.
+    func exportHDRJPEG(path: String, maxSide: Int, stack: [StackEntry], headroom: Double) async throws -> Data?
 
     /// One-shot render of a file, no session kept.
     func render(path: String, maxSide: Int, stack: [StackEntry]) async throws -> RenderedFrame
@@ -41,6 +43,8 @@ extension PhotoEngine {
 
     /// Engines without a preview path (darktable) answer nil, and the UI waits for the render.
     public func sessionPreview() async throws -> RenderedFrame? { nil }
+
+    public func exportHDRJPEG(path: String, maxSide: Int, stack: [StackEntry], headroom: Double) async throws -> Data? { nil }
 
     /// Engines that cannot report it (darktable, for now) answer nil.
     public func sessionOutputSize(stack: [StackEntry]) async throws -> (width: Int, height: Int)? { nil }

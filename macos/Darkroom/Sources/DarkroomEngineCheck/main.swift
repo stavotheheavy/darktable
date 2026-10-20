@@ -712,5 +712,87 @@ do {
     check("E-DH-zero strength 0 returns the input untouched", zero == detailPx)
 }
 
+// T10 HDR: a ramp from deep shadow to 4 stops over white through the display transform; the SDR render, the HDR
+// render and the exported file (an SDR JPEG carrying a gain map) must agree with each other and with ToneMap
+do {
+    let rw = 256, rh = 32, headroom = 4.0
+    func evAt(_ column: Int) -> Double { -8.0 + 14.5 * Double(column) / Double(rw - 1) }   // 0.18 * 2^ev: 0.0007 ... 16
+    let ramp: [SIMD4<Float>] = (0..<(rw * rh)).map { i in
+        let y = Float(0.18 * pow(2, evAt(i % rw)))
+        return SIMD4(y, y, y, 1)
+    }
+    let stack = [StackEntry(operation: "display", params: ["contrast": .number(0)])]
+    let sdr = (try? CIEngineProbe.render(stack: stack, pixels: ramp, width: rw, height: rh)) ?? []
+    let hdr = (try? CIEngineProbe.renderHDR(stack: stack, pixels: ramp, width: rw, height: rh, headroom: headroom)) ?? []
+    let sized = sdr.count == rw * rh && hdr.count == rw * rh
+    let tone = ToneMap(contrast: 0, peak: headroom)
+    var eOracle = sized ? 0.0 : Double.infinity, eSDRRange = sized ? 0.0 : Double.infinity
+    var hdrMax = 0.0, sdrMax = 0.0, below = false
+    for c in 0..<rw where sized {
+        let p = ramp[c], h = hdr[c], s = sdr[c]
+        guard h.x.isFinite, h.y.isFinite, h.z.isFinite, s.x.isFinite else { eOracle = .infinity; continue }
+        let want = tone.apply(Double(p.x))
+        for k in 0..<3 { eOracle = max(eOracle, abs(Double(h[k]) - want) / max(1, want)) }
+        if evAt(c) < 1.5 { for k in 0..<3 { eSDRRange = max(eSDRRange, abs(Double(h[k]) - Double(s[k]))) } }
+        hdrMax = max(hdrMax, Double(h.x)); sdrMax = max(sdrMax, Double(s.x))
+        if h.x < s.x - 1e-6 { below = true }
+    }
+    check("T10a the HDR render matches ToneMap(peak: 4) on the ramp (relative, unclamped)", eOracle < 2e-4, "\(eOracle)")
+    check("T10b below the knee (1.5 stops over grey) the HDR render equals the SDR render", eSDRRange < 1e-6, "\(eSDRRange)")
+    check("T10c the SDR render tops out at 1, the HDR render at the headroom, and HDR never darkens SDR",
+          abs(sdrMax - 1) < 1e-6 && hdrMax > 3.9 && hdrMax < 4.0001 && !below, "sdr \(sdrMax), hdr \(hdrMax), darker \(below)")
+
+    let data = try? CIEngineProbe.hdrJPEG(stack: stack, pixels: ramp, width: rw, height: rh, headroom: headroom)
+    check("T10d the export is a JPEG", data != nil && data!.starts(with: [0xFF, 0xD8]))
+    if let data, let src = CGImageSourceCreateWithData(data as CFData, nil) {
+        // the base picture: what a viewer without gain-map support shows
+        let decodedSDR = CGImageSourceCreateImageAtIndex(src, 0, nil)
+        var eBase = Double.infinity, eMean = Double.infinity
+        if let cg = decodedSDR, cg.width == rw, cg.height == rh,
+           let ctx = CGContext(data: nil, width: rw, height: rh, bitsPerComponent: 8, bytesPerRow: rw * 4,
+                               space: CGColorSpace(name: CGColorSpace.sRGB)!, bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) {
+            ctx.draw(cg, in: CGRect(x: 0, y: 0, width: rw, height: rh))
+            let bytes = ctx.data!.bindMemory(to: UInt8.self, capacity: rw * rh * 4)
+            var worstE = 0.0, sum = 0.0
+            for c in 0..<rw {
+                let want = encode(SIMD3(Double(sdr[c].x), Double(sdr[c].y), Double(sdr[c].z)))
+                for k in 0..<3 {
+                    let d = abs(Double(bytes[(rh / 2 * rw + c) * 4 + k]) / 255 - want[k])
+                    worstE = max(worstE, d); sum += d
+                }
+            }
+            eBase = worstE; eMean = sum / Double(rw * 3)
+        }
+        check("T10e the SDR base picture of the file matches the SDR render (JPEG loss only)", eBase < 12.0 / 255 && eMean < 2.0 / 255, "worst \(eBase * 255)/255, mean \(eMean * 255)/255")
+        let aux = CGImageSourceCopyAuxiliaryDataInfoAtIndex(src, 0, kCGImageAuxiliaryDataTypeHDRGainMap) as? [CFString: Any]
+        let desc = aux?[kCGImageAuxiliaryDataInfoDataDescription] as? [String: Any]
+        let gw = desc?["Width"] as? Int ?? 0, gh = desc?["Height"] as? Int ?? 0, bpr = desc?["BytesPerRow"] as? Int ?? 0
+        check("T10f the gain map is one 8-bit channel (grey) and no larger than the picture",
+              (desc?["PixelFormat"] as? UInt32) == 0x4C303038 && bpr == gw && gw > 0 && gw <= rw && gh > 0 && gh <= rh,
+              "\(gw)x\(gh) bpr \(bpr) format \(String(describing: desc?["PixelFormat"]))")
+        check("T10g the file also carries the ISO 21496-1 gain map",
+              CGImageSourceCopyAuxiliaryDataInfoAtIndex(src, 0, kCGImageAuxiliaryDataTypeISOGainMap) != nil)
+    } else { check("T10e-g the file can be read back", false) }
+    // a viewer with headroom expands the file back to HDR
+    if let data, let ci = CIImage(data: data, options: [.expandToHDR: true]), let space = CGColorSpace(name: CGColorSpace.extendedLinearSRGB),
+       let device = MTLCreateSystemDefaultDevice() {
+        let context = CIContext(mtlDevice: device, options: [.workingColorSpace: space, .workingFormat: CIFormat.RGBAf])
+        var back = [SIMD4<Float>](repeating: .zero, count: rw * rh)
+        back.withUnsafeMutableBytes { context.render(ci, toBitmap: $0.baseAddress!, rowBytes: rw * 16, bounds: CGRect(x: 0, y: 0, width: rw, height: rh), format: .RGBAf, colorSpace: space) }
+        let mid = rh / 2 * rw
+        var eLow = 0.0, eHigh = 0.0, finite = true
+        for c in 0..<rw {
+            let b = back[mid + c]
+            guard b.x.isFinite, b.y.isFinite, b.z.isFinite else { finite = false; continue }
+            let want = Double(hdr[c].x)
+            if evAt(c) < 1.0 { eLow = max(eLow, abs(Double(b.x) - want) / max(want, 0.02)) }
+            if evAt(c) > 3.5 { eHigh = max(eHigh, abs(Double(b.x) - want) / want) }
+        }
+        check("T10h expanding the file to HDR reports the headroom", abs(ci.contentHeadroom - 4) < 0.1, "\(ci.contentHeadroom)")
+        check("T10i expanded, the SDR range returns to the SDR render and the highlights to the HDR render",
+              finite && eLow < 0.05 && eHigh < 0.15, "low \(eLow), high \(eHigh)")
+    } else { check("T10h-i the file expands to HDR", false) }
+}
+
 print(failures == 0 ? "\nall checks passed" : "\n\(failures) failed")
 exit(failures == 0 ? 0 : 1)
