@@ -153,7 +153,7 @@ final class PerPixelManyProcessor: CIImageProcessorKernel {
               var u = arguments?["uniforms"] as? [Float], let dst = output.metalTexture, let cmd = output.metalCommandBuffer
         else { throw CIBridgeError.badArguments }
         let kernels = try BridgeKernels.shared.get()
-        let p = try kernels.pipeline(function, source: FilterKernels.source)
+        let p = try kernels.pipeline(function, source: (arguments?["source"] as? String) ?? FilterKernels.source)
         // check every input before an encoder exists: an encoder dropped without endEncoding is a crash
         var textures: [MTLTexture] = [], offsets: [SIMD2<Int32>] = []
         for input in inputs {
@@ -187,6 +187,16 @@ extension CIBridge {
 
     private static func many(_ function: String, _ images: [CIImage], _ uniforms: [Float] = []) throws -> CIImage {
         try PerPixelManyProcessor.apply(withExtent: images[0].extent, inputs: images, arguments: ["function": function, "uniforms": uniforms])
+    }
+
+    /// A card's per-pixel kernel over several images of the same extent (an image and its smoothed base, say).
+    /// `function` in `source` takes `texture2d<float, access::read>` inputs 0...n-1, the output at texture n,
+    /// `constant float *u [[buffer(0)]]` and `constant int2 *off [[buffer(1)]]`, and reads input k at
+    /// `uint2(int2(gid) + off[k])`: Core Image can hand a larger texture than the output when an image is shared.
+    public static func combine(_ images: [CIImage], source: String, function: String, uniforms: [Float]) throws -> CIImage {
+        guard let first = images.first else { throw CIBridgeError.badArguments }
+        return try PerPixelManyProcessor.apply(withExtent: first.extent, inputs: images,
+                                               arguments: ["function": function, "uniforms": uniforms, "source": source])
     }
 
     /// DarkroomCore.Filters.boxMean on every channel.
