@@ -1158,5 +1158,39 @@ do {
     check("NR8 black stays exactly black", full[0] == SIMD3(0, 0, 0), "\(full[0])")
 }
 
+// M: the local-mask plumbing every kind shares (kind 0 = the whole frame; the kinds have their own tests)
+do {
+    check("M1 ramp: 0 below, 1 above, smooth between, a hard step when the edges meet",
+          Mask.ramp(0.2, 0.6, 0.1) == 0 && Mask.ramp(0.2, 0.6, 0.7) == 1 && abs(Mask.ramp(0.2, 0.6, 0.4) - 0.5) < 1e-12
+            && Mask.ramp(0.5, 0.5, 0.49) == 0 && Mask.ramp(0.5, 0.5, 0.5) == 1 && Mask.ramp(0.5, 0.2, 0.3) == 0)
+    check("M2 a blend without mask_mode 2, or with an unknown kind, is no mask",
+          Mask.spec(from: [:]) == nil && Mask.spec(from: ["mask_mode": 1, "mask_kind": 0]) == nil
+            && Mask.spec(from: ["mask_mode": 2, "mask_kind": 99]) == nil && Mask.spec(from: ["mask_mode": 2]) == nil)
+    let s = Mask.spec(from: ["mask_mode": 2, "mask_kind": 0, "mask_invert": 1, "mask_refine": 6.4, "opacity": 40])
+    check("M2 the spec reads kind, invert, refine radius (rounded) and opacity (0...1)",
+          s == MaskSpec(kind: 0, invert: true, refineRadius: 6, opacity: 0.4, p: []), "\(String(describing: s))")
+    check("M2 opacity is clamped to 0...100 and a negative refine radius to 0",
+          Mask.spec(from: ["mask_mode": 2, "mask_kind": 0, "opacity": 250, "mask_refine": -3])?.opacity == 1
+            && Mask.spec(from: ["mask_mode": 2, "mask_kind": 0, "mask_refine": -3])?.refineRadius == 0)
+    let w = 24, h = 20
+    let img = DetailCommon.fixture(width: w, height: h)
+    let full = Mask.plane(MaskSpec(kind: 0), rgb: img, width: w, height: h)
+    check("M3 the whole-frame mask is 1 everywhere; inverted it is 0 everywhere",
+          full.values.allSatisfy { $0 == 1 }
+            && Mask.plane(MaskSpec(kind: 0, invert: true), rgb: img, width: w, height: h).values.allSatisfy { $0 == 0 })
+    let refined = Mask.plane(MaskSpec(kind: 0, refineRadius: 4), rgb: img, width: w, height: h)
+    check("M3 refining a constant mask leaves it constant", refined.values.allSatisfy { abs($0 - 1) < 1e-9 })
+    let after = img.map { $0 * 2 }
+    var mix = 0.0
+    for (i, o) in Mask.blend(before: img, after: after, mask: full, opacity: 0.25).enumerated() {
+        for c in 0..<3 { let want = img[i][c] * 1.25; mix = o[c].isFinite ? max(mix, abs(o[c] - want)) : .infinity }
+    }
+    check("M4 blend: before + (after - before) * opacity * mask", mix < 1e-12, "\(mix)")
+    let half = Plane(width: w, height: h, values: (0..<(w * h)).map { $0 % 2 == 0 ? 1 : 0 })
+    let part = Mask.blend(before: img, after: after, mask: half, opacity: 1)
+    check("M4 a mask of 0 keeps the input, a mask of 1 takes the module's output",
+          part[0] == after[0] && part[1] == img[1])
+}
+
 print(failures == 0 ? "\nall checks passed" : "\n\(failures) failed")
 exit(failures == 0 ? 0 : 1)

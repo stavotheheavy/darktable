@@ -507,5 +507,34 @@ let nrSeam = detailSeams(nrStack, oracle: NoiseReduction.apply(detailImg, width:
 check("E-NR-seam noise reduction regions match the full frame, and the full frame is the oracle's (seam \(nrSeam.seam), full vs oracle \(nrSeam.fullVsOracle))",
       nrSeam.ok, "seam \(nrSeam.seam), full vs oracle \(nrSeam.fullVsOracle)")
 
+// E-M the local-mask plumbing through the engine (kind 0 = the whole frame): the module applies, inversion keeps the
+// input, opacity mixes, refinement of a constant mask changes nothing, and tiles agree with the full frame
+do {
+    let ex = StackEntry(operation: "exposure", params: ["exposure": .number(1)])
+    func masked(_ blend: [String: ParamValue]) -> StackEntry {
+        StackEntry(operation: "exposure", params: ["exposure": .number(1)], blend: blend)
+    }
+    let m0: [String: ParamValue] = ["mask_mode": .number(2), "mask_kind": .number(0)]
+    let plain = runDetail([ex]).map { SIMD3<Double>(Double($0.x), Double($0.y), Double($0.z)) }
+    let doubled = detailImg.map { $0 * 2 }
+    let eMask = worstLinear(runDetail([masked(m0)]), plain)
+    check("E-M1 a whole-frame local mask applies the module exactly as no mask does", eMask < 1e-6, "\(eMask)")
+    var inv = m0; inv["mask_invert"] = .number(1)
+    let eInv = worstLinear(runDetail([masked(inv)]), detailImg)
+    check("E-M2 an inverted whole-frame mask leaves the input untouched", eInv < 1e-6, "\(eInv)")
+    var op = m0; op["opacity"] = .number(40)
+    let want = zip(detailImg, doubled).map { $0 + ($1 - $0) * 0.4 }
+    let eOp = worstLinear(runDetail([masked(op)]), want)
+    check("E-M3 opacity 40 mixes the module's output 40% over its input", eOp < 1e-5, "\(eOp)")
+    var ref = m0; ref["mask_refine"] = .number(5)
+    let eRef = worstLinear(runDetail([masked(ref)]), plain)
+    check("E-M4 refining a constant mask changes nothing", eRef < 2e-4, "\(eRef)")
+    let seams = detailSeams([masked(ref)], oracle: plain)
+    check("E-M5 a refined mask renders the same in a region as in the full frame", seams.ok, "seam \(seams.seam), full vs oracle \(seams.fullVsOracle)")
+    var bad = m0; bad["mask_kind"] = .number(99)
+    check("E-M6 an unknown mask kind is an error, never a silent skip",
+          (try? CIEngineProbe.render(stack: [masked(bad)], pixels: detailPx, width: detailW, height: detailH)) == nil)
+}
+
 print(failures == 0 ? "\nall checks passed" : "\n\(failures) failed")
 exit(failures == 0 ? 0 : 1)

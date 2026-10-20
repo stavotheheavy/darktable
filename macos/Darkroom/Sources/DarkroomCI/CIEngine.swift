@@ -2,6 +2,7 @@ import CoreGraphics
 import CoreImage
 import DarkroomCore
 import DarkroomEngineAPI
+import DarkroomMetal
 import Foundation
 import ImageIO
 import Metal
@@ -224,13 +225,22 @@ public actor CIEngine: PhotoEngine {
 
         var out = image
         for (m, entry) in ordered {
-            // only uniform blending exists here; drawn and parametric masks are not built yet
             let maskMode = entry.blend["mask_mode"]?.double ?? 0
-            guard maskMode == 0 || maskMode == 1 else {
-                throw EngineError("the clean engine has no masks yet (mask mode \(Int(maskMode)))")
-            }
             let before = out
             out = try m.apply(out, m.values(from: entry.params))
+            if maskMode == 2 {
+                // a local mask (DarkroomCore.Mask): cut from the module's input, then the output is mixed over it
+                let blend = entry.blend.compactMapValues { $0.double }
+                guard let spec = Mask.spec(from: blend) else {
+                    throw EngineError("the clean engine has no mask kind \(Int(blend["mask_kind"] ?? 0))")
+                }
+                let matte = try CIBridge.localMask(before, spec: spec)
+                out = try CIBridge.blendMasked(before: before, after: out, mask: matte, opacity: spec.opacity)
+                continue
+            }
+            guard maskMode == 0 || maskMode == 1 else {
+                throw EngineError("the clean engine has no masks of mode \(Int(maskMode)) (drawn and parametric masks are not built)")
+            }
             // opacity is a percentage: mix the module's output back over its input
             let opacity = min(max(entry.blend["opacity"]?.double ?? 100, 0), 100) / 100
             if opacity < 1 {

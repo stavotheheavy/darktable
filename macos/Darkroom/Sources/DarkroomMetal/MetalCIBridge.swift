@@ -109,8 +109,32 @@ final class BridgeKernels: @unchecked Sendable {
     func dispatch(_ name: String, source: String? = nil, input: CIImageProcessorInput, output: CIImageProcessorOutput,
                   bind: (MTLComputeCommandEncoder) throws -> Void) throws {
         let p = try source.map { try pipeline(name, source: $0) } ?? pipeline(name)
-        guard let cmd = output.metalCommandBuffer, let src = input.metalTexture, let dst = output.metalTexture,
-              let enc = cmd.makeComputeCommandEncoder() else { throw CIBridgeError.badArguments }
+        guard let cmd = output.metalCommandBuffer, var src = input.metalTexture, let dst = output.metalTexture else {
+            throw CIBridgeError.badArguments
+        }
+        // Core Image hands a LARGER input texture than the output when one image feeds several consumers that need
+        // different regions (a masked module: its input also feeds the mask's guided filter). These kernels read the
+        // input at gid, so crop it to the output's rectangle first. Everything is checked before an encoder exists:
+        // an encoder dropped without endEncoding crashes the process.
+        let off = textureOffset(input: input.region, output: output.region)
+        if off != SIMD2<Int32>(0, 0) || src.width != dst.width || src.height != dst.height {
+            guard input.region.contains(output.region), off.x >= 0, off.y >= 0,
+                  Int(off.x) + dst.width <= src.width, Int(off.y) + dst.height <= src.height else {
+                throw CIBridgeError.regionMismatch(input: input.region, output: output.region)
+            }
+            let desc = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: src.pixelFormat, width: dst.width, height: dst.height, mipmapped: false)
+            desc.usage = [.shaderRead]
+            desc.storageMode = .private
+            guard let cropped = device.makeTexture(descriptor: desc), let blit = cmd.makeBlitCommandEncoder() else {
+                throw CIBridgeError.badArguments
+            }
+            blit.copy(from: src, sourceSlice: 0, sourceLevel: 0, sourceOrigin: MTLOrigin(x: Int(off.x), y: Int(off.y), z: 0),
+                      sourceSize: MTLSize(width: dst.width, height: dst.height, depth: 1),
+                      to: cropped, destinationSlice: 0, destinationLevel: 0, destinationOrigin: MTLOrigin(x: 0, y: 0, z: 0))
+            blit.endEncoding()
+            src = cropped
+        }
+        guard let enc = cmd.makeComputeCommandEncoder() else { throw CIBridgeError.badArguments }
         enc.setComputePipelineState(p)
         enc.setTexture(src, index: 0)
         enc.setTexture(dst, index: 1)

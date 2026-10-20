@@ -170,6 +170,13 @@ final class PerPixelManyProcessor: CIImageProcessorKernel {
         if u.isEmpty { u = [0] }
         enc.setBytes(&u, length: u.count * MemoryLayout<Float>.stride, index: 0)
         enc.setBytes(&offsets, length: offsets.count * MemoryLayout<SIMD2<Int32>>.stride, index: 1)
+        // where this output sits in the whole image, top-left origin: (x0, y0, width, height). Kernels that need
+        // absolute coordinates (masks) read it at buffer(2); others ignore it.
+        var geom = SIMD4<Float>(0, 0, 0, 0)
+        if let e = arguments?["extent"] as? [Double], e.count == 4 {
+            geom = SIMD4(Float(output.region.minX - e[0]), Float(e[1] + e[3] - output.region.maxY), Float(e[2]), Float(e[3]))
+        }
+        enc.setBytes(&geom, length: MemoryLayout<SIMD4<Float>>.stride, index: 2)
         let w = p.threadExecutionWidth, h = max(1, p.maxTotalThreadsPerThreadgroup / w)
         enc.dispatchThreads(MTLSize(width: dst.width, height: dst.height, depth: 1), threadsPerThreadgroup: MTLSize(width: w, height: h, depth: 1))
         enc.endEncoding()
@@ -195,8 +202,10 @@ extension CIBridge {
     /// `uint2(int2(gid) + off[k])`: Core Image can hand a larger texture than the output when an image is shared.
     public static func combine(_ images: [CIImage], source: String, function: String, uniforms: [Float]) throws -> CIImage {
         guard let first = images.first else { throw CIBridgeError.badArguments }
-        return try PerPixelManyProcessor.apply(withExtent: first.extent, inputs: images,
-                                               arguments: ["function": function, "uniforms": uniforms, "source": source])
+        let e = first.extent
+        return try PerPixelManyProcessor.apply(withExtent: e, inputs: images,
+                                               arguments: ["function": function, "uniforms": uniforms, "source": source,
+                                                           "extent": [Double(e.minX), Double(e.minY), Double(e.width), Double(e.height)]])
     }
 
     /// DarkroomCore.Filters.boxMean on every channel.
@@ -213,7 +222,13 @@ extension CIBridge {
 
     /// DarkroomCore.Filters.guided on each colour channel, guided by the image's own luminance (Rec.709 weights).
     public static func guided(_ image: CIImage, radius r: Int, eps: Double) throws -> CIImage {
-        let i = try many("filtersLumaTex", [image])
+        try guided(image, guide: image, radius: r, eps: eps)
+    }
+
+    /// DarkroomCore.Filters.guided on each colour channel of `image`, guided by the luminance of `guide`
+    /// (same extent), for refining a mask against the photo it was cut from.
+    public static func guided(_ image: CIImage, guide: CIImage, radius r: Int, eps: Double) throws -> CIImage {
+        let i = try many("filtersLumaTex", [guide])
         let meanI = try boxMean(i, radius: r), meanP = try boxMean(image, radius: r)
         let corrI = try boxMean(try many("filtersMulTex", [i, i]), radius: r)
         let corrIP = try boxMean(try many("filtersMulTex", [i, image]), radius: r)
