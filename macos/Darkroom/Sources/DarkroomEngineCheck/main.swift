@@ -76,6 +76,28 @@ func runDetail(_ stack: [StackEntry]) -> [SIMD4<Float>] {
     }
 }
 
+// Mask helpers (S6). A mask kind is checked by rendering its GPU matte against DarkroomCore's, and by a masked module.
+/// Worst absolute difference between the GPU matte for `spec` on `detailImg` and `Mask.plane`. Non-finite or a wrong
+/// size is an infinite error.
+func maskMatteError(_ spec: MaskSpec) -> Double {
+    guard let gpu = try? CIEngineProbe.filter(.mask(spec), pixels: detailPx, width: detailW, height: detailH),
+          gpu.count == detailW * detailH else { return .infinity }
+    let want = Mask.plane(spec, rgb: detailImg, width: detailW, height: detailH)
+    var w = 0.0
+    for (g, o) in zip(gpu, want.values) { w = g.x.isFinite ? max(w, abs(Double(g.x) - o)) : .infinity }
+    return w
+}
+
+/// A +1 EV exposure entry (gain 2) carrying `blend`, the module the mask checks run through the engine.
+func maskedExposure(_ blend: [String: ParamValue]) -> StackEntry {
+    StackEntry(operation: "exposure", params: ["exposure": .number(1)], blend: blend)
+}
+
+/// What a +1 EV exposure behind `spec` must give on `detailImg`.
+func maskedExposureOracle(_ spec: MaskSpec) -> [SIMD3<Double>] {
+    Mask.apply(spec, to: detailImg, width: detailW, height: detailH) { $0.map { $0 * 2 } }
+}
+
 /// Tile seams for a detail module: three regions rendered alone must equal the same pixels of the full frame, and
 /// the full frame must be the oracle's (so two blank renders cannot match each other).
 func detailSeams(_ stack: [StackEntry], oracle: [SIMD3<Double>]) -> (seam: Double, fullVsOracle: Double, ok: Bool) {
