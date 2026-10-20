@@ -40,7 +40,7 @@ public enum ParityList {
     """.split(whereSeparator: { $0 == " " || $0 == "\n" }).map(String.init)
 
     /// Modules of ours that darktable does not have under that name.
-    public static let ownModules: [String] = ["display"]
+    public static let ownModules: [String] = ["display", "radiallight"]
 
     public static let entries: [ParityEntry] = {
         func e(_ op: String, _ s: ParityStatus, _ note: String = "") -> ParityEntry { ParityEntry(operation: op, status: s, note: note) }
@@ -98,6 +98,7 @@ public enum ParityList {
             e("colorharmonizer", .planned()), e("colorbalance", .planned("the 4-way lift/gamma/gain grading; colorbalancergb has only contrast, saturation and vibrance")),
             // ours
             e("display", .exact, "not a darktable module: the scene-referred display transform, with an HDR peak"),
+            e("radiallight", .exact, "not a darktable module: an exposure change through a soft ellipse, inside or around it"),
         ]
     }()
 

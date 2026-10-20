@@ -26,7 +26,7 @@ extension DarkroomModel {
         ("Detail", ["sharpen", "denoiseprofile", "bilat", "clahe", "atrous", "highpass", "lowpass", "blurs", "diffuse",
                     "nlmeans", "hotpixels", "rawdenoise"]),
         ("Geometry", ["flip", "ashift", "crop", "lens", "liquify", "retouch", "spots"]),
-        ("Effects", ["vignette", "bloom", "grain", "soften", "dither", "censorize", "lowlight", "graduatednd", "hazeremoval"]),
+        ("Effects", ["vignette", "bloom", "grain", "soften", "dither", "censorize", "lowlight", "graduatednd", "hazeremoval", "radiallight"]),
     ]
 
     /// The module behind an operation (the first instance).

@@ -997,5 +997,37 @@ do {
     check("E-MS1 a module with no local mask ignores the flag", flat == flatPlain)
 }
 
+// E-RL radial light through the engine: against the oracle, tile seams, the zero shortcut, and in a portrait-shot frame
+do {
+    let params: [String: ParamValue] = ["exposure": .number(1.2), "x": .number(0.4), "y": .number(0.6), "size": .number(0.25), "shape": .number(0.7),
+                                         "rotation": .number(25), "feather": .number(0.4), "outside": .number(0)]
+    let stack = [StackEntry(operation: "radiallight", params: params)]
+    let spec = RadialLight.spec(x: 0.4, y: 0.6, size: 0.25, shape: 0.7, rotation: 25, feather: 0.4, outside: false)
+    let want = RadialLight.apply(detailImg, width: detailW, height: detailH, ev: 1.2, spec: spec)
+    let got = runDetail(stack)
+    check("E-RL radial light matches the oracle within 1/255 and unclamped within 2e-4", worst(got, want) < tol && worstLinear(got, want) < 2e-4,
+          "encoded \(worst(got, want)), linear \(worstLinear(got, want))")
+    check("E-RL the oracle really changes the fixture (a no-op GPU path would fail)", worstLinear(detailPx, want) > 0.05)
+    let seams = detailSeams(stack, oracle: want)
+    check("E-RL-seam radial light renders the same in a region as in the full frame", seams.ok, "seam \(seams.seam), full vs oracle \(seams.fullVsOracle)")
+    check("E-RL-zero exposure 0 returns the input untouched", runDetail([StackEntry(operation: "radiallight", params: ["exposure": .number(0)])]) == detailPx)
+    var outside = params; outside["outside"] = .number(1)
+    let wantOut = RadialLight.apply(detailImg, width: detailW, height: detailH, ev: 1.2,
+                                    spec: RadialLight.spec(x: 0.4, y: 0.6, size: 0.25, shape: 0.7, rotation: 25, feather: 0.4, outside: true))
+    check("E-RL-outside the surround variant matches the oracle", worstLinear(runDetail([StackEntry(operation: "radiallight", params: outside)]), wantOut) < 2e-4)
+    // a portrait-shot frame: the ellipse sits where the UPRIGHT picture puts it
+    var cam = spec; cam.orientation = .rotateCW90
+    let wantCam = RadialLight.apply(detailImg, width: detailW, height: detailH, ev: 1.2, spec: cam)
+    if let r = try? CIEngineProbe.renderSized(stack: stack, pixels: detailPx, width: detailW, height: detailH, camera: .rotateCW90), r.width == detailH, r.height == detailW {
+        var e = 0.0
+        for y in 0..<detailH { for x in 0..<detailW {
+            let u = Orientation.rotateCW90.map(SIMD2(Double(x) + 0.5, Double(y) + 0.5), size: SIMD2(Double(detailW), Double(detailH)))
+            let p = r.pixels[Int(u.y) * r.width + Int(u.x)], o = wantCam[y * detailW + x]
+            for c in 0..<3 { let d = abs(Double(p[c]) - o[c]) / max(1, abs(o[c])); e = d.isFinite ? max(e, d) : .infinity }
+        } }
+        check("E-RL-camera in a portrait-shot frame the radial light matches the oracle with the camera's orientation", e < 2e-4, "\(e)")
+    } else { check("E-RL-camera renders", false) }
+}
+
 print(failures == 0 ? "\nall checks passed" : "\n\(failures) failed")
 exit(failures == 0 ? 0 : 1)

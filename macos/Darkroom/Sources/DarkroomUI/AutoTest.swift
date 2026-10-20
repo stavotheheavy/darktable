@@ -198,6 +198,19 @@ public enum AutoTest {
                 model.setMask(ex, mode: 0, kind: nil)
                 model.blendOpen = false
             }
+            // radial light from the Modules menu, set up as a spotlight on the subject
+            if let e = model.proMenu.flatMap(\.entries).first(where: { $0.modules.first?.operation == "radiallight" }), let m = e.modules.first {
+                model.addToPanel(e)
+                await model.preparePro()
+                if let s = model.schema(for: m) {
+                    for (k, v) in [("exposure", 1.3), ("x", 0.5), ("y", 0.55), ("size", 0.3), ("shape", 0.75), ("feather", 0.6)] {
+                        if let f = s.fields.first(where: { $0.name == k }) { model.setParam(m, f, to: .number(v)) }
+                    }
+                }
+                model.proOpen = [e.id]
+                await shot("p14-\(label)-radial-light")
+                model.removeFromPanel(e)
+            }
         }
         while model.historyIndex > start { model.undo() }
         win.setFrame(previousFrame, display: true)

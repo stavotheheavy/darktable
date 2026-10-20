@@ -383,6 +383,26 @@ extension CIModule {
                 try CIBridge.contrastEqualizer(image, fine: v["fine"] ?? 0, medium: v["medium"] ?? 0, coarse: v["coarse"] ?? 0)
             }),
 
+        // Radial light: an exposure change inside (or, with `outside`, around) a soft ellipse. DarkroomCore.RadialLight is the
+        // oracle; the matte is the engine's own ellipse mask on the upright picture. Exposure 0 is the identity.
+        CIModule(
+            operation: "radiallight", name: "radial light", iopOrder: 52, defaultEnabled: false,
+            fields: [
+                field("exposure", -4, 4, 0), field("x", 0, 1, 0.5), field("y", 0, 1, 0.5), field("size", 0.02, 1, 0.3),
+                field("shape", 0.2, 1, 1), field("rotation", -90, 90, 0), field("feather", 0, 1, 0.5),
+                FieldSchema(name: "outside", description: "outside", kind: .bool, min: 0, max: 1, defaultValue: .number(0), options: []),
+            ],
+            apply: { image, v in
+                let ev = v["exposure"] ?? 0
+                guard ev != 0 else { return image }
+                var spec = RadialLight.spec(x: v["x"] ?? 0.5, y: v["y"] ?? 0.5, size: v["size"] ?? 0.3, shape: v["shape"] ?? 1,
+                                            rotation: v["rotation"] ?? 0, feather: v["feather"] ?? 0.5, outside: (v["outside"] ?? 0) != 0)
+                spec.orientation = Orientation(value: Int(v["_camera"] ?? 0))
+                let g = Exposure.gain(ev: ev)
+                let after = try CIBridge.gain(image, scale: SIMD3(g, g, g))
+                return try CIBridge.blendMasked(before: image, after: after, mask: try CIBridge.localMask(image, spec: spec), opacity: 1)
+            }),
+
         // Haze removal: the dark channel prior with a guided-filter-refined transmission. Strength 0 is the identity.
         // Checked by DH1-DH7 (darkroom-core-check) and E-DH (darkroom-engine-check).
         CIModule(

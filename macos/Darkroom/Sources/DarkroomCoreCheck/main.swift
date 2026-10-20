@@ -1507,5 +1507,37 @@ do {
             && Mask.alpha(off, x: 12, y: 10, width: 48, height: 40, rgb: SIMD3(0.3, 0.3, 0.3)) == 0)
 }
 
+// RL radial light: an exposure change through a soft ellipse
+do {
+    let w = 48, h = 40
+    let flat = [SIMD3<Double>](repeating: SIMD3(0.2, 0.15, 0.1), count: w * h)
+    func at(_ img: [SIMD3<Double>], _ x: Int, _ y: Int) -> SIMD3<Double> { img[y * w + x] }
+    let hard = RadialLight.spec(x: 0.5, y: 0.5, size: 0.2, shape: 1, rotation: 0, feather: 0, outside: false)
+    check("RL1 exposure 0 is the identity", RadialLight.apply(flat, width: w, height: h, ev: 0, spec: hard) == flat)
+    let lit = RadialLight.apply(flat, width: w, height: h, ev: 1, spec: hard)
+    check("RL2 inside the ellipse the light doubles per EV, outside nothing changes",
+          at(lit, 24, 20) == SIMD3(0.4, 0.3, 0.2) && at(lit, 0, 0) == SIMD3(0.2, 0.15, 0.1) && at(lit, 47, 39) == SIMD3(0.2, 0.15, 0.1))
+    let around = RadialLight.apply(flat, width: w, height: h, ev: 1, spec: RadialLight.spec(x: 0.5, y: 0.5, size: 0.2, shape: 1, rotation: 0, feather: 0, outside: true))
+    check("RL3 outside: the centre stays and the surround takes the change", at(around, 24, 20) == SIMD3(0.2, 0.15, 0.1) && at(around, 0, 0) == SIMD3(0.4, 0.3, 0.2))
+    // the mix is linear in the matte: gain 1 + (2 - 1) * alpha, read from the oracle's own matte at a feathered pixel
+    let soft = RadialLight.spec(x: 0.5, y: 0.5, size: 0.2, shape: 1, rotation: 0, feather: 0.5, outside: false)
+    let softLit = RadialLight.apply(flat, width: w, height: h, ev: 1, spec: soft)
+    let alpha = Mask.alpha(soft, x: 33.5, y: 20.5, width: Double(w), height: Double(h), rgb: SIMD3(0.2, 0.15, 0.1))
+    let got = at(softLit, 33, 20).x, want = 0.2 * (1 + alpha)
+    check("RL4 in the feather the change is mixed by the matte (alpha \(String(format: "%.3f", alpha)) is strictly between 0 and 1)",
+          alpha > 0.05 && alpha < 0.95 && abs(got - want) < 1e-12, "\(got) vs \(want)")
+    let squashed = RadialLight.apply(flat, width: w, height: h, ev: 1, spec: RadialLight.spec(x: 0.5, y: 0.5, size: 0.2, shape: 0.5, rotation: 0, feather: 0, outside: false))
+    check("RL5 shape 0.5 halves the height: a pixel 8 up and down is inside the circle but outside the squashed ellipse",
+          at(lit, 24, 28).x == 0.4 && at(squashed, 24, 28).x == 0.2 && at(squashed, 33, 20).x == 0.4)
+    let fixture = DetailCommon.fixture(width: w, height: h)
+    var finite = true
+    for ev in [-4.0, 4.0] {
+        let out = RadialLight.apply(fixture, width: w, height: h, ev: ev, spec: soft)
+        finite = finite && out.allSatisfy { $0.x.isFinite && $0.y.isFinite && $0.z.isFinite }
+    }
+    check("RL6 finite on the textured fixture (past white, near black) at -4 and +4 EV; black stays black",
+          finite && RadialLight.apply([SIMD3(0, 0, 0)], width: 1, height: 1, ev: 3, spec: hard) == [SIMD3(0, 0, 0)])
+}
+
 print(failures == 0 ? "\nall checks passed" : "\n\(failures) failed")
 exit(failures == 0 ? 0 : 1)

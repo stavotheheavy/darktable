@@ -272,6 +272,7 @@ public actor CIEngine: PhotoEngine {
             var values = m.values(from: entry.params)
             if let hdrPeak, m.operation == "display" { values["peak"] = hdrPeak }
             values["_scale"] = scale.isFinite ? min(max(scale, 1e-3), 1) : 1
+            values["_camera"] = Double(camera.rawValue)   // modules that draw their own matte need the upright picture
             out = try m.apply(out, values)
             // a Core Image filter may grow its output (bloom spreads past the edge) or leave it infinite (a clamped blur):
             // a per-pixel module never changes the frame, geometry does that
