@@ -8,6 +8,20 @@ public enum SimpleAspect: String, CaseIterable, Identifiable, Sendable {
     case original = "Original", square = "1:1", fourFive = "4:5", threeTwo = "3:2", sixteenNine = "16:9"
     public var id: String { rawValue }
 
+    /// URL-safe, for rig ids (the rig is an HTTP server, so no colons): original, 1x1, 4x5, 3x2, 16x9.
+    public var slug: String { self == .original ? "original" : rawValue.replacingOccurrences(of: ":", with: "x") }
+
+    /// What VoiceOver says, instead of reading "1:1" literally.
+    public var spoken: String {
+        switch self {
+        case .original: "Original, no crop"
+        case .square: "Square crop"
+        case .fourFive: "4 by 5 crop"
+        case .threeTwo: "3 by 2 crop"
+        case .sixteenNine: "16 by 9 crop"
+        }
+    }
+
     var longOverShort: Double? {
         switch self {
         case .original: nil

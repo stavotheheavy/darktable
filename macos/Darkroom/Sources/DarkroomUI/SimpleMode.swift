@@ -267,11 +267,14 @@ struct SimplePanel: View {
                         Button { model.setAspect(a) } label: {
                             Text(a.rawValue)
                                 .font(.caption.weight(.medium))
+                                .lineLimit(1)
+                                .minimumScaleFactor(0.8)
                                 .frame(maxWidth: .infinity, minHeight: 30)
                                 .background(Color.white.opacity(model.simpleAspect == a ? 0.26 : 0.08), in: Capsule())
                         }
                         .buttonStyle(.plain)
-                        .rig("simple-aspect-\(a.rawValue)")
+                        .rig("simple-aspect-\(a.slug)")
+                        .accessibilityLabel(a.spoken)
                         .accessibilityAddTraits(model.simpleAspect == a ? .isSelected : [])
                     }
                 }
