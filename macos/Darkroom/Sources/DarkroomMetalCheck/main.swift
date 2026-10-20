@@ -373,5 +373,119 @@ do {
     check("CC1-CC3 colour helpers ran", false, "\(error)")
 }
 
+// CB colour balance kernel against ColorBalance, on the same 4096 colours as CB1 in DarkroomCoreCheck
+do {
+    let cbPixels: [SIMD4<Float>] = (0..<4096).map { i in
+        let t = Double(i) / 4095, h = t * 37 * 2 * .pi, v = 0.002 + 2.5 * t
+        return SIMD4(Float(v * (0.6 + 0.4 * cos(h))), Float(v * (0.6 + 0.4 * cos(h - 2.1))), Float(v * (0.6 + 0.4 * cos(h + 2.1))), 1)
+    }
+    let cbOut = try MetalPerPixel.run(source: MetalColorBalance.source, function: "colorbalanceBuf", pixels: cbPixels,
+                                      uniforms: [0.3, 0.4, 0.5])
+    var cbFinite = cbOut.count == cbPixels.count, cbWorst = 0.0
+    for (g, p) in zip(cbOut, cbPixels) {
+        guard g.x.isFinite, g.y.isFinite, g.z.isFinite else { cbFinite = false; continue }
+        let input = SIMD3<Double>(Double(p.x), Double(p.y), Double(p.z))
+        let want = ColorBalance.apply(input, contrast: 0.3, saturation: 0.4, vibrance: 0.5)
+        for k in 0..<3 { cbWorst = max(cbWorst, abs(Double(g[k]) - want[k]) / max(1, abs(want[k]))) }
+    }
+    check("CB colorbalanceBuf is finite and matches ColorBalance within relative 1e-4 unclamped",
+          cbFinite && cbWorst < 1e-4, "finite \(cbFinite), worst relative error \(cbWorst)")
+} catch {
+    check("CB colorbalanceBuf kernel ran", false, "\(error)")
+}
+
+// CB-M2 the black guard on the GPU: without `y > 0`, pow(0, -0.5) is infinite and 0 times infinity is NaN
+do {
+    let blackPixels: [SIMD4<Float>] = [SIMD4(0, 0, 0, 1), SIMD4(0.001, 0.002, 0.0005, 1), SIMD4(2, 1.5, 0.3, 1)]
+    let blackOut = try MetalPerPixel.run(source: MetalColorBalance.source, function: "colorbalanceBuf", pixels: blackPixels,
+                                         uniforms: [-0.5, 0, 0])
+    let exactBlack = blackOut[0].x == 0 && blackOut[0].y == 0 && blackOut[0].z == 0
+    let allFiniteBlack = blackOut.count == blackPixels.count
+        && blackOut.allSatisfy { $0.x.isFinite && $0.y.isFinite && $0.z.isFinite }
+    check("CB-M2 exact black stays exactly (0, 0, 0) at contrast -0.5 on Metal, every output finite",
+          exactBlack && allFiniteBlack, "black \(blackOut[0]), all finite \(allFiniteBlack)")
+} catch {
+    check("CB-M2 black guard kernel ran", false, "\(error)")
+}
+
+// CM channel mixer on Metal (mixerBuf) against ChannelMixer, unclamped, on non-symmetric rows so a transposed kernel fails
+do {
+    let cmRows: [[Double]] = [[0.9, 0.2, -0.1], [0.05, 1.1, -0.15], [-0.2, 0.3, 0.9]]
+    let cmUniforms = cmRows.flatMap { $0 }.map { Float($0) }
+    let cmPixels = (0..<4096).map { i -> SIMD4<Float> in
+        let t = Double(i) / 4095
+        return SIMD4(Float(3 * t), Float(3 * (t * 13).truncatingRemainder(dividingBy: 1)), Float(3 * abs(sin(t * 29))), 1)
+    }
+    let cmOut = try MetalPerPixel.run(source: MetalChannelMixer.source, function: "mixerBuf", pixels: cmPixels, uniforms: cmUniforms)
+    var worstMix = 0.0, cmFinite = cmOut.count == cmPixels.count
+    for (g, p) in zip(cmOut, cmPixels) {
+        guard g.x.isFinite, g.y.isFinite, g.z.isFinite else { cmFinite = false; continue }
+        let c = ChannelMixer.apply(SIMD3(Double(p.x), Double(p.y), Double(p.z)), rows: cmRows)
+        for k in 0..<3 { worstMix = max(worstMix, abs(Double(g[k]) - c[k]) / max(1, abs(c[k]))) }
+    }
+    check("CM mixer on Metal matches ChannelMixer unclamped within relative 1e-5", cmFinite && worstMix < 1e-5,
+          "worst \(worstMix), finite \(cmFinite)")
+} catch {
+    check("CM mixer kernel ran", false, "\(error)")
+}
+
+// monochrome with a colour filter: 4096 colours sweeping every hue at chroma up to 0.25, clamped to 0.002...2.5,
+// on Metal (monochromeBuf) against Monochrome.apply, unclamped; intensity 0.8, filter hue 200, strength 0.7
+do {
+    let moHueDegrees = 200.0
+    let moRamp = (0..<4096).map { i -> SIMD3<Double> in
+        let t = Double(i) / 4096
+        let lab = OkLab.lab(SIMD3(0.2 + 0.7 * t, 0.02 + 0.23 * t, 2 * .pi * Double(i % 512) / 512))
+        let rgb = OkLab.toWorking(lab)
+        return SIMD3(min(max(rgb.x, 0.002), 2.5), min(max(rgb.y, 0.002), 2.5), min(max(rgb.z, 0.002), 2.5))
+    }
+    let moFloat = moRamp.map { SIMD4<Float>(Float($0.x), Float($0.y), Float($0.z), 1) }
+    let moHue = moHueDegrees * .pi / 180
+    let moOut = try MetalPerPixel.run(source: MetalMonochrome.source, function: "monochromeBuf", pixels: moFloat,
+                                      uniforms: [0.8, 0.7, Float(cos(moHue)), Float(sin(moHue))])
+    var moFinite = moOut.count == moRamp.count
+    var moWorst = 0.0
+    for (px, g) in zip(moRamp, moOut) {
+        let cpu = Monochrome.apply(px, intensity: 0.8, filterHueDegrees: moHueDegrees, filterStrength: 0.7)
+        let gpu = SIMD3(Double(g.x), Double(g.y), Double(g.z))
+        moFinite = moFinite && gpu.x.isFinite && gpu.y.isFinite && gpu.z.isFinite
+        for k in 0..<3 {
+            moWorst = max(moWorst, abs(gpu[k] - cpu[k]) / max(1, abs(cpu[k])))
+        }
+    }
+    check("MO-M monochrome on Metal is finite and within 1e-4 of Monochrome.apply (unclamped)",
+          moFinite && moWorst < 1e-4, "finite \(moFinite), worst relative error \(moWorst)")
+} catch {
+    check("MO-M monochrome on Metal ran", false, "\(error)")
+}
+
+// split toning on Metal against SplitToning.apply (unclamped): every hue, deep shadow to past white
+do {
+    let count = 4096
+    let pixels = (0..<count).map { i -> SIMD4<Float> in
+        let t = Double(i) / Double(count - 1), h = t * 37 * 2 * .pi, v = 0.002 + 2.5 * t
+        return SIMD4(Float(v * (0.6 + 0.4 * cos(h))), Float(v * (0.6 + 0.4 * cos(h - 2.1))), Float(v * (0.6 + 0.4 * cos(h + 2.1))), 1)
+    }
+    // the uniforms as CIModules builds them: pivot, shadows (a, b), highlights (a, b)
+    let shH = 220 * Double.pi / 180, hiH = 60 * Double.pi / 180
+    let uniforms: [Float] = [0.5 + 0.25 * 0.3, Float(0.08 * 0.8 * cos(shH)), Float(0.08 * 0.8 * sin(shH)),
+                             Float(0.08 * 0.6 * cos(hiH)), Float(0.08 * 0.6 * sin(hiH))]
+    let out = try MetalPerPixel.run(source: MetalSplitToning.source, function: "splitBuf", pixels: pixels, uniforms: uniforms)
+    var worstRel = 0.0, allFinite = out.count == count
+    for (i, px) in pixels.enumerated() where i < out.count {
+        let cpu = SplitToning.apply(SIMD3(Double(px.x), Double(px.y), Double(px.z)), shadowsHueDegrees: 220, shadowsSaturation: 0.8,
+                                    highlightsHueDegrees: 60, highlightsSaturation: 0.6, balance: 0.3)
+        let gpu = SIMD3(Double(out[i].x), Double(out[i].y), Double(out[i].z))
+        for c in 0..<3 {
+            if !gpu[c].isFinite { allFinite = false }
+            worstRel = Swift.max(worstRel, Swift.abs(gpu[c] - cpu[c]) / Swift.max(1, Swift.abs(cpu[c])))
+        }
+    }
+    check("split toning on Metal is finite and within 1e-4 of SplitToning.apply (unclamped)",
+          allFinite && worstRel < 1e-4, "finite \(allFinite), worst relative error \(worstRel)")
+} catch {
+    check("split toning kernel ran", false, "\(error)")
+}
+
 print(failures == 0 ? "\nall Metal checks passed" : "\n\(failures) failed")
 exit(failures == 0 ? 0 : 1)

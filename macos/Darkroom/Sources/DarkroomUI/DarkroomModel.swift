@@ -50,10 +50,7 @@ public final class DarkroomModel {
     /// straighten and flip change it); nil means `info`'s processed size holds.
     public private(set) var outputSize: (width: Int, height: Int)?
     /// The size zoom and pan work in: the output size when known, else the processed size.
-    /// Pro's panel: modules added from the Modules menu, modules taken out, and unfolded sections (by module id).
-    /// Reset when a photo opens; see ProPanel.swift.
-    var proAdded: Set<String> = []
-    var proRemoved: Set<String> = []
+    /// Pro's unfolded sections (by module id), for this session; membership itself lives in the edits.
     public var proOpen: Set<String> = []
     /// The sensor frame at scale 1 and the camera's orientation, for Simple's geometry controls; nil when
     /// the engine cannot report them (see `simpleGeometryReady`).
@@ -193,8 +190,6 @@ public final class DarkroomModel {
             modules = try await engine.sessionModules()
             info = await engine.sessionInfo()
             outputSize = nil
-            proAdded = []
-            proRemoved = []
             proOpen = Set(modules.filter { $0.operation == "tonecurve" }.map(\.id))
             // an explicit flip to "none" shows the sensor frame, so its size is the sensor's
             let sensorStack = [StackEntry(operation: "flip", params: ["orientation": .option("ORIENTATION_NONE")])]
@@ -249,7 +244,7 @@ public final class DarkroomModel {
 
     public func isEdited(_ m: ModuleInfo) -> Bool {
         guard let e = edits[m.id] else { return false }
-        return !e.isEmpty
+        return e.changesPicture
     }
 
     public var moduleRows: [ModuleRow] {
@@ -305,6 +300,8 @@ public final class DarkroomModel {
             value = .number(d)
         }
         var e = edits[m.id] ?? ModuleEdit()
+        // editing a module that was taken out of Pro's panel brings it back, as a fresh start (switched on below)
+        if e.inPanel == false { e.inPanel = nil; e.enabled = nil }
         if value == base(m, f) { e.params[f.name] = nil } else { e.params[f.name] = value }
         // changing a control on a module that is off turns it on, like the darkroom does
         if !m.enabled, e.enabled == nil, !e.params.isEmpty, !m.hideEnableButton { e.enabled = true }
@@ -326,7 +323,20 @@ public final class DarkroomModel {
     public func toggleEnabled(_ m: ModuleInfo) { setEnabled(m, !isEnabled(m)) }
 
     public func resetModule(_ m: ModuleInfo) {
-        commit(id: m.id, edit: ModuleEdit(), label: title(m), detail: "reset", target: nil)
+        // a reset keeps the module where it is in Pro's panel
+        var e = ModuleEdit()
+        e.inPanel = edits[m.id]?.inPanel
+        commit(id: m.id, edit: e, label: title(m), detail: "reset", target: nil)
+    }
+
+    /// Pro's Modules menu: in adds the module to the panel switched on; out takes it out with its edits cleared and,
+    /// when it is on by default, switched off, so it no longer applies. Always a change, so always a history step.
+    func setInPanel(_ m: ModuleInfo, _ inside: Bool) {
+        var e = inside ? (edits[m.id] ?? ModuleEdit()) : ModuleEdit()
+        e.inPanel = inside
+        let wantOn = inside
+        if !m.hideEnableButton { e.enabled = (wantOn == m.enabled) ? nil : wantOn }
+        commit(id: m.id, edit: e, label: title(m), detail: inside ? "added to the panel" : "taken out of the panel", target: nil)
     }
 
     // MARK: blend

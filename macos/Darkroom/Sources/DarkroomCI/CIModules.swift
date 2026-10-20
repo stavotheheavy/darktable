@@ -53,11 +53,11 @@ extension CIModule {
                 try CIBridge.gain(image, scale: SIMD3(v["red"] ?? 1, v["green"] ?? 1, v["blue"] ?? 1))
             }),
 
-        // Colour balance, as an approximation: vibrance and global saturation and contrast
-        // from Core Image's own controls. Not darktable's colour balance rgb maths; the
-        // difference is a known gap, not a match.
+        // Colour balance in OkLab: contrast, global saturation and vibrance, the fields Simple's
+        // Contrast and Color sliders write. ColorBalance in DarkroomCore is the oracle, and the
+        // per-pixel kernel is checked against it (darkroom-engine-check E-CB).
         CIModule(
-            operation: "colorbalancergb", name: "color balance rgb (approximate)", iopOrder: 25,
+            operation: "colorbalancergb", name: "color balance (OkLab)", iopOrder: 25,
             defaultEnabled: false,
             fields: [
                 FieldSchema(name: "vibrance", description: "vibrance", kind: .float,
@@ -68,13 +68,9 @@ extension CIModule {
                             min: -1, max: 1, defaultValue: .number(0), options: []),
             ],
             apply: { image, v in
-                let vibrant = image.applyingFilter("CIVibrance", parameters: [
-                    kCIInputAmountKey: v["vibrance"] ?? 0,
-                ])
-                return vibrant.applyingFilter("CIColorControls", parameters: [
-                    kCIInputSaturationKey: 1 + (v["saturation_global"] ?? 0),
-                    kCIInputContrastKey: 1 + (v["contrast"] ?? 0),
-                ])
+                try CIBridge.perPixel(image, source: MetalColorBalance.source, function: "colorbalanceTex",
+                                      uniforms: [Float(v["contrast"] ?? 0), Float(v["saturation_global"] ?? 0),
+                                                 Float(v["vibrance"] ?? 0)])
             }),
 
         // Exposure in stops, applied as a gain on linear light.
@@ -128,12 +124,12 @@ extension CIModule {
                 field("green_r", -2, 2, 0), field("green_g", -2, 2, 1), field("green_b", -2, 2, 0),
                 field("blue_r", -2, 2, 0), field("blue_g", -2, 2, 0), field("blue_b", -2, 2, 1),
             ],
+            // DarkroomCore's ChannelMixer on the oracle-checked per-pixel kernel (darkroom-engine-check E-CM)
             apply: { image, v in
-                image.applyingFilter("CIColorMatrix", parameters: [
-                    "inputRVector": CIVector(x: v["red_r"] ?? 1, y: v["red_g"] ?? 0, z: v["red_b"] ?? 0, w: 0),
-                    "inputGVector": CIVector(x: v["green_r"] ?? 0, y: v["green_g"] ?? 1, z: v["green_b"] ?? 0, w: 0),
-                    "inputBVector": CIVector(x: v["blue_r"] ?? 0, y: v["blue_g"] ?? 0, z: v["blue_b"] ?? 1, w: 0),
-                ])
+                let names = ["red_r", "red_g", "red_b", "green_r", "green_g", "green_b", "blue_r", "blue_g", "blue_b"]
+                let identity: [Double] = [1, 0, 0, 0, 1, 0, 0, 0, 1]
+                let uniforms: [Float] = names.indices.map { Float(v[names[$0]] ?? identity[$0]) }
+                return try CIBridge.perPixel(image, source: MetalChannelMixer.source, function: "mixerTex", uniforms: uniforms)
             }),
 
         // Shadows and highlights: lift or hold the two ends of the tonal range.
@@ -190,16 +186,19 @@ extension CIModule {
                 image.applyingFilter("CIVibrance", parameters: [kCIInputAmountKey: v["strength"] ?? 0])
             }),
 
-        // Monochrome, approximate: a single tint colour over the luminance.
+        // Monochrome: black and white with a colour filter. Intensity 0 leaves the image unchanged; greys stay grey.
         CIModule(
-            operation: "monochrome", name: "monochrome (approximate)", iopOrder: 45,
+            operation: "monochrome", name: "monochrome", iopOrder: 45,
             defaultEnabled: false,
-            fields: [field("intensity", 0, 1, 0)],
+            fields: [field("intensity", 0, 1, 0), field("filter_hue", 0, 360, 30), field("filter_strength", 0, 1, 0)],
+            // DarkroomCore's Monochrome on the oracle-checked per-pixel kernel (darkroom-engine-check E-MO)
             apply: { image, v in
-                image.applyingFilter("CIColorMonochrome", parameters: [
-                    kCIInputColorKey: CIColor(red: 0.5, green: 0.5, blue: 0.5),
-                    kCIInputIntensityKey: v["intensity"] ?? 0,
-                ])
+                let intensity = v["intensity"] ?? 0
+                guard intensity > 0 else { return image }
+                let hue = (v["filter_hue"] ?? 30) * .pi / 180
+                return try CIBridge.perPixel(image, source: MetalMonochrome.source, function: "monochromeTex",
+                                             uniforms: [Float(intensity), Float(v["filter_strength"] ?? 0),
+                                                        Float(cos(hue)), Float(sin(hue))])
             }),
 
         // Vignetting: darkens the corners. Zero strength is off.
@@ -340,21 +339,24 @@ extension CIModule {
                 return mixed.composited(over: image)
             }),
 
-        // Split toning, approximate: a warm tint for highlights and a cool one for shadows.
-        // Uses one tint over the image at the chosen strength; the two-tone split is not built.
+        // Split toning: a shadows tint and a highlights tint in OkLab, each with its own hue and saturation,
+        // split at a balance pivot. Checked by ST1-ST7 (darkroom-core-check), splitBuf (darkroom-metal-check)
+        // and E-ST (darkroom-engine-check).
         CIModule(
-            operation: "splittoning", name: "split-toning (approximate)", iopOrder: 63,
+            operation: "splittoning", name: "split-toning", iopOrder: 63,
             defaultEnabled: false,
-            fields: [field("strength", 0, 1, 0), field("hue", 0, 1, 0.1)],
+            fields: [
+                field("shadows_hue", 0, 360, 220), field("shadows_saturation", 0, 1, 0),
+                field("highlights_hue", 0, 360, 60), field("highlights_saturation", 0, 1, 0),
+                field("balance", -1, 1, 0),
+            ],
+            // DarkroomCore's SplitToning on the oracle-checked per-pixel kernel (darkroom-engine-check E-ST)
             apply: { image, v in
-                let hue = v["hue"] ?? 0.1
-                let tint = CIColor(red: CGFloat(0.5 + 0.5 * cos(2 * .pi * hue)),
-                                   green: CGFloat(0.5 + 0.5 * cos(2 * .pi * (hue - 1.0 / 3))),
-                                   blue: CGFloat(0.5 + 0.5 * cos(2 * .pi * (hue - 2.0 / 3))))
-                return image.applyingFilter("CIColorMonochrome", parameters: [
-                    kCIInputColorKey: tint,
-                    kCIInputIntensityKey: v["strength"] ?? 0,
-                ])
+                let pivot = 0.5 + 0.25 * (v["balance"] ?? 0)
+                let sh = (v["shadows_hue"] ?? 220) * .pi / 180, hh = (v["highlights_hue"] ?? 60) * .pi / 180
+                let ss = 0.08 * (v["shadows_saturation"] ?? 0), hs = 0.08 * (v["highlights_saturation"] ?? 0)
+                let uniforms: [Float] = [pivot, ss * cos(sh), ss * sin(sh), hs * cos(hh), hs * sin(hh)].map { Float($0) }
+                return try CIBridge.perPixel(image, source: MetalSplitToning.source, function: "splitTex", uniforms: uniforms)
             }),
 
         // Local contrast, approximate: unsharp masking at a radius, which lifts local detail.

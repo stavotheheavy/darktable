@@ -273,5 +273,46 @@ do {
     }
 }
 
+// E-CB colour balance in OkLab (Simple's Contrast and Color sliders) through the per-pixel kernel
+let eCB = run([StackEntry(operation: "colorbalancergb", params: ["contrast": .number(0.3), "saturation_global": .number(0.4),
+                                                                  "vibrance": .number(0.5)])])
+let eCBWant = scene.map { ColorBalance.apply($0, contrast: 0.3, saturation: 0.4, vibrance: 0.5) }
+let eCBEncoded = worst(eCB, eCBWant), eCBLinear = worstLinear(eCB, eCBWant)
+check("E-CB colour balance matches the oracle within 1/255 and unclamped within 1e-4",
+      eCBEncoded < tol && eCBLinear < 1e-4, "encoded \(eCBEncoded), linear \(eCBLinear)")
+
+// E-CM channel mixer: a non-symmetric 3x3 through the engine (CIBridge.perPixel, mixerTex) against ChannelMixer, unclamped
+let cmRows: [[Double]] = [[0.9, 0.2, -0.1], [0.05, 1.1, -0.15], [-0.2, 0.3, 0.9]]
+let cmStack = [StackEntry(operation: "channelmixer", params: [
+    "red_r": .number(0.9), "red_g": .number(0.2), "red_b": .number(-0.1),
+    "green_r": .number(0.05), "green_g": .number(1.1), "green_b": .number(-0.15),
+    "blue_r": .number(-0.2), "blue_g": .number(0.3), "blue_b": .number(0.9),
+])]
+let cmOracle = scene.map { ChannelMixer.apply($0, rows: cmRows) }
+let cmOut = run(cmStack)
+let eCM = worst(cmOut, cmOracle), eCMLinear = worstLinear(cmOut, cmOracle)
+check("E-CM channel mixer matches the oracle within 1/255 and unclamped (relative 1e-5)", eCM < tol && eCMLinear < 1e-5,
+      "encoded \(eCM), linear \(eCMLinear)")
+
+// E-MO monochrome with a colour filter: the per-pixel kernel through the engine (monochromeTex) against Monochrome in DarkroomCore
+let monoStack = [StackEntry(operation: "monochrome", params: ["intensity": .number(0.8), "filter_hue": .number(200), "filter_strength": .number(0.7)])]
+let monoOracle = scene.map { Monochrome.apply($0, intensity: 0.8, filterHueDegrees: 200, filterStrength: 0.7) }
+let eMO = worst(run(monoStack), monoOracle)
+check("E-MO monochrome matches the oracle within 1/255", eMO < tol, "\(eMO)")
+let eMOLinear = worstLinear(run(monoStack), monoOracle)
+check("E-MO monochrome matches the oracle unclamped (relative 1e-4)", eMOLinear < 1e-4, "\(eMOLinear)")
+
+// E-ST split toning: the same settings through the engine (CIBridge.perPixel, splitTex) against SplitToning in DarkroomCore
+let eSTEngine = run([StackEntry(operation: "splittoning", params: [
+    "shadows_hue": .number(220), "shadows_saturation": .number(0.8),
+    "highlights_hue": .number(60), "highlights_saturation": .number(0.6), "balance": .number(0.3),
+])])
+let eSTOracle = scene.map { SplitToning.apply($0, shadowsHueDegrees: 220, shadowsSaturation: 0.8,
+                                              highlightsHueDegrees: 60, highlightsSaturation: 0.6, balance: 0.3) }
+let eST = worst(eSTEngine, eSTOracle)
+let eSTLinear = worstLinear(eSTEngine, eSTOracle)
+check("E-ST split toning matches the oracle within 1/255 and unclamped within 1e-4", eST < tol && eSTLinear < 1e-4,
+      "encoded \(eST), linear \(eSTLinear)")
+
 print(failures == 0 ? "\nall checks passed" : "\n\(failures) failed")
 exit(failures == 0 ? 0 : 1)
