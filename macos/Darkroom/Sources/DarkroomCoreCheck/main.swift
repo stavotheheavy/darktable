@@ -1192,5 +1192,48 @@ do {
           part[0] == after[0] && part[1] == img[1])
 }
 
+// LU: luminance range mask
+do {
+    func grey(_ s: Double) -> SIMD3<Double> { SIMD3(repeating: s * s) }
+    func a(_ low: Double, _ high: Double, _ f: Double, _ rgb: SIMD3<Double>) -> Double {
+        MaskLuminance.alpha(p: MaskLuminance.params(["mask_low": low, "mask_high": high, "mask_feather": f]), rgb: rgb)
+    }
+    check("LU1 hard window: 0.29 out, 0.31 in, 0.69 in, 0.71 out",
+          a(0.3, 0.7, 0, grey(0.29)) == 0 && a(0.3, 0.7, 0, grey(0.31)) == 1 && a(0.3, 0.7, 0, grey(0.69)) == 1 && a(0.3, 0.7, 0, grey(0.71)) == 0)
+    let l275 = a(0.2, 0.8, 0.5, grey(0.275)), l5 = a(0.2, 0.8, 0.5, grey(0.5)), l725 = a(0.2, 0.8, 0.5, grey(0.725))
+    let l2 = a(0.2, 0.8, 0.5, grey(0.2)), l8 = a(0.2, 0.8, 0.5, grey(0.8))
+    check("LU2 feather ramps sit inside the window (0.275 and 0.725 are half, 0.5 is 1, the ends 0)",
+          abs(l275 - 0.5) < 1e-9 && abs(l5 - 1) < 1e-12 && abs(l725 - 0.5) < 1e-9 && abs(l2) < 1e-9 && abs(l8) < 1e-9,
+          "\(l275) \(l5) \(l725) \(l2) \(l8)")
+    let col = SIMD3<Double>(0.5, 0.2, 0.1), gy = grey(sqrt(0.2126 * 0.5 + 0.7152 * 0.2 + 0.0722 * 0.1))
+    let d1 = abs(a(0.45, 0.55, 0, col) - a(0.45, 0.55, 0, gy)), d2 = abs(a(0.2, 0.8, 0.5, col) - a(0.2, 0.8, 0.5, gy))
+    check("LU3 it is Rec.709 luminance, not a channel", max(d1, d2) < 1e-12 && a(0.45, 0.55, 0, col) == 1, "\(d1) \(d2)")
+    check("LU4 the window is on sqrt(Y): Y 0.25 in, Y 0.1 out, Y 0.5 out",
+          a(0.4, 0.6, 0, SIMD3(repeating: 0.25)) == 1 && a(0.4, 0.6, 0, SIMD3(repeating: 0.1)) == 0 && a(0.4, 0.6, 0, SIMD3(repeating: 0.5)) == 0)
+    let pd = MaskLuminance.params([:]), ps = MaskLuminance.params(["mask_low": 0.8, "mask_high": 0.2])
+    check("LU5 keys: defaults, swap, feather clamp, low clamp",
+          pd == [0.2, 0.8, 0.25] && ps[0] == 0.2 && ps[1] == 0.8 && MaskLuminance.params(["mask_feather": 5])[2] == 1
+          && MaskLuminance.params(["mask_low": -1])[0] == 0, "\(pd) \(ps)")
+    let blk = SIMD3<Double>(0, 0, 0), neg = SIMD3<Double>(-1, -1, -1), wht = SIMD3<Double>(9, 9, 9)
+    let nv = a(0, 0.5, 0, neg)
+    check("LU6 extremes: black, negative treated as black, past white",
+          a(0, 0.5, 0, blk) == 1 && a(0.2, 0.8, 0, blk) == 0 && nv.isFinite && nv == a(0, 0.5, 0, blk)
+          && a(0.2, 0.8, 0, wht) == 0 && a(0.2, 4, 0, wht) == 1)
+    var up = true, down = true, prevU = -1.0, prevD = 2.0
+    for k in 0...15 {
+        let u = a(0.2, 0.8, 0.5, grey(0.2 + 0.01 * Double(k)))
+        if u < prevU { up = false }
+        prevU = u
+        let dn = a(0.2, 0.8, 0.5, grey(0.65 + 0.01 * Double(k)))
+        if dn > prevD { down = false }
+        prevD = dn
+    }
+    check("LU7 the rising ramp never decreases, the falling ramp never increases", up && down && prevU > 0.99 && prevD < 1e-9)
+    let fx = DetailCommon.fixture(width: 48, height: 40), pdef = MaskLuminance.params([:])
+    let av = fx.map { MaskLuminance.alpha(p: pdef, rgb: $0) }
+    check("LU8 finite and within 0...1 on the detail fixture", av.allSatisfy { $0.isFinite && $0 >= 0 && $0 <= 1 })
+}
+
+
 print(failures == 0 ? "\nall checks passed" : "\n\(failures) failed")
 exit(failures == 0 ? 0 : 1)

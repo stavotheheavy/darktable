@@ -558,5 +558,32 @@ do {
           (try? CIEngineProbe.render(stack: [masked(bad)], pixels: detailPx, width: detailW, height: detailH)) == nil)
 }
 
+// E-LU: luminance range mask (kind 3) through the engine
+do {
+    let b1: [String: ParamValue] = ["mask_low": .number(0.25), "mask_high": .number(0.75), "mask_feather": .number(0.5),
+                                    "mask_mode": .number(2), "mask_kind": .number(3)]
+    let b2: [String: ParamValue] = ["mask_low": .number(0.0), "mask_high": .number(0.5), "mask_feather": .number(0.8),
+                                    "mask_mode": .number(2), "mask_kind": .number(3)]
+    func specOf(_ b: [String: ParamValue]) -> MaskSpec { Mask.spec(from: b.compactMapValues { $0.double })! }
+    let s1 = specOf(b1), s2 = specOf(b2)
+    let m1 = maskMatteError(s1), m2 = maskMatteError(s2)
+    check("E-LU-matte the luminance matte on the GPU equals the oracle for two specs (\(m1), \(m2))", m1 < 1e-4 && m2 < 1e-4, "\(m1) \(m2)")
+    let gpu = (try? CIEngineProbe.filter(.mask(s1), pixels: detailPx, width: detailW, height: detailH)) ?? []
+    check("E-LU-varies the matte has values under 0.1 and over 0.9",
+          gpu.count == detailW * detailH && gpu.contains { $0.x < 0.1 } && gpu.contains { $0.x > 0.9 })
+    let got = runDetail([maskedExposure(b1)]), want = maskedExposureOracle(s1)
+    let w1 = worst(got, want), w2 = worstLinear(got, want)
+    check("E-LU-stack a luminance-masked +1 EV exposure matches the oracle (\(w1), \(w2))", w1 < tol && w2 < 2e-4, "\(w1) \(w2)")
+    let sm = detailSeams([maskedExposure(b1)], oracle: want)
+    check("E-LU-seam luminance mask regions match the full frame and the oracle (seam \(sm.seam), full vs oracle \(sm.fullVsOracle))",
+          sm.ok, "seam \(sm.seam), full vs oracle \(sm.fullVsOracle)")
+    var bi = b1; bi["mask_invert"] = .number(1)
+    var si = s1; si.invert = true
+    let gi = runDetail([maskedExposure(bi)]), wi = maskedExposureOracle(si)
+    let i1 = worst(gi, wi), i2 = worstLinear(gi, wi)
+    check("E-LU-invert the inverted luminance mask matches the inverted oracle (\(i1), \(i2))", i1 < tol && i2 < 2e-4, "\(i1) \(i2)")
+}
+
+
 print(failures == 0 ? "\nall checks passed" : "\n\(failures) failed")
 exit(failures == 0 ? 0 : 1)
