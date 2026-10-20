@@ -860,5 +860,47 @@ do {
     check("T11 the suite covers every catalogue module (\(cases) cases)", cases >= 30, "\(cases)")
 }
 
+// PL parity list: every darktable module is classified once, and the list agrees with the catalogue
+do {
+    let dt = ParityList.darktableModules
+    let entries = ParityList.entries
+    let ops = entries.map(\.operation)
+    check("PL1 the list names \(dt.count) darktable modules, none twice", Set(dt).count == dt.count && dt.count == 90, "\(dt.count)")
+    check("PL1 every darktable module is classified exactly once",
+          dt.allSatisfy { d in entries.filter { $0.operation == d }.count == 1 }, "\(dt.filter { d in entries.filter { $0.operation == d }.count != 1 })")
+    check("PL1 and nothing else is in the list but our own modules",
+          Set(ops).subtracting(dt).isSubset(of: Set(ParityList.ownModules)) && ops.count == Set(ops).count,
+          "\(Set(ops).subtracting(dt))")
+    let catalogue = CIEngineProbe.catalogue()
+    let inCatalogue = Set(catalogue.map(\.operation))
+    func isBuilt(_ s: ParityStatus) -> Bool { switch s { case .exact, .unverified, .approximate: true; default: false } }
+    check("PL2 every catalogue module is in the list", inCatalogue.allSatisfy { ParityList.entry($0) != nil },
+          "\(inCatalogue.filter { ParityList.entry($0) == nil })")
+    check("PL2 a module marked exact, unverified or approximate is in the catalogue, and no other is",
+          entries.filter { isBuilt($0.status) }.allSatisfy { inCatalogue.contains($0.operation) }
+            && entries.filter { !isBuilt($0.status) }.allSatisfy { !inCatalogue.contains($0.operation) },
+          "\(entries.filter { isBuilt($0.status) != inCatalogue.contains($0.operation) }.map(\.operation))")
+    let mislabelled = catalogue.filter { m in
+        guard let s = ParityList.entry(m.operation)?.status else { return false }
+        return (s == .approximate) != m.name.contains("approximate")
+    }.map(\.operation)
+    check("PL3 'approximate' in the list is exactly 'approximate' in the module's name", mislabelled.isEmpty, "\(mislabelled)")
+    let exactOps = Set(entries.filter { $0.status == .exact }.map(\.operation))
+    let badCover = entries.filter { if case .covered(let by) = $0.status { return by != "masks" && !exactOps.contains(by) } else { return false } }.map(\.operation)
+    check("PL4 a module 'covered by' another is covered by an exact module (or by masks)", badCover.isEmpty, "\(badCover)")
+    let goldenOps = Set(CIEngineProbe.goldenCases().map(\.operation))
+    check("PL5 every exact, unverified or approximate module that is not geometry has a golden case",
+          entries.filter { isBuilt($0.status) }.allSatisfy { goldenOps.contains($0.operation) || ["flip", "ashift", "crop"].contains($0.operation) })
+    let counts = Dictionary(grouping: entries) { e -> String in
+        switch e.status { case .exact: "exact"; case .unverified: "unverified"; case .approximate: "approximate"
+        case .covered: "covered"; case .planned: "planned"; case .dropped: "dropped" }
+    }.mapValues(\.count)
+    print("     parity: \(counts.sorted { $0.key < $1.key }.map { "\($0.key) \($0.value)" }.joined(separator: ", "))")
+    if let i = CommandLine.arguments.firstIndex(of: "--parity-doc"), i + 1 < CommandLine.arguments.count {
+        try? ParityList.markdown(catalogue: catalogue.map(\.operation)).write(toFile: CommandLine.arguments[i + 1], atomically: true, encoding: .utf8)
+        print("wrote the parity list to \(CommandLine.arguments[i + 1])")
+    }
+}
+
 print(failures == 0 ? "\nall checks passed" : "\n\(failures) failed")
 exit(failures == 0 ? 0 : 1)

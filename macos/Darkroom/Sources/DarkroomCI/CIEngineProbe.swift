@@ -130,6 +130,11 @@ public enum CIEngineProbe {
         return out
     }
 
+    /// Every catalogue module's operation and display name, for the parity list's checks.
+    public static func catalogue() -> [(operation: String, name: String)] {
+        CIModule.all.map { ($0.operation, $0.name) }
+    }
+
     /// One stack per catalogue module for the golden-image suite (T11): the module on, every float field moved halfway
     /// from its default to the end of its range that is further away. Derived from the schema, so a module that is added
     /// has a golden case without anyone writing one. Geometry modules change the picture's size and have their own checks.
