@@ -124,12 +124,12 @@ extension CIModule {
                 field("green_r", -2, 2, 0), field("green_g", -2, 2, 1), field("green_b", -2, 2, 0),
                 field("blue_r", -2, 2, 0), field("blue_g", -2, 2, 0), field("blue_b", -2, 2, 1),
             ],
+            // DarkroomCore's ChannelMixer on the oracle-checked per-pixel kernel (darkroom-engine-check E-CM)
             apply: { image, v in
-                image.applyingFilter("CIColorMatrix", parameters: [
-                    "inputRVector": CIVector(x: v["red_r"] ?? 1, y: v["red_g"] ?? 0, z: v["red_b"] ?? 0, w: 0),
-                    "inputGVector": CIVector(x: v["green_r"] ?? 0, y: v["green_g"] ?? 1, z: v["green_b"] ?? 0, w: 0),
-                    "inputBVector": CIVector(x: v["blue_r"] ?? 0, y: v["blue_g"] ?? 0, z: v["blue_b"] ?? 1, w: 0),
-                ])
+                let names = ["red_r", "red_g", "red_b", "green_r", "green_g", "green_b", "blue_r", "blue_g", "blue_b"]
+                let identity: [Double] = [1, 0, 0, 0, 1, 0, 0, 0, 1]
+                let uniforms: [Float] = names.indices.map { Float(v[names[$0]] ?? identity[$0]) }
+                return try CIBridge.perPixel(image, source: MetalChannelMixer.source, function: "mixerTex", uniforms: uniforms)
             }),
 
         // Shadows and highlights: lift or hold the two ends of the tonal range.

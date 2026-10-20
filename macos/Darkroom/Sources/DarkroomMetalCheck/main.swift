@@ -408,5 +408,26 @@ do {
     check("CB-M2 black guard kernel ran", false, "\(error)")
 }
 
+// CM channel mixer on Metal (mixerBuf) against ChannelMixer, unclamped, on non-symmetric rows so a transposed kernel fails
+do {
+    let cmRows: [[Double]] = [[0.9, 0.2, -0.1], [0.05, 1.1, -0.15], [-0.2, 0.3, 0.9]]
+    let cmUniforms = cmRows.flatMap { $0 }.map { Float($0) }
+    let cmPixels = (0..<4096).map { i -> SIMD4<Float> in
+        let t = Double(i) / 4095
+        return SIMD4(Float(3 * t), Float(3 * (t * 13).truncatingRemainder(dividingBy: 1)), Float(3 * abs(sin(t * 29))), 1)
+    }
+    let cmOut = try MetalPerPixel.run(source: MetalChannelMixer.source, function: "mixerBuf", pixels: cmPixels, uniforms: cmUniforms)
+    var worstMix = 0.0, cmFinite = cmOut.count == cmPixels.count
+    for (g, p) in zip(cmOut, cmPixels) {
+        guard g.x.isFinite, g.y.isFinite, g.z.isFinite else { cmFinite = false; continue }
+        let c = ChannelMixer.apply(SIMD3(Double(p.x), Double(p.y), Double(p.z)), rows: cmRows)
+        for k in 0..<3 { worstMix = max(worstMix, abs(Double(g[k]) - c[k]) / max(1, abs(c[k]))) }
+    }
+    check("CM mixer on Metal matches ChannelMixer unclamped within relative 1e-5", cmFinite && worstMix < 1e-5,
+          "worst \(worstMix), finite \(cmFinite)")
+} catch {
+    check("CM mixer kernel ran", false, "\(error)")
+}
+
 print(failures == 0 ? "\nall Metal checks passed" : "\n\(failures) failed")
 exit(failures == 0 ? 0 : 1)
