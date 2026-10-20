@@ -53,9 +53,26 @@ public struct DarkroomView: View {
                 Button("") { model.uiHidden.toggle() }.keyboardShortcut("h", modifiers: [.command, .shift])
                 Button("") { if model.history.count > 1 { model.showingOriginal.toggle() } }
                     .keyboardShortcut("\\", modifiers: [.command])
+                Button("") { model.proMenuOpen = nil }.keyboardShortcut(.cancelAction)
             }
             .opacity(0).frame(width: 0, height: 0).allowsHitTesting(false)
         }
+        .overlayPreferenceValue(ProMenuAnchorKey.self) { anchors in
+            // the open Pro dropdown, right under its header button; a click anywhere else, or Escape, closes it
+            GeometryReader { geo in
+                if let kind = model.proMenuOpen, model.mode == .pro, !model.uiHidden, let anchor = anchors[kind] {
+                    let r = geo[anchor], w = ProDropdown.width(kind)
+                    ZStack(alignment: .topLeading) {
+                        Color.clear.contentShape(Rectangle()).onTapGesture { model.proMenuOpen = nil }
+                        ProDropdown(model: model, kind: kind)
+                            .offset(x: min(max(r.minX, Self.margin), geo.size.width - w - Self.margin), y: r.maxY + 8)
+                            .transition(.opacity)
+                    }
+                }
+            }
+            .animation(.easeOut(duration: 0.12), value: model.proMenuOpen)
+        }
+        .onChange(of: model.mode) { _, _ in model.proMenuOpen = nil }
         .background(model.backdrop.color)
         .preferredColorScheme(.dark)
         .fileImporter(isPresented: $choosing, allowedContentTypes: [.rawImage, .image]) { result in

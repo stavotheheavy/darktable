@@ -319,37 +319,23 @@ struct ProMenus: View {
 
     var body: some View {
         HStack(spacing: 2) {
-            Menu {
-                ForEach(model.proMenu, id: \.group) { g in
-                    Section(g.group) {
-                        ForEach(g.entries) { e in
-                            Toggle(e.name, isOn: Binding(get: { model.inProPanel(e) }, set: { _ in model.toggleInPanel(e) }))
-                        }
-                    }
-                }
-            } label: { menuLabel("Modules", "slider.horizontal.3") }
-            .menuStyle(.button).buttonStyle(.plain).menuIndicator(.hidden)
-            .rig("pro-modules")
-
-            Menu {
-                ForEach(SimpleLook.all) { look in Button(look.name) { model.apply(look) } }
-            } label: { menuLabel("Presets", "square.stack") }
-            .menuStyle(.button).buttonStyle(.plain).menuIndicator(.hidden)
-            .rig("pro-presets")
-
-            Menu {
-                ForEach(Array(model.history.enumerated()).reversed(), id: \.offset) { i, item in
-                    Button { model.jump(to: i) } label: {
-                        if i == model.historyIndex { Label(item.label, systemImage: "checkmark") } else { Text(item.label) }
-                    }
-                }
-            } label: { menuLabel("History", "clock.arrow.circlepath") }
-            .menuStyle(.button).buttonStyle(.plain).menuIndicator(.hidden)
-            .rig("pro-history")
+            menuButton(.modules, "Modules", "slider.horizontal.3").rig("pro-modules")
+            menuButton(.presets, "Presets", "square.stack").rig("pro-presets")
+            menuButton(.history, "History", "clock.arrow.circlepath").rig("pro-history")
         }
         .padding(.horizontal, 8)
         .padding(.vertical, 6)
         .glassEffect(.regular, in: .capsule)
+    }
+
+    /// A header button that opens its dropdown (drawn by DarkroomView, under this button's frame).
+    private func menuButton(_ kind: ProMenuKind, _ title: String, _ symbol: String) -> some View {
+        let open = model.proMenuOpen == kind
+        return Button { model.proMenuOpen = open ? nil : kind } label: { menuLabel(title, symbol) }
+            .buttonStyle(.plain)
+            .background(open ? Color.white.opacity(0.14) : .clear, in: Capsule())
+            .anchorPreference(key: ProMenuAnchorKey.self, value: .bounds) { [kind: $0] }
+            .accessibilityAddTraits(open ? .isSelected : [])
     }
 
     private func menuLabel(_ title: String, _ symbol: String) -> some View {

@@ -169,6 +169,17 @@ public enum AutoTest {
             await shot("p3-\(label)-added")
             if let curve = model.proPanelEntries.first(where: { $0.modules[0].operation == "tonecurve" }) { model.toggleProEffect(curve) }
             await shot("p4-\(label)-curve-off")
+            model.proMenuOpen = .modules
+            await shot("p5-\(label)-modules-menu")
+            model.proMenuQuery = "curve"
+            await shot("p6-\(label)-modules-search")
+            model.proMenuQuery = "zzz"
+            await shot("p7-\(label)-modules-search-empty")
+            model.proMenuOpen = .presets
+            await shot("p8-\(label)-presets-menu")
+            model.proMenuOpen = .history
+            await shot("p9-\(label)-history-menu")
+            model.proMenuOpen = nil
         }
         while model.historyIndex > start { model.undo() }
         win.setFrame(previousFrame, display: true)

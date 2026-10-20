@@ -1417,6 +1417,20 @@ struct SelfTest {
             let clampLow = CurveGeometry.height(atY: top + plotH + 40, plotTop: top, plotHeight: plotH)
             check(abs(hTop - 1) < 1e-12 && abs(hBottom) < 1e-12 && abs(yOne - top) < 1e-9 && n12 == 0 && n13 == 1 && clampLow == 0,
                   "PP14 curve geometry: top is 1, bottom 0, height 1 draws at the top, 12% picks node 0 and 13% node 1, below the plot clamps (\(hTop), \(hBottom), \(yOne), \(n12), \(n13), \(clampLow))")
+            // PP15 the header dropdowns: one open at a time, the search starts empty each time one opens, and the Modules
+            // list narrows with the search (every module it keeps matches; none matching leaves nothing)
+            model.proMenuOpen = .modules
+            model.proMenuQuery = "curve"
+            let curveHits = model.proMenu.flatMap(\.entries).filter { e in
+                e.name.lowercased().contains("curve") || e.modules.contains { $0.operation.lowercased().contains("curve") }
+            }
+            model.proMenuOpen = .presets
+            let queryCleared = model.proMenuQuery.isEmpty
+            model.proMenuOpen = .modules
+            let noneMatch = model.proMenu.flatMap(\.entries).filter { $0.name.lowercased().contains("zzzz") }.isEmpty
+            model.proMenuOpen = nil
+            check(curveHits.count >= 2 && queryCleared && noneMatch && model.proMenuOpen == nil,
+                  "PP15 the Pro dropdowns: a search for curve finds \(curveHits.count) modules, opening another menu clears it, a nonsense search finds none")
             model.mode = .simple
         } else {
             skip("pro panel", "the basics and their fields are the clean engine's")

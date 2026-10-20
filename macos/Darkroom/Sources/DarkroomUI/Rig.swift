@@ -321,8 +321,8 @@ public final class Rig {
             }
             result = ["ok": true, "selected": library.selected ?? ""]
         } else if let pro = o["pro"] as? String {
-            // model-level Pro actions (native menus cannot be clicked by the rig):
-            // add|remove|power|fold <op>, preset <look id>, history <index>, curve <node 0-4> <0..1>
+            // model-level Pro actions (synthetic clicks miss the header here):
+            // add|remove|power|fold <op>, preset <look id>, history <index>, curve <node 0-4> <0..1>, menu modules|presets|history|close|query <text>
             let parts = pro.split(separator: " ").map(String.init)
             let entry = parts.count > 1 ? model.proMenu.flatMap(\.entries).first { $0.modules.contains { $0.operation == parts[1] } } : nil
             switch parts.first ?? "" {
@@ -332,6 +332,17 @@ public final class Rig {
             case "fold": guard let e = entry else { return ["ok": false, "error": "no module"] }; model.toggleProFold(e)
             case "preset": guard parts.count > 1, let look = SimpleLook.all.first(where: { $0.id == parts[1] }) else { return ["ok": false, "error": "no look"] }; model.apply(look)
             case "history": guard parts.count > 1, let i = Int(parts[1]), model.history.indices.contains(i) else { return ["ok": false, "error": "no step"] }; model.jump(to: i)
+            case "menu":
+                // the header dropdowns: menu modules|presets|history|close, and menu query <text> for the Modules search
+                switch parts.dropFirst().first ?? "" {
+                case "modules": model.proMenuOpen = .modules
+                case "presets": model.proMenuOpen = .presets
+                case "history": model.proMenuOpen = .history
+                case "close": model.proMenuOpen = nil
+                case "query": model.proMenuQuery = parts.dropFirst(2).joined(separator: " ")
+                default: return ["ok": false, "error": "menu modules|presets|history|close|query <text>"]
+                }
+                return ["ok": true, "menu": model.proMenuOpen.map { "\($0)" } ?? "closed", "query": model.proMenuQuery]
             case "curve": guard parts.count > 2, let i = Int(parts[1]), let y = Double(parts[2]) else { return ["ok": false, "error": "curve <node> <0..1>"] }; model.setCurveNode(i, y)
             default: return ["ok": false, "error": "unknown pro action"]
             }

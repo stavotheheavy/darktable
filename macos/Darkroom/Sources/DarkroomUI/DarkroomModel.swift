@@ -7,6 +7,9 @@ import ImageIO
 import Observation
 import UniformTypeIdentifiers
 
+/// Pro's three header menus.
+public enum ProMenuKind: Hashable, Sendable { case modules, presets, history }
+
 public enum LeftTab: String, CaseIterable, Sendable { case modules = "Modules", history = "History" }
 public enum ScopeMode: String, CaseIterable, Sendable { case histogram = "Histogram", waveform = "Waveform", vectorscope = "Vector" }
 public enum ZoomMode: String, CaseIterable, Sendable { case fit = "Fit", actual = "100%", double = "200%" }
@@ -68,6 +71,10 @@ public final class DarkroomModel {
     public var activeOnly = false
     public var showDeprecated = false
     public var blendOpen = false
+    /// Which of Pro's header menus is open (the popover under its button), or nil.
+    public var proMenuOpen: ProMenuKind? { didSet { if proMenuOpen != oldValue { proMenuQuery = "" } } }
+    /// What the Modules dropdown's search field holds.
+    public var proMenuQuery = ""
 
     // edits and history
     public private(set) var edits: EditMap = [:]
