@@ -496,8 +496,8 @@ extension CIModule {
                     min: min, max: max, defaultValue: .number(value), options: [])
     }
 
-    /// The scene-referred display transform: DarkroomCore's ToneMap and display matrix on the oracle-checked
-    /// kernel. Enabling it switches the decode to scene-linear (see `CIModule.sceneReferred`).
+    /// The scene-referred display transform: DarkroomCore's SceneTone (luminance norm, Hermite shoulder, gamut step) on the
+    /// oracle-checked kernel. Version 2; version 1 was the per-channel extended Reinhard ToneMap, which clipped at +2.7 EV. Enabling it switches the decode to scene-linear (see `CIModule.sceneReferred`).
     static let display: CIModule = {
         var m = CIModule(
             operation: "display", name: "display transform (scene-referred)", iopOrder: 90, defaultEnabled: true,
@@ -507,12 +507,21 @@ extension CIModule {
                 // scene-linear raw data sits dark of display white; this lifts it into the tone map's range
                 FieldSchema(name: "exposure", description: "exposure bias (EV)", kind: .float,
                             min: -3, max: 3, defaultValue: .number(0), options: []),
+                // the scene brightness, in stops over middle grey, that reaches display white
+                FieldSchema(name: "white", description: "white point (EV over grey)", kind: .float,
+                            min: 1.5, max: 8, defaultValue: .number(SceneTone.defaultWhiteEV), options: []),
+                // 0 keeps a bright colour's hue and saturation to the top of the curve, 1 lets it bleach to white
+                FieldSchema(name: "purity", description: "path to white", kind: .float,
+                            min: 0, max: 1, defaultValue: .number(SceneTone.defaultPurity), options: []),
             ],
             apply: { image, v in
                 let g = Exposure.gain(ev: v["exposure"] ?? 0)
                 let lifted = try CIBridge.gain(image, scale: SIMD3(g, g, g))
-                return try CIBridge.toneDisplay(lifted, contrast: v["contrast"] ?? 0, peak: v["peak"] ?? 1)
+                let tone = SceneTone(contrast: v["contrast"] ?? 0, whiteEV: v["white"] ?? SceneTone.defaultWhiteEV,
+                                     purity: v["purity"] ?? SceneTone.defaultPurity, peak: v["peak"] ?? 1)
+                return try CIBridge.sceneTone(lifted, tone: tone)
             })
+        m.algorithmVersion = 2
         m.sceneReferred = true
         return m
     }()

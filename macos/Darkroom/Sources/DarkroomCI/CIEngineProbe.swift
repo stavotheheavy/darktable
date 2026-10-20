@@ -134,8 +134,8 @@ public enum CIEngineProbe {
     }
 
     private static let goldenOverrides: [String: [String: Double]] = [
-        // v1 is the tone map alone; the exposure field was added later and is 0 where it must not move the picture
-        "display": ["exposure": 0],
+        // the settings the display golden is rendered at: a little contrast, the default white point and path to white, no lift
+        "display": ["exposure": 0, "contrast": 30, "white": 4.5, "purity": 0.5],
         "hazeremoval": ["strength": 1, "radius": 3, "airlight": 1],
         // a point curve with an S, a raised black point and a lowered white point
         "tonecurve": ["n": 6, "x0": 0.04, "x1": 0.22, "x2": 0.45, "x3": 0.68, "x4": 0.85, "x5": 0.97,

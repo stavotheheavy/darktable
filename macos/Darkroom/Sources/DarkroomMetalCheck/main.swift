@@ -512,5 +512,30 @@ do {
     check("split toning kernel ran", false, "\(error)")
 }
 
+// SceneTone: the display module's Metal kernel (scenetoneBuf) against the oracle, SDR and HDR, on neutrals and saturated colours
+do {
+    for (label, tone) in [("SDR", SceneTone(contrast: 20)), ("HDR peak 4", SceneTone(peak: 4)), ("purity 0", SceneTone(purity: 0))] {
+        var pixels: [SIMD4<Float>] = []
+        var v = 1e-5
+        while v < 40 { pixels.append(SIMD4(Float(v), Float(v), Float(v), 1)); v *= 1.07 }
+        for i in 0..<12 { for j in 0..<12 { for k in 0..<12 {
+            pixels.append(SIMD4(Float(i) * 0.3, Float(j) * 0.3, Float(k) * 0.3, 1))
+        } } }
+        pixels.append(SIMD4(-0.2, 0.5, 1.5, 1)); pixels.append(SIMD4(-1, -1, -1, 1)); pixels.append(SIMD4(0, 0, 0, 1))
+        let out = try MetalPerPixel.run(source: MetalSceneTone.source, function: "scenetoneBuf", pixels: pixels, uniforms: tone.uniforms())
+        var worst = 0.0
+        for (i, px) in pixels.enumerated() where i < out.count {
+            let want = tone.displayLinear(SIMD3(Double(px.x), Double(px.y), Double(px.z)))
+            let got = SIMD3(Double(out[i].x), Double(out[i].y), Double(out[i].z))
+            guard got.x.isFinite, got.y.isFinite, got.z.isFinite else { worst = .infinity; break }
+            let d = want - got
+            worst = Swift.max(worst, Swift.max(Swift.abs(d.x), Swift.abs(d.y), Swift.abs(d.z)) / Swift.max(1, Swift.max(want.x, want.y, want.z)))
+        }
+        check("SC1 scene tone kernel (\(label)) matches the oracle within 5e-4 relative over \(pixels.count) pixels", out.count == pixels.count && worst < 5e-4, "\(worst)")
+    }
+} catch {
+    check("scene tone kernel ran", false, "\(error)")
+}
+
 print(failures == 0 ? "\nall Metal checks passed" : "\n\(failures) failed")
 exit(failures == 0 ? 0 : 1)

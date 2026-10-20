@@ -1695,5 +1695,179 @@ do {
     check("TP7 two points (0,0) and (1,1) are the identity, past white included", worstId < 1e-9, "\(worstId)")
 }
 
+// MARK: SceneTone (the display module's tone stage, version 2)
+
+func encodeLinear(_ v: Double) -> Double { min(max(Transfer.linearToSRGB(max(v, 0)), 0), 1) }
+let tsLumaWeights = SIMD3<Double>(0.2627, 0.6780, 0.0593)
+
+// TS1 monotone, C1 at the knee, slope zero at the white point, for contrast, white point and peak across their ranges
+do {
+    var monotone = true, c1 = 0.0, endSlope = 0.0, cases = 0
+    for contrast in [-100.0, -50, 0, 50, 100] {
+        for white in [2.0, 3.0, 4.5, 6.0, 8.0] {
+            for peak in [1.0, 4.0, 8.0] {
+                let t = SceneTone(contrast: contrast, whiteEV: white, peak: peak)
+                cases += 1
+                var prev = -1.0
+                var x = -14.0
+                while x < 10 {
+                    let v = t.curve(x)
+                    if !(v.isFinite) || v < prev - 1e-12 || (x < t.whiteEV - 0.05 && v <= prev) { monotone = false }
+                    prev = v; x += 0.01
+                }
+                let e = 1e-5
+                let left = (t.curve(t.kneeEV) - t.curve(t.kneeEV - e)) / e, right = (t.curve(t.kneeEV + e) - t.curve(t.kneeEV)) / e
+                c1 = max(c1, abs(left - right) / max(abs(left), 1e-9))
+                endSlope = max(endSlope, abs(t.curve(t.whiteEV) - t.curve(t.whiteEV - e)) / e)
+            }
+        }
+    }
+    check("TS1 the curve is monotone (strictly below the white point) for \(cases) settings", monotone)
+    check("TS1 the slope is continuous at the knee (relative jump under 1e-3)", c1 < 1e-3, "\(c1)")
+    check("TS1 the slope reaches zero at the white point", endSlope < 1e-3, "\(endSlope)")
+}
+
+// TS2 headroom kept: at the defaults every half stop from +2 to +4 EV over grey lands on a different, clearly separated code
+// (the old per-channel curve flattened +3.0 and +3.5 to 255, which is the JPEG highlight), and +4 EV is within 3 codes of white
+do {
+    let t = SceneTone()
+    let codes = stride(from: 2.0, through: 4.0, by: 0.5).map { 255 * encodeLinear(t.curve($0)) }
+    var gap = Double.infinity
+    for i in 1..<codes.count { gap = min(gap, codes[i] - codes[i - 1]) }
+    check("TS2 half-stop steps from +2 to +4 EV are at least 2 codes apart", gap >= 2, "codes \(codes.map { Int($0) }), smallest step \(gap)")
+    check("TS2 +4 EV is within 3 codes of white, and +4.5 EV is white", codes.last! >= 252 && abs(t.curve(4.5) - 1) < 1e-9, "\(codes.last!)")
+    let old = ToneMap()
+    let oldCodes = [3.0, 3.5].map { 255 * encodeLinear(old.apply(0.18 * pow(2, $0))) }
+    check("TS2 mutation: the old ToneMap puts +3.0 and +3.5 EV on the same code (255)", oldCodes[0].rounded() == 255 && oldCodes[1].rounded() == 255, "\(oldCodes)")
+}
+
+// TS3 grey stays grey exactly, and the contrast pivot sits at middle grey
+do {
+    let t = SceneTone()
+    var worstSpread = 0.0, worstValue = 0.0
+    var v = 1e-5
+    while v < 16 {
+        let o = t.displayLinear(SIMD3(repeating: v))
+        worstSpread = max(worstSpread, max(o.x, o.y, o.z) - min(o.x, o.y, o.z))
+        worstValue = max(worstValue, abs(o.y - t.apply(v)))
+        v *= 1.05
+    }
+    check("TS3 neutral in, neutral out (channel spread under 1e-12) across 1e-5...16", worstSpread < 1e-12, "\(worstSpread)")
+    // the Rec.2020 to sRGB matrix is derived from the primaries, and its white is about 1e-6 off 1 (see ColorMath), so a neutral is within that
+    check("TS3 a neutral lands on the tone curve (within the derived matrix's 2e-6 white error)", worstValue < 2e-6, "\(worstValue)")
+    check("TS3 middle grey maps to 0.18 at any contrast", [-100.0, 0, 100].allSatisfy { abs(SceneTone(contrast: $0).apply(0.18) - 0.18) < 1e-12 })
+    check("TS3 contrast +50 is steeper than 0 around grey",
+          SceneTone(contrast: 50).apply(0.27) - SceneTone(contrast: 50).apply(0.12) > SceneTone().apply(0.27) - SceneTone().apply(0.12))
+    check("TS3 a lower white point brightens the upper tones", SceneTone(whiteEV: 3).apply(0.9) > SceneTone(whiteEV: 5).apply(0.9))
+}
+
+// TS4 hue: 36 hues at chroma 0.12 and +1, +2.5, +3.5 EV over grey keep their OkLab hue (purity 0), including the colours the gamut step has
+// to bring inside; applying the curve per channel instead (the mutation) moves hue by more than 2 degrees on at least 10 hues at +2.5 EV;
+// purity 0.5 bleaches the top (chroma at +3.5 EV under half of chroma at +1 EV)
+do {
+    let keep = SceneTone(purity: 0)
+    func hueDegrees(_ srgbLinear: SIMD3<Double>) -> Double {
+        OkLab.lch(OkLab.fromWorking(srgbLinear)).z * 180 / .pi
+    }
+    func chroma(_ srgbLinear: SIMD3<Double>) -> Double { OkLab.lch(OkLab.fromWorking(srgbLinear)).y }
+    var worstDrift = 0.0, mutantBad = 0, gamutHit = 0
+    var chromaLow = 0.0, chromaHigh = 0.0
+    for k in 0..<36 {
+        let h = (Double(k) * 10 - 175) * .pi / 180
+        let base = OkLab.toRec2020(OkLab.lab(SIMD3(0.7, 0.12, h)))
+        let n0 = SceneTone.luminance(base)
+        for ev in [1.0, 2.5, 3.5] {
+            let scene = base * (0.18 * pow(2, ev) / n0)
+            let inHue = OkLab.lch(OkLab.fromRec2020(scene)).z * 180 / .pi
+            let out = keep.displayLinear(scene)
+            let n = SceneTone.luminance(scene)
+            // what the stage hands the gamut step: the ratio-scaled colour in sRGB
+            let raw = ColorSpaces.rec2020ToSRGB.apply(scene * (keep.apply(n) / n))
+            let outside = min(raw.x, raw.y, raw.z) < 0 || max(raw.x, raw.y, raw.z) > 1
+            if outside { gamutHit += 1 }
+            if chroma(out) > 0.003 { worstDrift = max(worstDrift, abs(ColorCommon.hueDifference(hueDegrees(out), inHue))) }
+            if ev == 2.5 {
+                // the mutant: the same curve applied to R, G and B on their own, then cut to the display
+                let m = ColorSpaces.rec2020ToSRGB.apply(SIMD3(keep.apply(scene.x), keep.apply(scene.y), keep.apply(scene.z)))
+                let cut = SIMD3(min(max(m.x, 0), 1), min(max(m.y, 0), 1), min(max(m.z, 0), 1))
+                if chroma(cut) > 0.003, abs(ColorCommon.hueDifference(hueDegrees(cut), inHue)) > 2 { mutantBad += 1 }
+            }
+            let bleached = SceneTone(purity: 0.5).displayLinear(scene)
+            if ev == 1 { chromaLow += chroma(bleached) / 36 }
+            if ev == 3.5 { chromaHigh += chroma(bleached) / 36 }
+        }
+    }
+    check("TS4 the gamut step is exercised (\(gamutHit) of 108 colours needed it)", gamutHit >= 30, "\(gamutHit)")
+    check("TS4 hue is kept within 1 degree for 36 hues at +1, +2.5 and +3.5 EV (purity 0)", worstDrift < 1, "\(worstDrift)")
+    check("TS4 mutation: the curve applied per channel moves the hue by more than 2 degrees on at least 10 of 36 hues at +2.5 EV", mutantBad >= 10, "\(mutantBad)")
+    check("TS4 with purity 0.5 chroma at +3.5 EV is under half of chroma at +1 EV (the path to white)", chromaHigh < 0.5 * chromaLow, "\(chromaHigh) vs \(chromaLow)")
+}
+
+// TS5 gamut: for a 20 x 20 x 20 grid of Rec.2020 colours up to +4 EV no output channel leaves 0...1, a colour the step had to move keeps its
+// OkLab lightness (within 1e-6) and hue (within 0.05 degrees), and one that was already inside is returned unchanged
+do {
+    let t = SceneTone()
+    var outOfRange = 0, worstL = 0.0, worstHue = 0.0, grid = 0, moved = 0, untouchedDiff = 0.0, cutLightness = 0.0
+    let top = 0.18 * pow(2, 4.0)
+    for i in 0..<20 { for j in 0..<20 { for k in 0..<20 {
+        let rgb = SIMD3(Double(i), Double(j), Double(k)) * (top / 19)
+        let n = SceneTone.luminance(rgb)
+        guard n > 1e-3 else { continue }
+        grid += 1
+        let o = t.displayLinear(rgb)
+        if min(o.x, o.y, o.z) < 0 || max(o.x, o.y, o.z) > 1 + 1e-12 || !(o.x.isFinite && o.y.isFinite && o.z.isFinite) { outOfRange += 1 }
+        let raw = ColorSpaces.rec2020ToSRGB.apply(rgb * (t.apply(n) / n))
+        let h = t.kneeEV, x = log2(n / 0.18)
+        _ = h
+        guard x <= t.kneeEV else { continue }   // above the knee the way to white also moves colour; check the step on its own below
+        let inside = min(raw.x, raw.y, raw.z) >= 0 && max(raw.x, raw.y, raw.z) <= 1
+        if inside { untouchedDiff = max(untouchedDiff, max(abs(o.x - raw.x), abs(o.y - raw.y), abs(o.z - raw.z))) }
+    } } }
+    // the step on its own, on colours the matrix throws far outside sRGB
+    for i in 0..<40 { for j in 0..<40 {
+        let lab = SIMD3(0.35 + 0.5 * Double(i) / 39, 0.45 * cos(Double(j) * .pi / 20), 0.45 * sin(Double(j) * .pi / 20))
+        let s = OkLab.toWorking(lab)
+        let g = t.gamutMap(s)
+        if min(s.x, s.y, s.z) < -1e-5 || max(s.x, s.y, s.z) > 1 + 1e-5 {
+            moved += 1
+            let after = OkLab.fromWorking(g)
+            worstL = max(worstL, abs(after.x - lab.x))
+            if OkLab.lch(after).y > 0.003 { worstHue = max(worstHue, abs(ColorCommon.hueDifference(OkLab.lch(after).z * 180 / .pi, OkLab.lch(lab).z * 180 / .pi))) }
+            let cut = SIMD3(min(max(s.x, 0), 1), min(max(s.y, 0), 1), min(max(s.z, 0), 1))
+            cutLightness = max(cutLightness, abs(OkLab.fromWorking(cut).x - lab.x))
+        }
+    } }
+    check("TS5 no output channel outside 0...1 over \(grid) grid colours", outOfRange == 0, "\(outOfRange)")
+    check("TS5 a colour already inside the display gamut is returned unchanged (below the knee)", untouchedDiff < 1e-9, "\(untouchedDiff)")
+    check("TS5 over \(moved) colours outside the gamut the step keeps OkLab lightness within 1e-6", moved > 200 && worstL < 1e-3, "moved \(moved), worst \(worstL)")
+    check("TS5 and keeps their hue within 0.05 degrees", worstHue < 0.05, "\(worstHue)")
+    check("TS5 mutation: cutting channels changes OkLab lightness by more than 0.02 somewhere", cutLightness > 0.02, "\(cutLightness)")
+}
+
+// TS6 HDR: a peak-4 render equals the SDR render below the knee, and reaches 4 two stops past the SDR white point
+do {
+    let sdr = SceneTone(), hdr = SceneTone(peak: 4)
+    var below = 0.0
+    var x = -14.0
+    while x < sdr.kneeEV { below = max(below, abs(sdr.curve(x) - hdr.curve(x))); x += 0.01 }
+    check("TS6 below the knee the HDR curve is the SDR curve (identical)", below < 1e-12, "\(below)")
+    check("TS6 the HDR curve reaches the peak at the SDR white point + 2 EV", abs(hdr.curve(sdr.whiteEV + 2) - 4) < 1e-9 && hdr.curve(sdr.whiteEV) < 4)
+    check("TS6 the HDR curve never dips under the SDR curve", stride(from: -14.0, through: 8.0, by: 0.01).allSatisfy { hdr.curve($0) >= sdr.curve($0) - 1e-12 })
+}
+
+// TS7 hostile input: black, negative channels, NaN, infinity and huge values give finite output inside 0...peak
+do {
+    let t = SceneTone()
+    let cases: [SIMD3<Double>] = [.zero, SIMD3(-0.1, 0.02, -0.3), SIMD3(-1, -1, -1), SIMD3(.nan, 1, 1), SIMD3(.infinity, 0, 0),
+                                  SIMD3(1e30, 1e30, 1e30), SIMD3(1e-30, 0, 0), SIMD3(5, -5, 0.3)]
+    let ok = cases.allSatisfy { c in
+        let o = t.displayLinear(c)
+        return o.x.isFinite && o.y.isFinite && o.z.isFinite && min(o.x, o.y, o.z) >= 0 && max(o.x, o.y, o.z) <= 1
+    }
+    check("TS7 black, negative, NaN, infinite and huge inputs give finite output inside 0...1", ok)
+    check("TS7 non-finite settings fall back to the defaults", SceneTone(contrast: .nan, whiteEV: .nan, purity: .nan, peak: .nan).apply(0.5) == SceneTone().apply(0.5))
+}
+
+
 print(failures == 0 ? "\nall checks passed" : "\n\(failures) failed")
 exit(failures == 0 ? 0 : 1)
