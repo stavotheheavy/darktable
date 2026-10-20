@@ -1416,5 +1416,60 @@ do {
     check("MR6 colour mask: inside both soft bands the weight is 0.25 at every lightness", leaks.allSatisfy { close($0, 0.25) }, "\(leaks)")
 }
 
+// DF / DH: the minimum filter and haze removal (dark channel prior)
+do {
+    let w = 40, h = 30
+    let tex = Plane(width: w, height: h, values: (0..<(w * h)).map { i in
+        let x = Double(i % w), y = Double(i / w)
+        return 0.4 + 0.25 * sin(x / 3.1) * cos(y / 4.7) + 0.05 * sin(x * 12.9898 + y * 78.233)
+    })
+    let r = 3, fast = Filters.minFilter(tex, radius: r)
+    var worst = 0.0
+    for y in 0..<h { for x in 0..<w {
+        var m = Double.infinity
+        for dy in -r...r { for dx in -r...r { m = min(m, tex.at(x + dx, y + dy)) } }
+        worst = max(worst, abs(m - fast.values[y * w + x]))
+    } }
+    check("DF1 min filter equals the brute-force window minimum, edges clamped", worst < 1e-15, "\(worst)")
+    check("DF1 min filter radius 0 is the identity and never exceeds the input", Filters.minFilter(tex, radius: 0) == tex
+          && zip(fast.values, tex.values).allSatisfy { $0 <= $1 })
+
+    func close(_ a: [SIMD3<Double>], _ b: [SIMD3<Double>], _ tol: Double) -> Double {
+        guard a.count == b.count else { return .infinity }
+        var e = 0.0
+        for (x, y) in zip(a, b) { for c in 0..<3 { e = x[c].isFinite ? max(e, abs(x[c] - y[c]) / max(1, abs(y[c]))) : .infinity } }
+        return e
+    }
+    let fw = 48, fh = 40
+    let base = DetailCommon.fixture(width: fw, height: fh)
+    check("DH1 strength 0 is the identity", Dehaze.apply(base, width: fw, height: fh, strength: 0, radius: 8, airlight: 1) == base)
+    // a clear scene whose every pixel has a zero channel (dark channel 0), hazed with transmission 0.6 and airlight 1
+    let clear = base.map { $0 - SIMD3(repeating: min($0.x, $0.y, $0.z)) }
+    let hazy = clear.map { $0 * 0.6 + SIMD3(repeating: 0.4) }
+    let rec = close(Dehaze.apply(hazy, width: fw, height: fh, strength: 1, radius: 3, airlight: 1), clear, 1e-9)
+    check("DH2 haze with transmission 0.6 is removed exactly (dark channel prior recovers it)", rec < 1e-9, "\(rec)")
+    let half = hazy.map { ($0 - SIMD3(repeating: 1)) / 0.8 + SIMD3(repeating: 1) }
+    let hs = close(Dehaze.apply(hazy, width: fw, height: fh, strength: 0.5, radius: 3, airlight: 1), half, 1e-9)
+    check("DH3 strength 0.5 removes half the haze: t = 1 - 0.5 * 0.4 = 0.8", hs < 1e-9, "\(hs)")
+    let hazy2 = clear.map { $0 * 0.5 + SIMD3(repeating: 1) }
+    let rec2 = close(Dehaze.apply(hazy2, width: fw, height: fh, strength: 1, radius: 3, airlight: 2), clear, 1e-9)
+    let wrongA = close(Dehaze.apply(hazy2, width: fw, height: fh, strength: 1, radius: 3, airlight: 1), clear, 1e-9)
+    check("DH4 airlight 2 recovers a scene hazed with airlight 2", rec2 < 1e-9, "\(rec2)")
+    check("DH4 airlight 1 does not (the airlight is used)", wrongA > 0.05, "\(wrongA)")
+    let brightGrey = [SIMD3<Double>](repeating: SIMD3(repeating: 1.5), count: fw * fh)
+    let floored = Dehaze.apply(brightGrey, width: fw, height: fh, strength: 1, radius: 3, airlight: 1)
+    check("DH5 the transmission floor 0.1 holds: t would be -0.5, the result is (1.5 - 1) / 0.1 + 1 = 6",
+          floored.allSatisfy { abs($0.x - 6) < 1e-9 && abs($0.y - 6) < 1e-9 && abs($0.z - 6) < 1e-9 }, "\(floored[0])")
+    let atAir = Dehaze.apply([SIMD3<Double>](repeating: SIMD3(repeating: 1), count: fw * fh), width: fw, height: fh, strength: 1, radius: 3, airlight: 1)
+    check("DH5 a pixel equal to the airlight stays the airlight (no 0/0)", atAir.allSatisfy { $0 == SIMD3(1, 1, 1) }, "\(atAir[0])")
+    var finite = true
+    let ext = base + [SIMD3<Double>](repeating: SIMD3(-0.2, 0.1, 0.3), count: fw * 2)
+    for (s, rad, a) in [(1.0, 8.0, 0.2), (1.0, 1.0, 4.0), (0.6, 40.0, 1.0), (1.0, 5.0, 0.2)] {
+        let out = Dehaze.apply(ext, width: fw, height: fh + 2, strength: s, radius: rad, airlight: a)
+        finite = finite && out.count == ext.count && out.allSatisfy { $0.x.isFinite && $0.y.isFinite && $0.z.isFinite }
+    }
+    check("DH6 finite at strength 1, a dim airlight, radius 1 and 40, past-white and negative colours", finite)
+}
+
 print(failures == 0 ? "\nall checks passed" : "\n\(failures) failed")
 exit(failures == 0 ? 0 : 1)

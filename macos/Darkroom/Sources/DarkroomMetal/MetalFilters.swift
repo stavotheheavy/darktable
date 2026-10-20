@@ -46,6 +46,32 @@ enum FilterKernels {
         dst.write(sum, gid);
     }
 
+    // the minimum over the same window shape (u[0] = reach); the dark channel's patch minimum
+    kernel void filtersMinRowTex(texture2d<float, access::read> src [[texture(0)]],
+                                 texture2d<float, access::write> dst [[texture(1)]],
+                                 constant float *u [[buffer(0)]], constant int2 *off [[buffer(1)]],
+                                 uint2 gid [[thread_position_in_grid]]) {
+        if (gid.x >= dst.get_width() || gid.y >= dst.get_height()) { return; }
+        int reach = int(u[0]);
+        float4 m = src.read(uint2(int(gid.x) + off[0].x + reach - reach, int(gid.y) + off[0].y));
+        for (int dx = -reach; dx <= reach; dx++) {
+            m = min(m, src.read(uint2(int(gid.x) + off[0].x + reach + dx, int(gid.y) + off[0].y)));
+        }
+        dst.write(m, gid);
+    }
+    kernel void filtersMinColTex(texture2d<float, access::read> src [[texture(0)]],
+                                 texture2d<float, access::write> dst [[texture(1)]],
+                                 constant float *u [[buffer(0)]], constant int2 *off [[buffer(1)]],
+                                 uint2 gid [[thread_position_in_grid]]) {
+        if (gid.x >= dst.get_width() || gid.y >= dst.get_height()) { return; }
+        int reach = int(u[0]);
+        float4 m = src.read(uint2(gid.x, int(gid.y) + reach));
+        for (int dy = -reach; dy <= reach; dy++) {
+            m = min(m, src.read(uint2(gid.x, int(gid.y) + reach + dy)));
+        }
+        dst.write(m, gid);
+    }
+
     // guided filter steps, per pixel, several inputs (textures 0...n-1 in, texture n out)
     kernel void filtersLumaTex(texture2d<float, access::read> p [[texture(0)]], texture2d<float, access::write> dst [[texture(1)]],
                                constant float *u [[buffer(0)]], constant int2 *off [[buffer(1)]], uint2 gid [[thread_position_in_grid]]) {
@@ -127,7 +153,9 @@ final class SeparableProcessor: CIImageProcessorKernel {
         desc.usage = [.shaderRead, .shaderWrite]
         desc.storageMode = .private
         guard let mid = kernels.device.makeTexture(descriptor: desc) else { throw CIBridgeError.badArguments }
-        for (name, from, to) in [("filtersRowTex", src, mid), ("filtersColTex", mid, dst)] {
+        let names = (arguments?["kernels"] as? [String]) ?? ["filtersRowTex", "filtersColTex"]
+        guard names.count == 2 else { throw CIBridgeError.badArguments }
+        for (name, from, to) in [(names[0], src, mid), (names[1], mid, dst)] {
             let p = try kernels.pipeline(name, source: FilterKernels.source)
             guard let enc = cmd.makeComputeCommandEncoder() else { throw CIBridgeError.badArguments }
             enc.setComputePipelineState(p)
@@ -184,11 +212,12 @@ final class PerPixelManyProcessor: CIImageProcessorKernel {
 }
 
 extension CIBridge {
-    private static func separable(_ image: CIImage, reach: Int, taps: [Float], step: Int) throws -> CIImage {
+    private static func separable(_ image: CIImage, reach: Int, taps: [Float], step: Int,
+                                  kernels: [String] = ["filtersRowTex", "filtersColTex"]) throws -> CIImage {
         let ext = image.extent
         let u: [Float] = [Float(reach), Float(taps.count), Float(step)] + taps
         let out = try SeparableProcessor.apply(withExtent: ext, inputs: [image.clampedToExtent()],
-                                               arguments: ["reach": reach, "uniforms": u])
+                                               arguments: ["reach": reach, "uniforms": u, "kernels": kernels])
         return out.cropped(to: ext)
     }
 
@@ -206,6 +235,12 @@ extension CIBridge {
         return try PerPixelManyProcessor.apply(withExtent: e, inputs: images,
                                                arguments: ["function": function, "uniforms": uniforms, "source": source,
                                                            "extent": [Double(e.minX), Double(e.minY), Double(e.width), Double(e.height)]])
+    }
+
+    /// DarkroomCore.Filters.minFilter on every channel (the window shrinks at the border, as the oracle's does).
+    public static func minFilter(_ image: CIImage, radius r: Int) throws -> CIImage {
+        guard r > 0 else { return image }
+        return try separable(image, reach: r, taps: [], step: 1, kernels: ["filtersMinRowTex", "filtersMinColTex"])
     }
 
     /// DarkroomCore.Filters.boxMean on every channel.

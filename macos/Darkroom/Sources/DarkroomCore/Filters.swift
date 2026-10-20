@@ -72,6 +72,30 @@ public enum Filters {
         return Plane.zip(Plane.zip(meanA, i, *), meanB, +)
     }
 
+    /// The minimum over the (2r + 1) by (2r + 1) square around each pixel, edges clamped (so the window shrinks at the
+    /// border). Separable. r = 0 is the identity. The dark channel's patch minimum (He, Sun and Tang, "Single Image Haze
+    /// Removal Using Dark Channel Prior", CVPR 2009).
+    public static func minFilter(_ p: Plane, radius r: Int) -> Plane {
+        guard r > 0 else { return p }
+        var rows = Plane(width: p.width, height: p.height, fill: 0)
+        for y in 0..<p.height {
+            for x in 0..<p.width {
+                var m = Double.infinity
+                for k in -r...r { m = Swift.min(m, p.at(x + k, y)) }
+                rows.values[y * p.width + x] = m
+            }
+        }
+        var out = Plane(width: p.width, height: p.height, fill: 0)
+        for y in 0..<p.height {
+            for x in 0..<p.width {
+                var m = Double.infinity
+                for k in -r...r { m = Swift.min(m, rows.at(x, y + k)) }
+                out.values[y * p.width + x] = m
+            }
+        }
+        return out
+    }
+
     /// The B3 spline weights of the à trous transform.
     public static let b3: [Double] = [1, 4, 6, 4, 1].map { $0 / 16 }
 

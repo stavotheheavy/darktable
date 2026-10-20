@@ -682,5 +682,35 @@ do {
     }
 }
 
+// F-E5 / E-DH: the min filter and haze removal on the GPU
+do {
+    let fw = 64, fh = 48
+    let px: [SIMD4<Float>] = (0..<(fw * fh)).map { i in
+        let x = Double(i % fw), y = Double(i / fw)
+        return SIMD4(Float(0.4 + 0.25 * sin(x / 3.1) * cos(y / 4.7)), Float(0.5 + 0.3 * sin(x / 1.7 + y / 2.3)),
+                     Float(0.2 + 0.15 * cos(x * y / 37)), 1)
+    }
+    for r in [1, 4, 12] {
+        let got = (try? CIEngineProbe.filter(.min(r), pixels: px, width: fw, height: fh)) ?? []
+        var e = got.count == fw * fh ? 0.0 : Double.infinity
+        for c in 0..<3 {
+            let want = Filters.minFilter(Plane(width: fw, height: fh, values: px.map { Double($0[c]) }), radius: r)
+            for (i, g) in got.enumerated() { e = g[c].isFinite ? max(e, abs(Double(g[c]) - want.values[i])) : .infinity }
+        }
+        check("F-E5 min filter radius \(r) on the GPU matches the oracle exactly (min is exact in float): \(e)", e < 1e-7, "\(e)")
+    }
+    let dh: [String: ParamValue] = ["strength": .number(0.7), "radius": .number(4), "airlight": .number(1)]
+    let stack = [StackEntry(operation: "hazeremoval", params: dh)]
+    let want = Dehaze.apply(detailImg, width: detailW, height: detailH, strength: 0.7, radius: 4, airlight: 1)
+    let got = runDetail(stack)
+    let eDH = worstLinear(got, want), eEnc = worst(got, want)
+    check("E-DH haze removal matches the oracle within 1/255 and unclamped within 2e-4", eEnc < tol && eDH < 2e-4, "encoded \(eEnc), linear \(eDH)")
+    check("E-DH the oracle really changes the fixture (a no-op GPU path would fail)", worstLinear(detailPx, want) > 0.05, "\(worstLinear(detailPx, want))")
+    let seams = detailSeams(stack, oracle: want)
+    check("E-DH-seam haze removal renders the same in a region as in the full frame", seams.ok, "seam \(seams.seam), full vs oracle \(seams.fullVsOracle)")
+    let zero = runDetail([StackEntry(operation: "hazeremoval", params: ["strength": .number(0)])])
+    check("E-DH-zero strength 0 returns the input untouched", zero == detailPx)
+}
+
 print(failures == 0 ? "\nall checks passed" : "\n\(failures) failed")
 exit(failures == 0 ? 0 : 1)

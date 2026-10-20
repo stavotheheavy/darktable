@@ -379,6 +379,15 @@ extension CIModule {
                 try CIBridge.contrastEqualizer(image, fine: v["fine"] ?? 0, medium: v["medium"] ?? 0, coarse: v["coarse"] ?? 0)
             }),
 
+        // Haze removal: the dark channel prior with a guided-filter-refined transmission. Strength 0 is the identity.
+        // Checked by DH1-DH7 (darkroom-core-check) and E-DH (darkroom-engine-check).
+        CIModule(
+            operation: "hazeremoval", name: "haze removal", iopOrder: 51, defaultEnabled: false,
+            fields: [field("strength", 0, 1, 0), field("radius", 1, 40, 8), field("airlight", 0.2, 4, 1)],
+            apply: { image, v in
+                try CIBridge.dehaze(image, strength: v["strength"] ?? 0, radius: v["radius"] ?? 8, airlight: v["airlight"] ?? 1)
+            }),
+
         // RGB curve, approximate: the same five-node curve as tone curve, applied to every channel.
         CIModule(
             operation: "rgbcurve", name: "rgb curve (approximate)", iopOrder: 32, defaultEnabled: false,
