@@ -266,6 +266,9 @@ public actor CIEngine: PhotoEngine {
             if let hdrPeak, m.operation == "display" { values["peak"] = hdrPeak }
             values["_scale"] = scale.isFinite ? min(max(scale, 1e-3), 1) : 1
             out = try m.apply(out, values)
+            // a Core Image filter may grow its output (bloom spreads past the edge) or leave it infinite (a clamped blur):
+            // a per-pixel module never changes the frame, geometry does that
+            if out.extent != before.extent { out = out.cropped(to: before.extent) }
             if maskMode == 2 {
                 // a local mask (DarkroomCore.Mask): cut from the module's input, then the output is mixed over it
                 let blend = entry.blend.compactMapValues { $0.double }

@@ -130,6 +130,23 @@ public enum CIEngineProbe {
         return out
     }
 
+    /// One stack per catalogue module for the golden-image suite (T11): the module on, every float field moved halfway
+    /// from its default to the end of its range that is further away. Derived from the schema, so a module that is added
+    /// has a golden case without anyone writing one. Geometry modules change the picture's size and have their own checks.
+    public static func goldenCases() -> [(operation: String, version: Int, stack: [StackEntry])] {
+        CIModule.all.filter { !$0.geometry }.sorted { $0.operation < $1.operation }.map { m in
+            var params: [String: ParamValue] = [:]
+            for f in m.fields where f.kind == .float || f.kind == .int {
+                let d = f.defaultValue.double ?? 0
+                let far = (f.max - d) >= (d - f.min) ? f.max : f.min
+                var v = d + 0.5 * (far - d)
+                if f.kind == .int { v = v.rounded() }
+                params[f.name] = .number(v)
+            }
+            return (m.operation, m.algorithmVersion, [StackEntry(operation: m.operation, params: params)])
+        }
+    }
+
     /// The engine's reading of a camera EXIF orientation value (1...8).
     public static func orientation(exif raw: UInt32) -> Orientation {
         CGImagePropertyOrientation(rawValue: raw).map(CIGeometry.orientation(exif:)) ?? .none

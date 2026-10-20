@@ -816,5 +816,49 @@ do {
           [Double.nan, 0, 99].allSatisfy { img(lc(10), scale: $0).count == detailW * detailH })
 }
 
+// T11 version stability: every module, at its current algorithm version, renders the fixture exactly as its stored golden
+// image says (a Float16 RGB file under Goldens/). `swift run darkroom-engine-check --update-goldens` rewrites them, which is the
+// reviewed, deliberate step after a module's maths changes and its algorithmVersion goes up.
+do {
+    let dir = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+        .appendingPathComponent("Goldens")
+    let update = CommandLine.arguments.contains("--update-goldens")
+    if update { try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true) }
+    func store(_ px: [SIMD4<Float>]) -> Data {
+        var halves: [Float16] = []
+        halves.reserveCapacity(px.count * 3)
+        for p in px { halves += [Float16(p.x), Float16(p.y), Float16(p.z)] }
+        return halves.withUnsafeBytes { Data($0) }
+    }
+    func load(_ data: Data) -> [SIMD3<Double>] {
+        let n = data.count / 6
+        return data.withUnsafeBytes { raw in
+            let h = raw.bindMemory(to: Float16.self)
+            return (0..<n).map { SIMD3(Double(h[$0 * 3]), Double(h[$0 * 3 + 1]), Double(h[$0 * 3 + 2])) }
+        }
+    }
+    var cases = 0, rewritten = 0
+    for c in CIEngineProbe.goldenCases() {
+        cases += 1
+        let file = dir.appendingPathComponent("\(c.operation).v\(c.version).f16")
+        let got = runDetail(c.stack)
+        guard got.count == detailW * detailH, got.allSatisfy({ $0.x.isFinite && $0.y.isFinite && $0.z.isFinite }) else {
+            check("T11 \(c.operation) v\(c.version) renders a finite frame of the input's size (\(got.count) pixels, wanted \(detailW * detailH))", false); continue
+        }
+        if update { try? store(got).write(to: file); rewritten += 1; continue }
+        guard let data = try? Data(contentsOf: file), data.count == detailW * detailH * 6 else {
+            check("T11 \(c.operation) v\(c.version) has a golden image (run --update-goldens after reviewing the change)", false, file.lastPathComponent)
+            continue
+        }
+        let want = load(data)
+        let eEnc = worst(got, want, oracleEncoded: false), eLin = worstLinear(got, want)
+        check("T11 \(c.operation) v\(c.version) renders as its golden image", eEnc < tol && eLin < 5e-3, "encoded \(eEnc), linear \(eLin)")
+        let moved = worstLinear(detailPx, want)
+        check("T11 \(c.operation)'s golden case really changes the picture", moved > 1e-3 || c.operation == "display", "\(moved)")
+    }
+    if update { print("wrote \(rewritten) golden images to \(dir.path)"); exit(0) }
+    check("T11 the suite covers every catalogue module (\(cases) cases)", cases >= 30, "\(cases)")
+}
+
 print(failures == 0 ? "\nall checks passed" : "\n\(failures) failed")
 exit(failures == 0 ? 0 : 1)
