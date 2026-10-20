@@ -1192,5 +1192,54 @@ do {
           part[0] == after[0] && part[1] == img[1])
 }
 
+// CO: the colour range mask (kind 4)
+do {
+    func col(_ L: Double, _ C: Double, _ hDeg: Double) -> SIMD3<Double> {
+        let h = hDeg * .pi / 180
+        return OkLab.toWorking(SIMD3(L, C * cos(h), C * sin(h)))
+    }
+    func a(_ b: [String: Double], _ c: SIMD3<Double>) -> Double { MaskColour.alpha(p: MaskColour.params(b), rgb: c) }
+    let hard: [String: Double] = ["mask_hue": 30, "mask_hue_width": 20, "mask_chroma_min": 0.02, "mask_feather": 0]
+    check("CO1 hue window, hard: 1 inside the half-width, 0 outside on both sides",
+          a(hard, col(0.6, 0.1, 30)) == 1 && a(hard, col(0.6, 0.1, 45)) == 1
+            && a(hard, col(0.6, 0.1, 55)) == 0 && a(hard, col(0.6, 0.1, 5)) == 0)
+    let wrap: [String: Double] = ["mask_hue": 350, "mask_hue_width": 30, "mask_chroma_min": 0.02, "mask_feather": 0]
+    check("CO2 the hue difference wraps around 360 degrees",
+          a(wrap, col(0.6, 0.1, 10)) == 1 && a(wrap, col(0.6, 0.1, 40)) == 0)
+    let fe: [String: Double] = ["mask_hue": 30, "mask_hue_width": 40, "mask_chroma_min": 0.02, "mask_feather": 0.5]
+    let f1 = a(fe, col(0.6, 0.1, 50)), f2 = a(fe, col(0.6, 0.1, 60)), f3 = a(fe, col(0.6, 0.1, 70))
+    check("CO3 feather fades inward from the half-width edge (1 at dh 20, 0.5 at 30, 0 at 40)",
+          abs(f1 - 1) < 1e-9 && abs(f2 - 0.5) < 1e-9 && abs(f3) < 1e-9, "\(f1) \(f2) \(f3)")
+    let ch: [String: Double] = ["mask_hue": 30, "mask_hue_width": 90, "mask_chroma_min": 0.02, "mask_feather": 0]
+    var chf = ch; chf["mask_feather"] = 0.5
+    let c15 = a(chf, col(0.6, 0.015, 30))
+    check("CO4 chroma floor: below is 0, above is 1, feathered middle is 0.5, exact grey is 0",
+          a(ch, col(0.6, 0.01, 30)) == 0 && a(ch, col(0.6, 0.03, 30)) == 1 && abs(c15 - 0.5) < 1e-9
+            && a(ch, SIMD3(0.3, 0.3, 0.3)) == 0, "\(c15)")
+    let lt: [String: Double] = ["mask_hue": 30, "mask_hue_width": 20, "mask_chroma_min": 0.02, "mask_feather": 0.5]
+    let l1 = a(lt, col(0.2, 0.1, 30)), l2 = a(lt, col(0.6, 0.1, 30)), l3 = a(lt, col(0.9, 0.1, 30))
+    check("CO5 lightness is ignored", abs(l1 - l2) < 1e-9 && abs(l2 - l3) < 1e-9, "\(l1) \(l2) \(l3)")
+    let d = MaskColour.params([:])
+    let dWant = [30 * Double.pi / 180, 30 * Double.pi / 180, 0.02, 0.3]
+    check("CO6 the keys: defaults and clamps",
+          zip(d, dWant).allSatisfy { abs($0 - $1) < 1e-12 } && d.count == 4
+            && abs(MaskColour.params(["mask_hue_width": 400])[1] - Double.pi) < 1e-12
+            && abs(MaskColour.params(["mask_hue_width": 0])[1] - Double.pi / 180) < 1e-12
+            && MaskColour.params(["mask_chroma_min": -1])[2] == 0 && MaskColour.params(["mask_chroma_min": 2])[2] == 0.5
+            && MaskColour.params(["mask_feather": 9])[3] == 1)
+    var fin = true
+    for floor in [0.0, 0.02] {
+        let b: [String: Double] = ["mask_chroma_min": floor]
+        for c in [SIMD3(0.0, 0, 0), SIMD3(4.0, 3, 2), SIMD3(-0.2, 0.1, 0.3)] {
+            let v = a(b, c)
+            if !(v.isFinite && v >= 0 && v <= 1) { fin = false }
+        }
+    }
+    check("CO7 extremes (black, past white, negative) give a finite alpha within 0...1", fin)
+    let g = a(["mask_hue": 0, "mask_hue_width": 179, "mask_chroma_min": 0], SIMD3(0.3, 0.3, 0.3))
+    check("CO8 a chroma floor of 0 does not exclude greys, and a grey's undefined hue gives no NaN",
+          g.isFinite && g >= 0 && g <= 1, "\(g)")
+}
+
 print(failures == 0 ? "\nall checks passed" : "\n\(failures) failed")
 exit(failures == 0 ? 0 : 1)
