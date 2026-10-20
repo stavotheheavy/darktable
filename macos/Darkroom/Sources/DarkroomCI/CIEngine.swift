@@ -139,9 +139,13 @@ public actor CIEngine: PhotoEngine {
     public func sessionModules() async throws -> [ModuleInfo] {
         _ = try openedSession()
         return CIModule.all.map { m in
-            ModuleInfo(operation: m.operation, name: m.name, iopOrder: m.iopOrder,
+            // every per-pixel module can blend through a local mask; geometry and the display transform cannot
+            let blends = !m.geometry && m.operation != "display"
+            return ModuleInfo(operation: m.operation, name: m.name, iopOrder: m.iopOrder,
                        enabled: m.defaultEnabled, defaultEnabled: m.defaultEnabled,
-                       params: Dictionary(uniqueKeysWithValues: m.fields.map { ($0.name, $0.defaultValue) }))
+                       supportsBlending: blends, noMasks: !blends,
+                       params: Dictionary(uniqueKeysWithValues: m.fields.map { ($0.name, $0.defaultValue) }),
+                       blend: blends ? BlendInfo() : nil)
         }
     }
 
@@ -244,12 +248,13 @@ public actor CIEngine: PhotoEngine {
     /// shrink it by `scale`, so a preview looks like the export (roadmap T9).
     static func process(_ image: CIImage, _ stack: [StackEntry], camera: Orientation, hdrPeak: Double? = nil,
                         scale: Double = 1) throws -> CIImage {
-        CIGeometry.apply(try CIGeometry.spec(stack, camera: camera), to: try applyStack(image, stack, hdrPeak: hdrPeak, scale: scale))
+        CIGeometry.apply(try CIGeometry.spec(stack, camera: camera), to: try applyStack(image, stack, hdrPeak: hdrPeak, scale: scale, camera: camera))
     }
 
     /// Applies the enabled stack entries in pipeline order. An operation the clean engine
     /// does not have is an error, never a silent skip. Static so `CIEngineProbe` runs this exact code.
-    static func applyStack(_ image: CIImage, _ stack: [StackEntry], hdrPeak: Double? = nil, scale: Double = 1) throws -> CIImage {
+    static func applyStack(_ image: CIImage, _ stack: [StackEntry], hdrPeak: Double? = nil, scale: Double = 1,
+                           camera: Orientation = .none) throws -> CIImage {
         let ordered = try stack.filter { $0.enabled && !CIGeometry.operations.contains($0.operation) }.map { entry -> (CIModule, StackEntry) in
             guard let m = CIModule.named(entry.operation) else {
                 throw EngineError("the clean engine has no module \(entry.operation) yet")
@@ -259,6 +264,8 @@ public actor CIEngine: PhotoEngine {
         .sorted { $0.0.iopOrder < $1.0.iopOrder }
 
         var out = image
+        // a module's mask drawn over the picture while it is edited (render-only: the model never puts this in an export)
+        var showMatte: CIImage?
         for (m, entry) in ordered {
             let maskMode = entry.blend["mask_mode"]?.double ?? 0
             let before = out
@@ -275,9 +282,11 @@ public actor CIEngine: PhotoEngine {
                 guard var spec = Mask.spec(from: blend) else {
                     throw EngineError("the clean engine has no mask kind \(blend["mask_kind"] ?? 0)")
                 }
+                spec.orientation = camera   // masks are drawn on the upright picture; this frame is the sensor's
                 if spec.refineRadius > 0 { spec.refineRadius = max(1, Int((Double(spec.refineRadius) * min(max(scale, 1e-3), 1)).rounded())) }
                 let matte = try CIBridge.localMask(before, spec: spec)
                 out = try CIBridge.blendMasked(before: before, after: out, mask: matte, opacity: spec.opacity)
+                if (blend["mask_show"] ?? 0) != 0 { showMatte = matte }
                 continue
             }
             guard maskMode == 0 || maskMode == 1 else {
@@ -291,6 +300,15 @@ public actor CIEngine: PhotoEngine {
                 ])
                 out = faded.composited(over: before)
             }
+        }
+        if let showMatte {
+            // red over the masked part: alpha 0.5 where the matte is 1 (a hair stronger so thin masks read)
+            let tint = showMatte.applyingFilter("CIColorMatrix", parameters: [
+                "inputRVector": CIVector(x: 0, y: 0, z: 0, w: 0), "inputGVector": CIVector(x: 0, y: 0, z: 0, w: 0),
+                "inputBVector": CIVector(x: 0, y: 0, z: 0, w: 0), "inputAVector": CIVector(x: 0.5, y: 0, z: 0, w: 0),
+                "inputBiasVector": CIVector(x: 1, y: 0.12, z: 0.12, w: 0),
+            ])
+            out = tint.composited(over: out).cropped(to: out.extent)
         }
         return out
     }

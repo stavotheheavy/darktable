@@ -256,6 +256,10 @@ struct ProSection: View {
         } else {
             ForEach(e.modules) { m in ParamList(model: model, module: m) }
         }
+        // limit the module to part of the picture; only a module the engine can blend (not geometry, not the display transform)
+        if e.modules.count == 1, let m = e.modules.first, m.supportsBlending, m.blend != nil {
+            BlendSection(model: model, module: m)
+        }
     }
 }
 

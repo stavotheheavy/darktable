@@ -16,11 +16,28 @@ static float mask_ramp(float e0, float e1, float x) {
 }
 """#
 
-    /// u[0] kind, u[1] invert (0/1), u[2...9] the kind's parameters. geom = (x0, y0, width, height) of the output in the
+    /// u[0] kind, u[1] invert (0/1), u[2...9] the kind's parameters, u[10] the camera orientation 0...7. geom = (x0, y0, width, height) of the output in the
     /// whole frame, top-left origin; a pixel's frame position is (x0 + gid.x + 0.5, y0 + gid.y + 0.5).
     static let dispatch = #"""
-static float mask_alpha(constant float *u, float x, float y, float W, float H, float3 rgb) {
+// where a point of a size image lands for an EXIF-style orientation 0...7 (DarkroomCore.Orientation.map)
+static float2 mask_orient(int o, float2 p, float2 size) {
+    float w = size.x, h = size.y;
+    if (o == 1) { return float2(p.x, h - p.y); }
+    if (o == 2) { return float2(w - p.x, p.y); }
+    if (o == 3) { return float2(w - p.x, h - p.y); }
+    if (o == 4) { return float2(p.y, p.x); }
+    if (o == 5) { return float2(h - p.y, p.x); }
+    if (o == 6) { return float2(p.y, w - p.x); }
+    if (o == 7) { return float2(h - p.y, w - p.x); }
+    return p;
+}
+
+static float mask_alpha(constant float *u, float sx, float sy, float sW, float sH, float3 rgb) {
     constant float *p = u + 2;
+    int orient = int(u[10] + 0.5f);
+    float2 pos = mask_orient(orient, float2(sx, sy), float2(sW, sH));
+    float2 sz = (orient >= 4) ? float2(sH, sW) : float2(sW, sH);
+    float x = pos.x, y = pos.y, W = sz.x, H = sz.y;
     int kind = int(u[0] + 0.5f);
     float a = 1.0f;
     if (kind == 1) { a = mask_gradient(p, x, y, W, H); }
@@ -62,6 +79,7 @@ kernel void maskBlendTex(texture2d<float, access::read> before [[texture(0)]],
         var u: [Float] = [Float(spec.kind), spec.invert ? 1 : 0]
         u += spec.p.prefix(8).map { Float($0) }
         while u.count < 10 { u.append(0) }
+        u.append(Float(spec.orientation.rawValue))   // u[10]
         return u
     }
 }

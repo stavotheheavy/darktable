@@ -906,5 +906,96 @@ do {
     }
 }
 
+// MS the mask controls the app shows (MaskSchema) against the engine that reads them
+do {
+    var misses: [String] = [], badDefaults: [String] = [], nonFinite: [String] = []
+    for kind in MaskKind.allCases {
+        let base: [String: Double] = ["mask_mode": 2, "mask_kind": Double(kind.rawValue)]
+        var atDefaults = base
+        for c in kind.controls { atDefaults[c.key] = c.defaultValue }
+        guard let empty = Mask.spec(from: base), let full = Mask.spec(from: atDefaults) else { misses.append("\(kind.title): no spec"); continue }
+        if zip(empty.p, full.p).contains(where: { abs($0 - $1) > 1e-12 }) || empty.p.count != full.p.count { badDefaults.append(kind.title) }
+        for c in kind.controls {
+            let far = (c.range.upperBound - c.defaultValue) >= (c.defaultValue - c.range.lowerBound) ? c.range.upperBound : c.range.lowerBound
+            var moved = atDefaults; moved[c.key] = c.defaultValue + 0.6 * (far - c.defaultValue)
+            if Mask.spec(from: moved)?.p == full.p { misses.append("\(kind.title).\(c.key)") }
+            for end in [c.range.lowerBound, c.range.upperBound] {
+                var edge = atDefaults; edge[c.key] = end
+                guard let s = Mask.spec(from: edge) else { nonFinite.append("\(kind.title).\(c.key)"); continue }
+                for (x, y, rgb) in [(5.5, 5.5, SIMD3(0.2, 0.3, 0.4)), (40.5, 30.5, SIMD3(1.5, 0.1, 0.0)), (24.0, 20.0, SIMD3(0, 0, 0))] {
+                    let a = Mask.alpha(s, x: x, y: y, width: 48, height: 40, rgb: rgb)
+                    if !(a.isFinite && a >= 0 && a <= 1) { nonFinite.append("\(kind.title).\(c.key)=\(end)") }
+                }
+            }
+        }
+    }
+    check("MS1 every control the app shows for a mask kind changes what the engine parses (a typo in a key would not)", misses.isEmpty, "\(misses)")
+    check("MS1 the app's defaults are the engine's defaults, for every kind", badDefaults.isEmpty, "\(badDefaults)")
+    check("MS1 at both ends of every control's range the mask is a finite weight in 0...1", nonFinite.isEmpty, "\(nonFinite)")
+    let base: [String: Double] = ["mask_mode": 2, "mask_kind": 1]
+    check("MS1 the shared controls: invert and edge refine are read",
+          Mask.spec(from: base.merging(["mask_invert": 1]) { $1 })?.invert == true
+            && Mask.spec(from: base.merging([MaskCommon.refine.key: 7]) { $1 })?.refineRadius == 7)
+}
+
+// E-MQ masks live in the upright picture: the GPU matte equals the oracle for every orientation, and a portrait-shot frame
+// through the engine brightens the right half of the upright picture, not the right half of the sensor
+do {
+    var worstMatte = 0.0
+    for o in Orientation.allCases {
+        for blend in [["mask_mode": 2.0, "mask_kind": 1, "mask_angle": 33, "mask_feather": 0.3],
+                      ["mask_mode": 2.0, "mask_kind": 2, "mask_cx": 0.3, "mask_cy": 0.7, "mask_rx": 0.2, "mask_ry": 0.1, "mask_rotation": 20, "mask_feather": 0.4]] {
+            var s = Mask.spec(from: blend)!
+            s.orientation = o
+            worstMatte = max(worstMatte, maskMatteError(s))
+        }
+    }
+    check("E-MQ1 the GPU matte equals the oracle for all eight camera orientations (gradient and ellipse)", worstMatte < 1e-4, "\(worstMatte)")
+    let blend: [String: ParamValue] = ["mask_mode": .number(2), "mask_kind": .number(1), "mask_angle": .number(0), "mask_position": .number(0.5), "mask_feather": .number(0)]
+    let plain = (try? CIEngineProbe.renderSized(stack: [StackEntry(operation: "exposure", params: ["exposure": .number(1)])],
+                                                 pixels: detailPx, width: detailW, height: detailH, camera: .rotateCW90)) ?? (pixels: [SIMD4<Float>](), width: 0, height: 0)
+    let masked = (try? CIEngineProbe.renderSized(stack: [maskedExposure(blend)], pixels: detailPx, width: detailW, height: detailH, camera: .rotateCW90)) ?? (pixels: [SIMD4<Float>](), width: 0, height: 0)
+    let clean = (try? CIEngineProbe.renderSized(stack: [], pixels: detailPx, width: detailW, height: detailH, camera: .rotateCW90)) ?? (pixels: [SIMD4<Float>](), width: 0, height: 0)
+    var okLeft = masked.pixels.count == detailW * detailH && masked.width == detailH && masked.height == detailW, okRight = okLeft
+    if okLeft {
+        for y in 0..<masked.height { for x in 0..<masked.width {
+            let i = y * masked.width + x
+            let want = x < masked.width / 2 ? clean.pixels[i] : plain.pixels[i]
+            for c in 0..<3 where !(masked.pixels[i][c].isFinite && abs(masked.pixels[i][c] - want[c]) <= 1e-4 * max(1, abs(want[c]))) {
+                if x < masked.width / 2 { okLeft = false } else { okRight = false }
+            }
+        } }
+    }
+    check("E-MQ2 in a portrait-shot frame the left half of the upright picture is untouched", okLeft)
+    check("E-MQ2 and the right half of the upright picture has the exposure", okRight)
+}
+
+// E-MS the mask overlay: where the matte is 1 the picture is half red, elsewhere untouched
+do {
+    var blend: [String: ParamValue] = ["mask_mode": .number(2), "mask_kind": .number(1), "mask_angle": .number(0), "mask_position": .number(0.5), "mask_feather": .number(0)]
+    let plain = runDetail([maskedExposure(blend)])
+    blend["mask_show"] = .number(1)
+    let shown = runDetail([maskedExposure(blend)])
+    var leftOK = shown.count == detailW * detailH, rightOK = leftOK
+    if leftOK {
+        for y in 0..<detailH { for x in 0..<detailW {
+            let i = y * detailW + x, p = plain[i], s = shown[i]
+            guard s.x.isFinite, s.y.isFinite, s.z.isFinite else { leftOK = false; rightOK = false; continue }
+            if x < detailW / 2 {
+                if abs(s.x - p.x) > 1e-5 || abs(s.y - p.y) > 1e-5 || abs(s.z - p.z) > 1e-5 { leftOK = false }
+            } else {
+                // half the exposed picture plus half of (1, 0.12, 0.12)
+                let want = SIMD3(0.5 * p.x + 0.5, 0.5 * p.y + 0.06, 0.5 * p.z + 0.06)
+                if abs(s.x - want.x) > 2e-4 * max(1, want.x) || abs(s.y - want.y) > 2e-4 * max(1, want.y) || abs(s.z - want.z) > 2e-4 * max(1, want.z) { rightOK = false }
+            }
+        } }
+    }
+    check("E-MS1 outside the mask the overlay changes nothing", leftOK)
+    check("E-MS1 inside the mask the picture is half red (0.5 * picture + 0.5 * (1, 0.12, 0.12))", rightOK)
+    var none = blend; none["mask_mode"] = .number(1)
+    let flat = runDetail([maskedExposure(none)]), flatPlain = runDetail([maskedExposure(["mask_mode": .number(1)])])
+    check("E-MS1 a module with no local mask ignores the flag", flat == flatPlain)
+}
+
 print(failures == 0 ? "\nall checks passed" : "\n\(failures) failed")
 exit(failures == 0 ? 0 : 1)

@@ -6,9 +6,9 @@
 // Masks live in a stack entry's `blend` dictionary (numbers only, so history, undo and the sidecar already carry them):
 //   mask_mode 2 = local mask; mask_kind 0 whole frame (alpha 1; the plumbing checks use it), 1 gradient, 2 ellipse, 3 luminance range, 4 colour range;
 //   mask_invert 0/1; mask_refine = guided-filter radius in pixels (0 = off); opacity 0...100 as for every blend.
-// Each kind reads its own keys (MaskGradient ... MaskColour). Coordinates are pixels of the frame the stack runs on
-// (the sensor-orientation image, before crop and rotate), x right, y down, pixel centres at +0.5, so a mask follows
-// the picture when geometry later moves it. Distances are in units of the frame diagonal D = hypot(width, height).
+// Each kind reads its own keys (MaskGradient ... MaskColour). Coordinates are pixels of the UPRIGHT picture as shot (the
+// camera's orientation applied, before the user's crop, straighten and flip), x right, y down, pixel centres at +0.5, so
+// "angle 0" runs left to right on a portrait photo too, and a mask follows the picture when geometry later moves it. Distances are in units of the frame diagonal D = hypot(width, height).
 //
 // The GPU twin is MetalMask; darkroom-engine-check proves them equal, tile seams included.
 
@@ -19,6 +19,9 @@ public struct MaskSpec: Sendable, Equatable {
     public var invert: Bool
     public var refineRadius: Int
     public var opacity: Double
+    /// The camera's orientation. A mask is drawn on the picture as you see it upright; the engine works on the sensor's frame,
+    /// so every pixel is first mapped through this to where it sits in the upright picture. `.none` for a frame that is upright.
+    public var orientation: Orientation = .none
     /// The kind's parameters, in the order its enum documents (at most 8).
     public var p: [Double]
 
@@ -65,7 +68,12 @@ public enum Mask {
     }
 
     /// The unrefined weight of one pixel: (x, y) its centre in frame pixels, `rgb` its working-space colour.
-    public static func alpha(_ spec: MaskSpec, x: Double, y: Double, width: Double, height: Double, rgb: SIMD3<Double>) -> Double {
+    public static func alpha(_ spec: MaskSpec, x sensorX: Double, y sensorY: Double, width sensorW: Double, height sensorH: Double,
+                             rgb: SIMD3<Double>) -> Double {
+        // the position in the upright picture (identity for an upright frame)
+        let frame = SIMD2(sensorW, sensorH)
+        let u = spec.orientation.map(SIMD2(sensorX, sensorY), size: frame), size = spec.orientation.outputSize(frame)
+        let x = u.x, y = u.y, width = size.x, height = size.y
         let a: Double
         switch spec.kind {
         case 1: a = MaskGradient.alpha(p: spec.p, x: x, y: y, width: width, height: height)

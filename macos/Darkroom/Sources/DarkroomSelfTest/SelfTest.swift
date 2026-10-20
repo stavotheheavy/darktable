@@ -1431,6 +1431,52 @@ struct SelfTest {
             model.proMenuOpen = nil
             check(curveHits.count >= 2 && queryCleared && noneMatch && model.proMenuOpen == nil,
                   "PP15 the Pro dropdowns: a search for curve finds \(curveHits.count) modules, opening another menu clears it, a nonsense search finds none")
+            // PP16 the mask controls change the picture where they say: a +2 EV exposure behind a hard gradient (angle 0,
+            // position 0.5) brightens the right half only; inverted, the left half only; undo removes it in one step
+            if let ex = model.modules.first(where: { $0.operation == "exposure" }), let exEntry = model.proMenu.flatMap(\.entries).first(where: { $0.modules.first?.operation == "exposure" }) {
+                func halves(_ f: CGImage?) -> (Double, Double) {
+                    guard let f, let l = f.cropping(to: CGRect(x: 0, y: 0, width: f.width / 2, height: f.height)),
+                          let r = f.cropping(to: CGRect(x: f.width / 2, y: 0, width: f.width / 2, height: f.height)) else { return (0, 0) }
+                    return (meanLuma(l), meanLuma(r))
+                }
+                model.addToPanel(exEntry)
+                let before = model.historyIndex
+                // the baseline has the exposure module ON (at a hair over 0 EV): off, the decoder's own tone curve is a different pipeline
+                if let evField = field(model, ex, "exposure") { model.setParam(ex, evField, to: .number(0.0001)) }
+                await model.settle()
+                let plain = halves(model.frame)
+                if let evField = field(model, ex, "exposure") { model.setParam(ex, evField, to: .number(2)) }
+                await model.settle()
+                let lit = halves(model.frame)
+                model.setMask(ex, mode: 2, kind: .gradient)
+                model.setBlend(ex, "mask_feather", to: .number(0), detail: "mask feather")
+                await model.settle()
+                let masked = halves(model.frame)
+                model.setBlend(ex, "mask_invert", to: .number(1), detail: "mask inverted")
+                await model.settle()
+                let inverted = halves(model.frame)
+                check(lit.0 > plain.0 + 5 && lit.1 > plain.1 + 5, "PP16 baseline: +2 EV brightens both halves (\(plain) to \(lit))")
+                check(abs(masked.0 - plain.0) < 2 && masked.1 > plain.1 + 5, "PP16 the gradient mask keeps the left half and brightens the right (left \(masked.0) vs \(plain.0), right \(masked.1) vs \(plain.1))")
+                check(inverted.0 > plain.0 + 5 && abs(inverted.1 - plain.1) < 2, "PP16 inverted, the left half brightens and the right stays (left \(inverted.0) vs \(plain.0), right \(inverted.1) vs \(plain.1))")
+                // PP17 the overlay: Show mask tints the screen render (and only it), and turning it off gives the same frame back
+                model.setBlend(ex, "mask_invert", to: .number(0), detail: "mask inverted")
+                await model.settle()
+                let beforeOverlay = bytes(model.frame)
+                model.maskShowID = ex.id
+                await model.settle()
+                let withOverlay = bytes(model.frame)
+                let exported = model.buildStack().contains { $0.blend["mask_show"] != nil }
+                model.maskShowID = nil
+                await model.settle()
+                check(withOverlay != nil && withOverlay != beforeOverlay, "PP17 Show mask changes the picture on screen")
+                check(!exported, "PP17 the export stack never carries the overlay flag")
+                check(bytes(model.frame) == beforeOverlay, "PP17 Show mask off gives back the same frame, byte for byte")
+                model.setMask(ex, mode: 0, kind: nil)
+                check(model.blendValue(ex, "mask_mode")?.double == 0 && model.edits[ex.id]?.blend.keys.contains(where: { $0.hasPrefix("mask_") }) != true,
+                      "PP16 picking everywhere clears every mask setting")
+                while model.historyIndex > before { model.undo() }
+                await model.settle()
+            } else { check(false, "PP16 exposure is in the module list") }
             model.mode = .simple
         } else {
             skip("pro panel", "the basics and their fields are the clean engine's")

@@ -70,11 +70,13 @@ public final class DarkroomModel {
     public var moduleQuery = ""
     public var activeOnly = false
     public var showDeprecated = false
-    public var blendOpen = false
+    public var blendOpen = false { didSet { if !blendOpen { maskShowID = nil } } }
     /// Which of Pro's header menus is open (the popover under its button), or nil.
     public var proMenuOpen: ProMenuKind? { didSet { if proMenuOpen != oldValue { proMenuQuery = "" } } }
     /// What the Modules dropdown's search field holds.
     public var proMenuQuery = ""
+    /// The module whose mask is drawn over the photo (red), or nil. Render-only: exports never carry it.
+    public var maskShowID: String? { didSet { if maskShowID != oldValue { requestRender() } } }
 
     // edits and history
     public private(set) var edits: EditMap = [:]
@@ -107,6 +109,8 @@ public final class DarkroomModel {
     public private(set) var scopes: ScopeData?
     public var probe: PixelProbe?
     public private(set) var saveError: String?
+    /// True on the clean engine: every per-pixel module can be limited to part of the picture by a local mask.
+    public private(set) var localMasks = false
     /// One sentence per module whose algorithm differs from the one that made the saved edits (empty when they match).
     public private(set) var versionNotices: [String] = []
     /// Set when the image's sidecar could not be read (a newer format, or damaged): the file is left alone and not saved over.
@@ -204,6 +208,7 @@ public final class DarkroomModel {
         do {
             try await engine.openSession(path: path, maxSide: Self.workingSize)
             modules = try await engine.sessionModules()
+            localMasks = !(await engine.algorithmVersions()).isEmpty
             info = await engine.sessionInfo()
             outputSize = nil
             proOpen = Set(modules.filter { $0.operation == "tonecurve" }.map(\.id))
@@ -401,6 +406,21 @@ public final class DarkroomModel {
         edits[m.id]?.blend[key] ?? blendBase(m, key)
     }
 
+    /// Picks how a module is limited: `mode` 0 off, 1 uniform (opacity only), 2 a local mask of `kind`. One history step.
+    /// A kind change drops the old kind's own settings (they mean other things); feather, invert and edge refine stay.
+    public func setMask(_ m: ModuleInfo, mode: Int, kind: MaskKind?) {
+        var e = edits[m.id] ?? ModuleEdit()
+        let shared: Set<String> = ["mask_feather", "mask_invert", "mask_refine"]
+        for k in Array(e.blend.keys) where k.hasPrefix("mask_") && (mode == 0 || !shared.contains(k)) { e.blend[k] = nil }
+        if mode != 0 {
+            e.blend["mask_mode"] = .number(Double(mode))
+            if let kind { e.blend["mask_kind"] = .number(Double(kind.rawValue)) }
+        }
+        if !m.enabled, e.enabled == nil, !e.blend.isEmpty { e.enabled = true }
+        let name = mode == 0 ? "off" : (kind?.title ?? "uniform")
+        commit(id: m.id, edit: e, label: title(m), detail: "mask: \(name)", target: nil)
+    }
+
     public func setBlend(_ m: ModuleInfo, _ key: String, to v: ParamValue, detail: String) {
         var e = edits[m.id] ?? ModuleEdit()
         if v == blendBase(m, key) { e.blend[key] = nil } else { e.blend[key] = v }
@@ -509,13 +529,16 @@ public final class DarkroomModel {
 
     // MARK: stack and rendering
 
-    public func stack(for map: EditMap) -> [StackEntry] {
+    /// `overlay` adds the render-only flag that draws the shown module's mask over the picture (the screen render, never an export).
+    public func stack(for map: EditMap, overlay: Bool = false) -> [StackEntry] {
         let byID = Dictionary(uniqueKeysWithValues: modules.map { ($0.id, $0) })
         return map.compactMap { id, e -> (Int, StackEntry)? in
             guard !e.isEmpty, let m = byID[id] else { return nil }
+            var blend = e.blend
+            if overlay, id == maskShowID, blend["mask_mode"]?.double == 2 { blend["mask_show"] = .number(1) }
             return (m.iopOrder, StackEntry(
                 operation: m.operation, multiPriority: m.multiPriority,
-                params: e.params, blend: e.blend, enabled: e.enabled ?? m.enabled))
+                params: e.params, blend: blend, enabled: e.enabled ?? m.enabled))
         }
         .sorted { $0.0 < $1.0 }
         .map(\.1)
@@ -600,7 +623,7 @@ public final class DarkroomModel {
         while wantsRender {
             wantsRender = false
             guard filePath != nil else { return }
-            let entries = stack(for: shownEdits)
+            let entries = stack(for: shownEdits, overlay: true)
             // geometry changes the size the region maths below works in
             outputSize = try? await engine.sessionOutputSize(stack: entries)
             renderGeneration += 1
@@ -624,7 +647,7 @@ public final class DarkroomModel {
                 } else {
                     lastFullRender = .milliseconds(result.milliseconds)
                     status = "\(result.width) x \(result.height)"
-                    if !showingOriginal { measureScopes(result.image) }
+                    if !showingOriginal && maskShowID == nil { measureScopes(result.image) }   // the red overlay is not part of the picture
                 }
             } catch is RenderCanceled {
                 // superseded: wantsRender is set and the loop renders the newest edit

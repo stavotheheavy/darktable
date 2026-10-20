@@ -180,6 +180,24 @@ public enum AutoTest {
             model.proMenuOpen = .history
             await shot("p9-\(label)-history-menu")
             model.proMenuOpen = nil
+            // the mask controls: exposure unfolded alone, its Blend and mask section open on a gradient, then an ellipse
+            if let ex = model.modules.first(where: { $0.operation == "exposure" }), let entry = model.proPanelEntries.first(where: { $0.modules.first?.operation == "exposure" }) {
+                model.proOpen = [entry.id]
+                model.blendOpen = true
+                model.setMask(ex, mode: 2, kind: .gradient)
+                await shot("p10-\(label)-mask-gradient")
+                model.setMask(ex, mode: 2, kind: .ellipse)
+                await shot("p11-\(label)-mask-ellipse")
+                model.maskShowID = ex.id
+                await shot("p12-\(label)-mask-overlay-ellipse")
+                model.setMask(ex, mode: 2, kind: .gradient)
+                model.setBlend(ex, "mask_angle", to: .number(35), detail: "angle")
+                model.setBlend(ex, "mask_feather", to: .number(0.3), detail: "feather")
+                await shot("p13-\(label)-mask-overlay-gradient")
+                model.maskShowID = nil
+                model.setMask(ex, mode: 0, kind: nil)
+                model.blendOpen = false
+            }
         }
         while model.historyIndex > start { model.undo() }
         win.setFrame(previousFrame, display: true)

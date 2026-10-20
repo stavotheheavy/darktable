@@ -1480,5 +1480,32 @@ do {
     check("DH6 finite at strength 1, a dim airlight, radius 1 and 40, past-white and negative colours", finite)
 }
 
+// MQ masks live in the upright picture: the camera's orientation maps each sensor pixel to where it sits as shot
+do {
+    func grad(_ o: Orientation, x: Double, y: Double) -> Double {
+        var s = Mask.spec(from: ["mask_mode": 2, "mask_kind": 1, "mask_angle": 0, "mask_position": 0.5, "mask_feather": 0])!
+        s.orientation = o
+        return Mask.alpha(s, x: x, y: y, width: 48, height: 40, rgb: SIMD3(0.3, 0.3, 0.3))
+    }
+    check("MQ1 upright frame: angle 0 grows to the right (sensor x decides)", grad(.none, x: 10.5, y: 5) == 0 && grad(.none, x: 40.5, y: 5) == 1)
+    check("MQ1 rotate CW 90 (a portrait shot): the same gradient still grows to the RIGHT of the upright picture, which is sensor y going up",
+          grad(.rotateCW90, x: 10.5, y: 39.5) == 0 && grad(.rotateCW90, x: 10.5, y: 0.5) == 1 && grad(.rotateCW90, x: 40.5, y: 0.5) == 1
+            && grad(.rotateCW90, x: 40.5, y: 39.5) == 0)
+    check("MQ1 rotate CCW 90: growing right is sensor y going down",
+          grad(.rotateCCW90, x: 10.5, y: 0.5) == 0 && grad(.rotateCCW90, x: 10.5, y: 39.5) == 1)
+    check("MQ1 rotate 180 flips it: growing right is sensor x going left", grad(.rotate180, x: 40.5, y: 5) == 0 && grad(.rotate180, x: 10.5, y: 5) == 1)
+    var ell = Mask.spec(from: ["mask_mode": 2, "mask_kind": 2, "mask_rx": 0.1, "mask_ry": 0.1, "mask_feather": 0])!
+    ell.orientation = .rotateCW90
+    check("MQ1 an ellipse at the centre stays at the centre of a rotated frame, and the far corner stays outside",
+          Mask.alpha(ell, x: 24, y: 20, width: 48, height: 40, rgb: SIMD3(0.3, 0.3, 0.3)) == 1
+            && Mask.alpha(ell, x: 1, y: 1, width: 48, height: 40, rgb: SIMD3(0.3, 0.3, 0.3)) == 0)
+    // an off-centre ellipse (cx 0.25, cy 0.25 of the UPRIGHT picture): upright 40x48 centre (10, 12) is sensor (12, 40 - 10 = 30) for CW 90
+    var off = Mask.spec(from: ["mask_mode": 2, "mask_kind": 2, "mask_cx": 0.25, "mask_cy": 0.25, "mask_rx": 0.05, "mask_ry": 0.05, "mask_feather": 0])!
+    off.orientation = .rotateCW90
+    check("MQ1 an off-centre ellipse lands where the upright picture puts it (sensor (12, 30) for a CW 90 shot, not (12, 10))",
+          Mask.alpha(off, x: 12, y: 30, width: 48, height: 40, rgb: SIMD3(0.3, 0.3, 0.3)) == 1
+            && Mask.alpha(off, x: 12, y: 10, width: 48, height: 40, rgb: SIMD3(0.3, 0.3, 0.3)) == 0)
+}
+
 print(failures == 0 ? "\nall checks passed" : "\n\(failures) failed")
 exit(failures == 0 ? 0 : 1)

@@ -568,18 +568,26 @@ struct BlendSection: View {
         ("lightness", 0x10), ("chromaticity", 0x11), ("difference", 0x17), ("add", 0x06), ("subtract", 0x07),
     ]
 
+    private var maskMode: Int { Int(model.blendValue(module, "mask_mode")?.double ?? 0) }
+    private var kind: MaskKind? { MaskKind(rawValue: Int(model.blendValue(module, "mask_kind")?.double ?? 0)) }
+    private var opacity: Double { model.blendValue(module, "opacity")?.double ?? 100 }
+
+    private var summary: String {
+        switch maskMode {
+        case 0: return "off"
+        case 2 where model.localMasks: return "\(kind?.title ?? "mask") · \(Int(opacity.rounded()))%"
+        default: return "uniform · \(Int(opacity.rounded()))%"
+        }
+    }
+
     var body: some View {
-        let maskMode = Int(model.blendValue(module, "mask_mode")?.double ?? 0)
-        let opacity = model.blendValue(module, "opacity")?.double ?? 100
         VStack(alignment: .leading, spacing: 4) {
             Divider().padding(.vertical, 4)
             Button { withAnimation(.smooth(duration: 0.2)) { model.blendOpen.toggle() } } label: {
                 HStack {
                     Text("Blend and mask").font(.callout.weight(.semibold))
                     Spacer()
-                    Text(maskMode == 0 ? "off" : "uniform · \(Int(opacity.rounded()))%")
-                        .font(.caption.monospaced())
-                        .foregroundStyle(.secondary)
+                    Text(summary).font(.caption.monospaced()).foregroundStyle(.secondary)
                     Image(systemName: open ? "chevron.up" : "chevron.down").font(.caption)
                 }
                 .frame(height: 34)
@@ -589,63 +597,143 @@ struct BlendSection: View {
             .rig("blend-toggle")
 
             if open {
-                Picker("Mask", selection: Binding(
-                    get: { maskMode == 0 ? 0 : 1 },
-                    set: { model.setBlend(module, "mask_mode", to: .number(Double($0)),
-                                          detail: "blend: \($0 == 0 ? "off" : "uniformly")") })
-                ) {
-                    Text("off").tag(0)
-                    Text("uniformly").tag(1)
-                }
-                .pickerStyle(.segmented)
-                .labelsHidden()
-                .rig("blend-mask")
-                Text("Drawn and parametric masks are not available yet.")
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
-
-                if maskMode != 0 {
-                    HStack {
-                        Text("Blend mode").font(.footnote).foregroundStyle(.secondary)
-                        Spacer()
-                        Picker("Blend mode", selection: Binding(
-                            get: { Int(model.blendValue(module, "blend_mode")?.double ?? 0x18) },
-                            set: { v in
-                                let name = Self.modes.first { $0.1 == v }?.0 ?? "\(v)"
-                                model.setBlend(module, "blend_mode", to: .number(Double(v)), detail: "blend mode: \(name)")
-                            })
-                        ) {
-                            ForEach(Self.modes, id: \.1) { Text($0.0).tag($0.1) }
-                        }
-                        .labelsHidden()
-                        .frame(width: 140)
-                        .rig("blend-mode")
-                    }
-                    HStack {
-                        Text("Opacity").font(.footnote).foregroundStyle(.secondary)
-                        Spacer()
-                        Text("\(Int(opacity.rounded()))%").font(.footnote.monospacedDigit())
-                    }
-                    Slider(
-                        value: Binding(get: { opacity }, set: {
-                            model.setBlend(module, "opacity", to: .number($0.rounded()),
-                                           detail: "opacity: \(Int($0.rounded()))%")
-                        }),
-                        in: 0...100,
-                        onEditingChanged: { model.setDragging($0) }
-                    )
-                    .tint(Theme.accent)
-                    .accessibilityLabel("Opacity")
-                    .rig("blend-opacity")
-                    Toggle("Reverse", isOn: Binding(
-                        get: { model.blendValue(module, "reverse")?.bool ?? false },
-                        set: { model.setBlend(module, "reverse", to: .bool($0), detail: "blend reversed: \($0 ? "on" : "off")") }))
-                        .font(.footnote)
-                        .toggleStyle(.switch)
-                        .tint(Theme.accent)
-                        .rig("blend-reverse")
-                }
+                if model.localMasks { localMaskControls } else { uniformControls }
             }
+        }
+    }
+
+    // MARK: the clean engine: where the edit applies
+
+    @ViewBuilder private var localMaskControls: some View {
+        Text("Apply this edit")
+            .font(.caption).foregroundStyle(.secondary)
+        let choices: [(title: String, mode: Int, kind: MaskKind?)] =
+            [("everywhere", 0, nil), ("uniform", 1, nil)] + MaskKind.allCases.map { ($0.title, 2, $0) }
+        LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 6), count: 3), spacing: 6) {
+            ForEach(choices, id: \.title) { c in
+                let selected = maskMode == c.mode && (c.mode != 2 || kind == c.kind)
+                Button { model.setMask(module, mode: c.mode, kind: c.kind) } label: {
+                    Text(c.title).font(.caption.weight(.medium)).lineLimit(1).minimumScaleFactor(0.8)
+                        .frame(maxWidth: .infinity, minHeight: 32)
+                        .background(selected ? Theme.selectedFill : Color.white.opacity(0.08), in: Capsule())
+                        .overlay(Capsule().strokeBorder(selected ? Theme.selectedRing : .clear, lineWidth: 1))
+                }
+                .buttonStyle(.plain)
+                .accessibilityLabel("Apply \(c.title)")
+                .accessibilityAddTraits(selected ? .isSelected : [])
+                .rig("mask-kind-\(c.title)")
+            }
+        }
+        if maskMode == 2, let kind {
+            ForEach(kind.controls, id: \.key) { c in MaskSlider(model: model, module: module, control: c) }
+            Toggle("Invert", isOn: Binding(
+                get: { (model.blendValue(module, "mask_invert")?.double ?? 0) != 0 },
+                set: { model.setBlend(module, "mask_invert", to: .number($0 ? 1 : 0), detail: "mask inverted: \($0 ? "on" : "off")") }))
+                .font(.footnote)
+                .toggleStyle(.switch)
+                .tint(Theme.accent)
+                .rig("mask-invert")
+            MaskSlider(model: model, module: module, control: MaskCommon.refine)
+            Toggle("Show mask", isOn: Binding(
+                get: { model.maskShowID == module.id },
+                set: { model.maskShowID = $0 ? module.id : nil }))
+                .font(.footnote)
+                .toggleStyle(.switch)
+                .tint(Theme.accent)
+                .rig("mask-show")
+        }
+        if maskMode != 0 { opacityControl }
+    }
+
+    // MARK: the darktable engine: uniform blending only
+
+    @ViewBuilder private var uniformControls: some View {
+        Picker("Mask", selection: Binding(
+            get: { maskMode == 0 ? 0 : 1 },
+            set: { model.setBlend(module, "mask_mode", to: .number(Double($0)),
+                                  detail: "blend: \($0 == 0 ? "off" : "uniformly")") })
+        ) {
+            Text("off").tag(0)
+            Text("uniformly").tag(1)
+        }
+        .pickerStyle(.segmented)
+        .labelsHidden()
+        .rig("blend-mask")
+        Text("Drawn and parametric masks are not available yet.")
+            .font(.caption2)
+            .foregroundStyle(.secondary)
+
+        if maskMode != 0 {
+            HStack {
+                Text("Blend mode").font(.footnote).foregroundStyle(.secondary)
+                Spacer()
+                Picker("Blend mode", selection: Binding(
+                    get: { Int(model.blendValue(module, "blend_mode")?.double ?? 0x18) },
+                    set: { v in
+                        let name = Self.modes.first { $0.1 == v }?.0 ?? "\(v)"
+                        model.setBlend(module, "blend_mode", to: .number(Double(v)), detail: "blend mode: \(name)")
+                    })
+                ) {
+                    ForEach(Self.modes, id: \.1) { Text($0.0).tag($0.1) }
+                }
+                .labelsHidden()
+                .frame(width: 140)
+                .rig("blend-mode")
+            }
+            opacityControl
+            Toggle("Reverse", isOn: Binding(
+                get: { model.blendValue(module, "reverse")?.bool ?? false },
+                set: { model.setBlend(module, "reverse", to: .bool($0), detail: "blend reversed: \($0 ? "on" : "off")") }))
+                .font(.footnote)
+                .toggleStyle(.switch)
+                .tint(Theme.accent)
+                .rig("blend-reverse")
+        }
+    }
+
+    @ViewBuilder private var opacityControl: some View {
+        HStack {
+            Text("Opacity").font(.footnote).foregroundStyle(.secondary)
+            Spacer()
+            Text("\(Int(opacity.rounded()))%").font(.footnote.monospacedDigit())
+        }
+        Slider(
+            value: Binding(get: { opacity }, set: {
+                model.setBlend(module, "opacity", to: .number($0.rounded()), detail: "opacity: \(Int($0.rounded()))%")
+            }),
+            in: 0...100,
+            onEditingChanged: { model.setDragging($0) }
+        )
+        .tint(Theme.accent)
+        .accessibilityLabel("Opacity")
+        .rig("blend-opacity")
+    }
+}
+
+/// One mask setting: label and value above a slider, written into the module's blend keys (one history step per drag).
+struct MaskSlider: View {
+    @Bindable var model: DarkroomModel
+    let module: ModuleInfo
+    let control: MaskControl
+
+    var body: some View {
+        let value = model.blendValue(module, control.key)?.double ?? control.defaultValue
+        VStack(spacing: 2) {
+            HStack {
+                Text(control.label).font(.footnote).foregroundStyle(.secondary)
+                Spacer()
+                Text(String(format: "%.\(control.decimals)f", value) + control.unit).font(.footnote.monospacedDigit())
+            }
+            Slider(
+                value: Binding(get: { min(max(value, control.range.lowerBound), control.range.upperBound) }, set: {
+                    model.setBlend(module, control.key, to: .number($0), detail: "mask \(control.label): \(String(format: "%.\(control.decimals)f", $0))\(control.unit)")
+                }),
+                in: control.range,
+                onEditingChanged: { model.setDragging($0) }
+            )
+            .tint(Theme.accent)
+            .accessibilityLabel(control.label)
+            .rig("mask-\(control.key)")
         }
     }
 }

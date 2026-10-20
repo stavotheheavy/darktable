@@ -86,6 +86,14 @@ public struct BlendInfo: Sendable, Equatable {
     public var contrast: Double
     public var brightness: Double
 
+    /// A module's blending at its defaults: uniform off, normal mode, full opacity.
+    public init(maskMode: Int = 0, blendMode: Int = 0x18, reverse: Bool = false, opacity: Double = 100, blendParameter: Double = 0,
+                maskCombine: Int = 0, featheringRadius: Double = 0, blurRadius: Double = 0, contrast: Double = 0, brightness: Double = 0) {
+        self.maskMode = maskMode; self.blendMode = blendMode; self.reverse = reverse; self.opacity = opacity
+        self.blendParameter = blendParameter; self.maskCombine = maskCombine; self.featheringRadius = featheringRadius
+        self.blurRadius = blurRadius; self.contrast = contrast; self.brightness = brightness
+    }
+
     static func from(json o: [String: Any]) -> BlendInfo {
         func d(_ k: String) -> Double { (o[k] as? NSNumber)?.doubleValue ?? 0 }
         func i(_ k: String) -> Int { (o[k] as? NSNumber)?.intValue ?? 0 }
