@@ -17,6 +17,9 @@ public protocol PhotoEngine: Actor {
     func sessionRenderRegion(stack: [StackEntry], scale: Double, x: Int, y: Int,
                              width: Int, height: Int) async throws -> RenderedFrame
     func sessionInfo() async -> SessionInfo?
+    /// The camera's embedded preview of the open image, at the working size. Shown first
+    /// while the full render is still coming; nil when the engine has none to offer.
+    func sessionPreview() async throws -> RenderedFrame?
     func sessionModules() async throws -> [ModuleInfo]
     func exportRender(path: String, maxSide: Int, stack: [StackEntry]) async throws -> RenderedFrame
 
@@ -32,4 +35,7 @@ extension PhotoEngine {
     public func render(path: String, maxSide: Int) async throws -> RenderedFrame {
         try await render(path: path, maxSide: maxSide, stack: [])
     }
+
+    /// Engines without a preview path (darktable) answer nil, and the UI waits for the render.
+    public func sessionPreview() async throws -> RenderedFrame? { nil }
 }

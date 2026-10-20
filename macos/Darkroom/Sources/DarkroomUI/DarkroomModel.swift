@@ -175,6 +175,12 @@ public final class DarkroomModel {
             try await engine.openSession(path: path, maxSide: Self.workingSize)
             modules = try await engine.sessionModules()
             info = await engine.sessionInfo()
+            // the embedded preview shows at once as a draft; the full render replaces it.
+            // A missing preview is not an error: the open continues and waits for the render.
+            if let preview = try? await engine.sessionPreview() {
+                frame = preview.image
+                frameIsDraft = true
+            }
         } catch {
             status = "\(error)"
             return

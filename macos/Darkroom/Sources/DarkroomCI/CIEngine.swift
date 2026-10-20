@@ -2,8 +2,10 @@ import CoreGraphics
 import CoreImage
 import DarkroomEngineAPI
 import Foundation
+import ImageIO
 import Metal
 import Synchronization
+import UniformTypeIdentifiers
 
 /// The clean engine: Apple's RAW decoder through Core Image. Written from Apple's Core
 /// Image documentation only; it does not use darktable code (see THIRD-PARTY.md).
@@ -16,10 +18,12 @@ import Synchronization
 /// pixels, with the origin at the top left.
 public actor CIEngine: PhotoEngine {
     private struct Session {
+        let url: URL
         let raw: CIRAWFilter
         let native: CGSize
         /// Native pixels to working-frame pixels for the maxSide this session was opened at.
         let fit: Double
+        let maxSide: Int
     }
 
     private var context: CIContext?
@@ -92,6 +96,35 @@ public actor CIEngine: PhotoEngine {
         session.map { $0.raw.decoderVersion.rawValue }
     }
 
+    /// The camera's embedded JPEG, read by ImageIO without decoding the RAW. Decoding it
+    /// is what makes the first frame fast; the full render replaces it when ready.
+    /// Returns nil when the file has no embedded preview or it is not sRGB, so the UI
+    /// simply waits for the full render.
+    public func sessionPreview() async throws -> RenderedFrame? {
+        let s = try openedSession()
+        let started = ContinuousClock.now
+        let options: [CFString: Any] = [
+            kCGImageSourceCreateThumbnailFromImageIfAbsent: false,   // never fall back to a full decode
+            kCGImageSourceCreateThumbnailWithTransform: true,        // apply EXIF orientation
+            kCGImageSourceThumbnailMaxPixelSize: s.maxSide,
+        ]
+        // Read the file mapped and build the source from Data, not from the URL: a URL-backed
+        // ImageIO source kept about 0.85 MB per open, so RSS grew with every photo opened.
+        // Data carries no file name, so the type comes from the extension: without it ImageIO
+        // reads a RAW as plain TIFF and finds only the tiny EXIF thumbnail, or none.
+        let typeHint = UTType(filenameExtension: s.url.pathExtension)?.identifier
+        let sourceOptions = typeHint.map { [kCGImageSourceTypeIdentifierHint: $0] as CFDictionary }
+        guard let data = try? Data(contentsOf: s.url, options: .alwaysMapped),
+              let source = CGImageSourceCreateWithData(data as CFData, sourceOptions),
+              let cg = CGImageSourceCreateThumbnailAtIndex(source, 0, options as CFDictionary),
+              cg.colorSpace?.name == CGColorSpace.sRGB
+        else { return nil }
+        let elapsed = started.duration(to: .now)
+        let ms = Double(elapsed.components.seconds) * 1_000
+            + Double(elapsed.components.attoseconds) / 1_000_000_000_000_000
+        return RenderedFrame(image: cg, width: cg.width, height: cg.height, milliseconds: ms)
+    }
+
     public func sessionInfo() async -> SessionInfo? {
         guard let s = session else { return nil }
         return SessionInfo(
@@ -154,7 +187,7 @@ public actor CIEngine: PhotoEngine {
         let native = raw.nativeSize
         let long = max(native.width, native.height)
         let fit = long > 0 ? min(1, Double(maxSide) / Double(long)) : 1
-        return Session(raw: raw, native: native, fit: fit)
+        return Session(url: url, raw: raw, native: native, fit: fit, maxSide: maxSide)
     }
 
     /// Decode at `scale` of the native size. Decoding small is what makes open fast:

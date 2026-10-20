@@ -391,8 +391,10 @@ struct SelfTest {
     }
 
     /// Open-to-first-frame over every raw in a folder, for an engine that cannot edit yet
-    /// (the clean engine in M0). Each raw is opened, rendered once at the working size and
-    /// timed; RSS is sampled after the 10th raw and after the last one.
+    /// (the clean engine in M0). Two first-frame numbers per raw: the embedded preview (what
+    /// the UI shows first) and the full decode (what replaces it). The gate is on the preview:
+    /// every format's p50 under 150 ms. A raw with no preview counts its full decode instead
+    /// and is listed as an exception. RSS is sampled after the 10th raw and after the last.
     @MainActor
     static func runDecodeBench(engine: any PhotoEngine, folder: String) async throws {
         let fm = FileManager.default
@@ -406,56 +408,78 @@ struct SelfTest {
         let total = byFormat.values.reduce(0) { $0 + $1.count }
         print("decode bench: \(total) raws in \(folder)")
 
-        var table = ["| format | photos | open to first frame (ms, p50 / p95) | failed |", "|---|---|---|---|"]
-        var all: [Double] = []
+        var table = ["| format | photos | first frame, preview (ms, p50 / p95) | full decode (ms, p50 / p95) | preview found | failed |",
+                     "|---|---|---|---|---|---|"]
+        var previewAll: [Double] = []
+        var fullAll: [Double] = []
         var failures: [String] = []
+        var noPreview: [String] = []
         var decoders = Set<String>()
         var rssAfterTen: Double?
+        var rssAfterForty: Double?
         var p50ByFormat: [String: Double] = [:]
+        var processed = 0
         for (fmt, files) in byFormat.sorted(by: { $0.key < $1.key }) {
-            var opens: [Double] = []
+            var previews: [Double] = []
+            var fulls: [Double] = []
+            var found = 0
             var failed = 0
             for n in files {
                 let path = URL(fileURLWithPath: folder).appending(path: n).path
                 let t0 = Date()
                 do {
                     try await engine.openSession(path: path, maxSide: 1600)
+                    let hasPreview = try await engine.sessionPreview() != nil
+                    let afterPreview = Date()
                     _ = try await engine.sessionRender(stack: [], scale: 1)
+                    let afterFull = Date()
                     if let ci = engine as? CIEngine, let v = await ci.decoderVersion() { decoders.insert(v) }
                     await engine.closeSession()
-                    let ms = Date().timeIntervalSince(t0) * 1000
-                    opens.append(ms)
-                    all.append(ms)
+
+                    let fullMs = afterFull.timeIntervalSince(t0) * 1000
+                    // with no preview the UI waits for the full decode, so that is the first frame
+                    let firstMs = hasPreview ? afterPreview.timeIntervalSince(t0) * 1000 : fullMs
+                    if hasPreview { found += 1 } else { noPreview.append(n) }
+                    previews.append(firstMs)
+                    fulls.append(fullMs)
+                    previewAll.append(firstMs)
+                    fullAll.append(fullMs)
                 } catch {
                     failed += 1
                     failures.append("\(n): \(error)")
                     await engine.closeSession()
                 }
-                if all.count + failures.count == 10 { rssAfterTen = rssMB() }
+                processed += 1
+                if processed == 10 { rssAfterTen = rssMB() }
+                if processed == 40 { rssAfterForty = rssMB() }
             }
-            p50ByFormat[fmt] = percentile(opens, 0.5)
-            table.append(String(format: "| %@ | %d | %.0f / %.0f | %d |", fmt, files.count,
-                                percentile(opens, 0.5), percentile(opens, 0.95), failed))
+            p50ByFormat[fmt] = percentile(previews, 0.5)
+            table.append(String(format: "| %@ | %d | %.0f / %.0f | %.0f / %.0f | %d | %d |", fmt, files.count,
+                                percentile(previews, 0.5), percentile(previews, 0.95),
+                                percentile(fulls, 0.5), percentile(fulls, 0.95), found, failed))
             print(table.last!)
         }
 
-        let p50 = percentile(all, 0.5)
-        let rssEnd = rssMB()
-        let rssStart = rssAfterTen ?? 0
-        let drift = rssStart > 0 ? (rssEnd / rssStart - 1) * 100 : 0
-        // the gate is every format's p50 under 150 ms, not the pooled p50
+        // the gate is every format's preview p50 under 150 ms, not the pooled p50
         let failing = p50ByFormat.filter { $0.value >= 150 }.keys.sorted()
         let gate = failing.isEmpty ? "PASS" : "FAIL (\(failing.joined(separator: ", ")) at or over 150 ms)"
-        let summary = String(format: "all %d raws: open to first frame p50 %.0f ms, p95 %.0f ms; gate (each format p50 under 150 ms): %@. RSS after 10: %.0f MB, after all: %.0f MB (%+.0f%%, gate within 20%%).",
-                             all.count, p50, percentile(all, 0.95), gate, rssStart, rssEnd, drift)
+        let rssStart = rssAfterTen ?? 0
+        let rssMid = rssAfterForty ?? 0
+        let rssEnd = rssMB()
+        let drift = rssStart > 0 ? (rssEnd / rssStart - 1) * 100 : 0
+        let steady = rssMid > 0 ? (rssEnd / rssMid - 1) * 100 : 0
+        let summary = String(format: "all %d raws. first frame (preview) p50 %.0f ms, p95 %.0f ms. full decode p50 %.0f ms, p95 %.0f ms. Gate (each format's preview p50 under 150 ms): %@. RSS after 10: %.0f MB, after 40: %.0f MB, after all: %.0f MB (%+.0f%% from 10, %+.0f%% from 40 to the end).",
+                             previewAll.count, percentile(previewAll, 0.5), percentile(previewAll, 0.95),
+                             percentile(fullAll, 0.5), percentile(fullAll, 0.95), gate, rssStart, rssMid, rssEnd, drift, steady)
         let decoderLine = "decoder versions used: " + (decoders.isEmpty ? "none reported" : decoders.sorted().joined(separator: ", "))
         print(summary)
         print(decoderLine)
 
-        let header = "# Clean engine M0 bench\n\nFolder: \(folder)\nEngine: CIEngine (Core Image, CIRAWFilter), working frame 1600 px\n\n"
+        let header = "# Clean engine M0 bench\n\nFolder: \(folder)\nEngine: CIEngine (ImageIO embedded preview, then Core Image CIRAWFilter), working frame 1600 px\n\n"
         let body = table.joined(separator: "\n") + "\n\n" + summary + "\n\n" + decoderLine + "\n"
-        let failureList = failures.map { "- \($0)" }.joined(separator: "\n")
-        let report: String = header + body + (failures.isEmpty ? "" : "\nFailures:\n" + failureList + "\n")
+        let noPreviewList = noPreview.isEmpty ? "" : "\nNo embedded preview (full decode used as first frame):\n" + noPreview.map { "- \($0)" }.joined(separator: "\n") + "\n"
+        let failureList = failures.isEmpty ? "" : "\nFailures:\n" + failures.map { "- \($0)" }.joined(separator: "\n") + "\n"
+        let report: String = header + body + noPreviewList + failureList
         let out = NSHomeDirectory() + "/Documents/plans/2026-10-20-ci-engine-m0-bench.md"
         try? report.write(toFile: out, atomically: true, encoding: .utf8)
         print("wrote \(out)")
