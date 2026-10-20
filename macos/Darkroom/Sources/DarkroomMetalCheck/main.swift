@@ -372,5 +372,35 @@ do {
     check("CC1-CC3 colour helpers ran", false, "\(error)")
 }
 
+// monochrome with a colour filter: 4096 colours sweeping every hue at chroma up to 0.25, clamped to 0.002...2.5,
+// on Metal (monochromeBuf) against Monochrome.apply, unclamped; intensity 0.8, filter hue 200, strength 0.7
+do {
+    let moHueDegrees = 200.0
+    let moRamp = (0..<4096).map { i -> SIMD3<Double> in
+        let t = Double(i) / 4096
+        let lab = OkLab.lab(SIMD3(0.2 + 0.7 * t, 0.02 + 0.23 * t, 2 * .pi * Double(i % 512) / 512))
+        let rgb = OkLab.toWorking(lab)
+        return SIMD3(min(max(rgb.x, 0.002), 2.5), min(max(rgb.y, 0.002), 2.5), min(max(rgb.z, 0.002), 2.5))
+    }
+    let moFloat = moRamp.map { SIMD4<Float>(Float($0.x), Float($0.y), Float($0.z), 1) }
+    let moHue = moHueDegrees * .pi / 180
+    let moOut = try MetalPerPixel.run(source: MetalMonochrome.source, function: "monochromeBuf", pixels: moFloat,
+                                      uniforms: [0.8, 0.7, Float(cos(moHue)), Float(sin(moHue))])
+    var moFinite = moOut.count == moRamp.count
+    var moWorst = 0.0
+    for (px, g) in zip(moRamp, moOut) {
+        let cpu = Monochrome.apply(px, intensity: 0.8, filterHueDegrees: moHueDegrees, filterStrength: 0.7)
+        let gpu = SIMD3(Double(g.x), Double(g.y), Double(g.z))
+        moFinite = moFinite && gpu.x.isFinite && gpu.y.isFinite && gpu.z.isFinite
+        for k in 0..<3 {
+            moWorst = max(moWorst, abs(gpu[k] - cpu[k]) / max(1, abs(cpu[k])))
+        }
+    }
+    check("MO-M monochrome on Metal is finite and within 1e-4 of Monochrome.apply (unclamped)",
+          moFinite && moWorst < 1e-4, "finite \(moFinite), worst relative error \(moWorst)")
+} catch {
+    check("MO-M monochrome on Metal ran", false, "\(error)")
+}
+
 print(failures == 0 ? "\nall Metal checks passed" : "\n\(failures) failed")
 exit(failures == 0 ? 0 : 1)
