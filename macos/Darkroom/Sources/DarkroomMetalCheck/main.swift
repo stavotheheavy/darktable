@@ -365,9 +365,10 @@ do {
     }
     check("CC3 cc_luminance and cc_smoothstep match ColorCommon within 1e-5", worstMisc < 1e-5, "worst \(worstMisc)")
     let grey = OkLab.fromWorking(SIMD3(0.18, 0.18, 0.18))
-    // not exactly 0: the sRGB-to-XYZ white comes from the primaries, a hair off the white OkLab's matrix
-    // assumes; 7e-5 of chroma is about 1/300 of a just-visible OkLab difference (about 0.02)
-    check("CC3 grey is neutral in OkLab (chroma under 1e-3)", hypot(grey.y, grey.z) < 1e-3, "\(grey)")
+    // exactly neutral: workingToLMS is white-normalised (it was 7e-5 off before)
+    check("CC3 grey is neutral in OkLab (chroma under 1e-12)", hypot(grey.y, grey.z) < 1e-12, "\(grey)")
+    let white = OkLab.fromWorking(SIMD3(1, 1, 1))
+    check("CC3 white is L = 1, a = b = 0", abs(white.x - 1) < 1e-12 && hypot(white.y, white.z) < 1e-12, "\(white)")
 } catch {
     check("CC1-CC3 colour helpers ran", false, "\(error)")
 }

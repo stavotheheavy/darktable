@@ -44,7 +44,7 @@ struct WelcomeView: View {
 
     private var account: some View {
         VStack(alignment: .leading, spacing: 10) {
-            Text("Welcome to Darkroom").font(.largeTitle.weight(.semibold))
+            Text("Welcome to Vantage").font(.largeTitle.weight(.semibold))
             Text("Sign in with your Databit Dev account to share galleries and sell photos. Editing works on this Mac without it.")
                 .foregroundStyle(.secondary)
             VStack(spacing: 10) {
@@ -56,7 +56,7 @@ struct WelcomeView: View {
                 Text("Sign-in arrives with sharing and selling.").font(.caption).foregroundStyle(.secondary)
             }
             .padding(.top, 14)
-            Button { step = .mode } label: { Text("Use Darkroom on this Mac").frame(maxWidth: .infinity) }
+            Button { step = .mode } label: { Text("Use Vantage on this Mac").frame(maxWidth: .infinity) }
                 .buttonStyle(PrimaryCapsuleStyle())
                 .padding(.top, 14)
                 .rig("welcome-continue")

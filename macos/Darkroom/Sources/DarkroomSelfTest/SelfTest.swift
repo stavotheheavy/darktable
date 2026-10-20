@@ -74,6 +74,7 @@ struct SelfTest {
         let fromModule = take("--from")
         let stackFile = take("--stack")
         let schemaOp = take("--schema")
+        let oneShot = take("--one-shot")
         // darktable is the default; `ci` runs the clean engine (only --bench supports it so far)
         let engineName = take("--engine") ?? "darktable"
         guard let path = args.first else {
@@ -94,7 +95,9 @@ struct SelfTest {
                 cacheDir: env["DARKROOM_CACHE_DIR"].map { URL(fileURLWithPath: $0) } ?? home.appending(path: ".cache/darktable-fork"))
             print(String(format: "engine start: %.0f ms", Date().timeIntervalSince(t0) * 1000))
 
-            if let schemaOp {
+            if let oneShot {
+                try await runOneShot(engine: engine, sessionPath: path, other: oneShot)
+            } else if let schemaOp {
                 // a module's public parameter list, from the engine's introspection
                 try await engine.openSession(path: path, maxSide: 400)
                 for f in try await engine.schema(for: schemaOp).fields {
@@ -498,6 +501,30 @@ struct SelfTest {
         let out = NSHomeDirectory() + "/Documents/plans/2026-10-20-ci-engine-m0-bench.md"
         try? report.write(toFile: out, atomically: true, encoding: .utf8)
         print("wrote \(out)")
+    }
+
+    /// One-shot renders (the library's thumbnails, export) must not depend on the open session: a file
+    /// renders the same with no session, with another photo open, and as the open photo itself.
+    static func runOneShot(engine: any PhotoEngine, sessionPath: String, other: String) async throws {
+        var failures = 0
+        func check(_ ok: Bool, _ what: String) {
+            print((ok ? "  ok    " : "  FAIL  ") + what)
+            if !ok { failures += 1 }
+        }
+        let alone = try? await engine.render(path: other, maxSide: 600)
+        check(alone != nil, "\(URL(fileURLWithPath: other).lastPathComponent) renders with no session open (\(alone.map { "\($0.width)x\($0.height)" } ?? "failed"))")
+        try await engine.openSession(path: sessionPath, maxSide: 600)
+        let beside = try? await engine.render(path: other, maxSide: 600)
+        check(beside != nil && beside?.width == alone?.width && beside?.height == alone?.height
+              && meanDiff(fingerprint(beside!.image), fingerprint(alone!.image)) < 0.5,
+              "and the same with \(URL(fileURLWithPath: sessionPath).lastPathComponent) open (\(beside.map { "\($0.width)x\($0.height)" } ?? "failed"))")
+        let session = try await engine.sessionRender(stack: [], scale: 1)
+        let selfShot = try await engine.render(path: sessionPath, maxSide: 600)
+        check(selfShot.width == session.width && selfShot.height == session.height
+              && meanDiff(fingerprint(selfShot.image), fingerprint(session.image)) < 0.5,
+              "the open photo one-shot matches its session render (\(selfShot.width)x\(selfShot.height))")
+        print(failures == 0 ? "ONE-SHOT: ALL CHECKS PASSED" : "ONE-SHOT: \(failures) FAILED")
+        if failures > 0 { exit(1) }
     }
 
     /// One stack entry as a stack file spells it: `[{"operation": "exposure", "params": {"exposure": 1}}]`.

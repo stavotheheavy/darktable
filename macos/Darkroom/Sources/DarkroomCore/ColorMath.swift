@@ -80,15 +80,32 @@ public enum OkLab {
         [0.0329845436, 0.9293118715, 0.0361456387],
         [0.0482003018, 0.2643662691, 0.6338517070],
     ])
-    private static let lmsToLab = Mat3([
-        [0.2104542553, 0.7936177850, -0.0040720468],
-        [1.9779984951, -2.4285922050, 0.4505937099],
-        [0.0259040371, 0.7827717662, -0.8086757660],
-    ])
+    /// Ottosson's published matrix, with each row closed exactly: L sums to 1 and a, b to 0, so equal LMS
+    /// (any grey) is L = LMS, a = b = 0 to machine precision. The published values are rounded to 10 digits
+    /// (the b row summed to 3.7e-8); closing them moves no coefficient by more than 4e-8.
+    private static let lmsToLab: Mat3 = {
+        let published = [
+            [0.2104542553, 0.7936177850, -0.0040720468],
+            [1.9779984951, -2.4285922050, 0.4505937099],
+            [0.0259040371, 0.7827717662, -0.8086757660],
+        ]
+        let l = published[0].reduce(0, +)
+        return Mat3([
+            published[0].map { $0 / l },
+            [published[1][0], published[1][1], -(published[1][0] + published[1][1])],
+            [published[2][0], published[2][1], -(published[2][0] + published[2][1])],
+        ])
+    }()
     private static let toLMS = xyzToLMS.mul(ColorSpaces.rec2020ToXYZ)
     /// The engine's working space (linear sRGB primaries) to LMS, and the matrices Metal kernels bake in
     /// (see DarkroomMetal's MetalColorCommon, generated from these so the two cannot disagree).
-    public static let workingToLMS = xyzToLMS.mul(ColorSpaces.srgbToXYZ)
+    /// Each row is scaled to sum to 1, so working white (and every grey) lands on equal LMS and so on
+    /// a = b = 0 exactly: our sRGB-to-XYZ white, built from the primaries, is a hair off the white OkLab's
+    /// matrix assumes, which left greys with about 7e-5 of chroma and let colour filters tint them.
+    public static let workingToLMS: Mat3 = {
+        let m = xyzToLMS.mul(ColorSpaces.srgbToXYZ).m
+        return Mat3(m.map { row in let sum = row.reduce(0, +); return row.map { $0 / sum } })
+    }()
     public static let workingFromLMS = workingToLMS.inverse()!
     public static let lmsToLabMatrix = lmsToLab
     public static let labToLMSMatrix = lmsToLab.inverse()!

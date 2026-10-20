@@ -14,7 +14,7 @@ struct DarkroomApp: App {
     }
 
     var body: some Scene {
-        WindowGroup("Darkroom") {
+        WindowGroup("Vantage") {
             DarkroomRoot()
         }
         .defaultSize(width: 1280, height: 860)
