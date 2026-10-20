@@ -228,6 +228,57 @@ struct SimplePanel: View {
                 }
             }
 
+            Divider().padding(.vertical, 6)
+
+            VStack(spacing: 6) {
+                HStack {
+                    Text("Straighten").font(.callout.weight(.medium))
+                    Spacer()
+                    Text(String(format: "%+.1f°", model.simpleStraighten))
+                        .font(.caption.monospacedDigit()).foregroundStyle(.secondary)
+                }
+                Slider(value: Binding(get: { model.simpleStraighten }, set: { model.setStraighten($0) }),
+                       in: DarkroomModel.straightenRange, step: 0.1, onEditingChanged: { model.setDragging($0) })
+                    .tint(Theme.accent)
+                    .frame(height: 36)
+                    .accessibilityLabel("Straighten")
+                    .rig("simple-straighten")
+                    .onAppear {
+                        if Rig.enabled {
+                            Rig.setters["simple-straighten"] = { frac in
+                                let r = DarkroomModel.straightenRange
+                                model.setStraighten(r.lowerBound + (r.upperBound - r.lowerBound) * frac)
+                            }
+                        }
+                    }
+
+                Button { model.rotate90() } label: {
+                    Label("Rotate 90°", systemImage: "rotate.right")
+                        .font(.callout.weight(.medium))
+                        .frame(maxWidth: .infinity, minHeight: 36)
+                        .background(Color.white.opacity(0.12), in: Capsule())
+                }
+                .buttonStyle(.plain)
+                .rig("simple-rotate")
+                .accessibilityLabel("Rotate 90 degrees clockwise")
+
+                HStack(spacing: 6) {
+                    ForEach(SimpleAspect.allCases) { a in
+                        Button { model.setAspect(a) } label: {
+                            Text(a.rawValue)
+                                .font(.caption.weight(.medium))
+                                .frame(maxWidth: .infinity, minHeight: 30)
+                                .background(Color.white.opacity(model.simpleAspect == a ? 0.26 : 0.08), in: Capsule())
+                        }
+                        .buttonStyle(.plain)
+                        .rig("simple-aspect-\(a.rawValue)")
+                        .accessibilityAddTraits(model.simpleAspect == a ? .isSelected : [])
+                    }
+                }
+            }
+            .disabled(!model.simpleGeometryReady)
+            .opacity(model.simpleGeometryReady ? 1 : 0.5)
+
             if model.customEditCount > 0 {
                 VStack(alignment: .leading, spacing: 4) {
                     HStack {
