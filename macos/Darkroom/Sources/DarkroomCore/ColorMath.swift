@@ -86,6 +86,12 @@ public enum OkLab {
         [0.0259040371, 0.7827717662, -0.8086757660],
     ])
     private static let toLMS = xyzToLMS.mul(ColorSpaces.rec2020ToXYZ)
+    /// The engine's working space (linear sRGB primaries) to LMS, and the matrices Metal kernels bake in
+    /// (see DarkroomMetal's MetalColorCommon, generated from these so the two cannot disagree).
+    public static let workingToLMS = xyzToLMS.mul(ColorSpaces.srgbToXYZ)
+    public static let workingFromLMS = workingToLMS.inverse()!
+    public static let lmsToLabMatrix = lmsToLab
+    public static let labToLMSMatrix = lmsToLab.inverse()!
     private static let fromLMS = toLMS.inverse()!
     private static let fromLab = lmsToLab.inverse()!
 
@@ -98,6 +104,17 @@ public enum OkLab {
     public static func toRec2020(_ lab: SIMD3<Double>) -> SIMD3<Double> {
         let c = fromLab.apply(lab)
         return fromLMS.apply(SIMD3(c.x * c.x * c.x, c.y * c.y * c.y, c.z * c.z * c.z))
+    }
+
+    /// Linear working-space RGB (sRGB primaries, the engine's working space) to OkLab.
+    public static func fromWorking(_ rgb: SIMD3<Double>) -> SIMD3<Double> {
+        let lms = workingToLMS.apply(rgb)
+        return lmsToLab.apply(SIMD3(cbrt(lms.x), cbrt(lms.y), cbrt(lms.z)))
+    }
+
+    public static func toWorking(_ lab: SIMD3<Double>) -> SIMD3<Double> {
+        let c = labToLMSMatrix.apply(lab)
+        return workingFromLMS.apply(SIMD3(c.x * c.x * c.x, c.y * c.y * c.y, c.z * c.z * c.z))
     }
 
     /// (L, chroma, hue in radians -pi...pi)
@@ -149,5 +166,26 @@ public enum Transfer {
 
     public static func hlgDecode(_ s: Double) -> Double {
         s <= 0.5 ? s * s / 3 : (exp((s - hlgC) / hlgA) + hlgB) / 12
+    }
+}
+
+// MARK: - Shared per-pixel helpers (the Metal twins live in DarkroomMetal's MetalColorCommon)
+
+public enum ColorCommon {
+    /// Rec.709 / sRGB luminance of linear working-space RGB.
+    public static func luminance(_ rgb: SIMD3<Double>) -> Double { 0.2126 * rgb.x + 0.7152 * rgb.y + 0.0722 * rgb.z }
+
+    /// Hermite smoothstep: 0 below `e0`, 1 above `e1`, 3t^2 - 2t^3 between.
+    public static func smoothstep(_ e0: Double, _ e1: Double, _ x: Double) -> Double {
+        let t = min(max((x - e0) / (e1 - e0), 0), 1)
+        return t * t * (3 - 2 * t)
+    }
+
+    /// The signed smallest difference between two hue angles in radians, in -pi...pi.
+    public static func hueDifference(_ a: Double, _ b: Double) -> Double {
+        var d = (a - b).truncatingRemainder(dividingBy: 2 * .pi)
+        if d > .pi { d -= 2 * .pi }
+        if d < -.pi { d += 2 * .pi }
+        return d
     }
 }

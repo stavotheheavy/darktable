@@ -321,5 +321,56 @@ do {
     check("C2 tone curve extrapolation kernel ran", false, "\(error)")
 }
 
+// CC1-CC3: the shared colour helpers every colour card's kernel uses, against DarkroomCore
+do {
+    let probe = MetalColorCommon.source + """
+    kernel void ccLabBuf(device const float4 *src [[buffer(0)]], device float4 *dst [[buffer(1)]],
+                         constant float *u [[buffer(2)]], uint i [[thread_position_in_grid]]) {
+        dst[i] = float4(cc_to_oklab(src[i].rgb), 1);
+    }
+    kernel void ccRoundBuf(device const float4 *src [[buffer(0)]], device float4 *dst [[buffer(1)]],
+                           constant float *u [[buffer(2)]], uint i [[thread_position_in_grid]]) {
+        dst[i] = float4(cc_from_oklab(cc_to_oklab(src[i].rgb)), 1);
+    }
+    kernel void ccMiscBuf(device const float4 *src [[buffer(0)]], device float4 *dst [[buffer(1)]],
+                          constant float *u [[buffer(2)]], uint i [[thread_position_in_grid]]) {
+        dst[i] = float4(cc_luminance(src[i].rgb), cc_smoothstep(0.2f, 0.6f, src[i].r), 0, 1);
+    }
+    """
+    // colours from deep shadow to past white, every hue
+    let sweep: [SIMD4<Float>] = (0..<4096).map { i in
+        let t = Double(i) / 4095, h = t * 37 * 2 * .pi, v = 0.002 + 2.5 * t
+        return SIMD4(Float(v * (0.6 + 0.4 * cos(h))), Float(v * (0.6 + 0.4 * cos(h - 2.1))), Float(v * (0.6 + 0.4 * cos(h + 2.1))), 1)
+    }
+    let rgb = sweep.map { SIMD3<Double>(Double($0.x), Double($0.y), Double($0.z)) }
+    let lab = try MetalPerPixel.run(source: probe, function: "ccLabBuf", pixels: sweep, uniforms: [])
+    var worstLab = 0.0, finite = true
+    for (g, c) in zip(lab, rgb) {
+        let o = OkLab.fromWorking(c)
+        if !(g.x.isFinite && g.y.isFinite && g.z.isFinite) { finite = false }
+        worstLab = max(worstLab, abs(Double(g.x) - o.x), abs(Double(g.y) - o.y), abs(Double(g.z) - o.z))
+    }
+    check("CC1 cc_to_oklab matches OkLab.fromWorking within 2e-5", finite && worstLab < 2e-5, "worst \(worstLab), finite \(finite)")
+    let round = try MetalPerPixel.run(source: probe, function: "ccRoundBuf", pixels: sweep, uniforms: [])
+    var worstRound = 0.0
+    for (g, c) in zip(round, rgb) {
+        for k in 0..<3 { worstRound = max(worstRound, abs(Double(g[k]) - c[k]) / max(1, abs(c[k]))) }
+    }
+    check("CC2 cc_from_oklab(cc_to_oklab(x)) returns x within 1e-4", worstRound < 1e-4, "worst \(worstRound)")
+    let misc = try MetalPerPixel.run(source: probe, function: "ccMiscBuf", pixels: sweep, uniforms: [])
+    var worstMisc = 0.0
+    for (g, c) in zip(misc, rgb) {
+        worstMisc = max(worstMisc, abs(Double(g.x) - ColorCommon.luminance(c)) / max(1, ColorCommon.luminance(c)),
+                        abs(Double(g.y) - ColorCommon.smoothstep(0.2, 0.6, c.x)))
+    }
+    check("CC3 cc_luminance and cc_smoothstep match ColorCommon within 1e-5", worstMisc < 1e-5, "worst \(worstMisc)")
+    let grey = OkLab.fromWorking(SIMD3(0.18, 0.18, 0.18))
+    // not exactly 0: the sRGB-to-XYZ white comes from the primaries, a hair off the white OkLab's matrix
+    // assumes; 7e-5 of chroma is about 1/300 of a just-visible OkLab difference (about 0.02)
+    check("CC3 grey is neutral in OkLab (chroma under 1e-3)", hypot(grey.y, grey.z) < 1e-3, "\(grey)")
+} catch {
+    check("CC1-CC3 colour helpers ran", false, "\(error)")
+}
+
 print(failures == 0 ? "\nall Metal checks passed" : "\n\(failures) failed")
 exit(failures == 0 ? 0 : 1)
