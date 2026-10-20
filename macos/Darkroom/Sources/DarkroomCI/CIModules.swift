@@ -497,15 +497,26 @@ extension CIModule {
     /// kernel. Enabling it switches the decode to scene-linear (see `CIModule.sceneReferred`).
     static let display: CIModule = {
         var m = CIModule(
-            operation: "display", name: "display transform (scene-referred)", iopOrder: 90, defaultEnabled: false,
+            operation: "display", name: "display transform (scene-referred)", iopOrder: 90, defaultEnabled: true,
             fields: [
                 FieldSchema(name: "contrast", description: "contrast", kind: .float,
                             min: -100, max: 100, defaultValue: .number(0), options: []),
+                // scene-linear raw data sits dark of display white; this lifts it into the tone map's range
+                FieldSchema(name: "exposure", description: "exposure bias (EV)", kind: .float,
+                            min: -3, max: 3, defaultValue: .number(0), options: []),
             ],
-            apply: { image, v in try CIBridge.toneDisplay(image, contrast: v["contrast"] ?? 0, peak: v["peak"] ?? 1) })
+            apply: { image, v in
+                let g = Exposure.gain(ev: v["exposure"] ?? 0)
+                let lifted = try CIBridge.gain(image, scale: SIMD3(g, g, g))
+                return try CIBridge.toneDisplay(lifted, contrast: v["contrast"] ?? 0, peak: v["peak"] ?? 1)
+            })
         m.sceneReferred = true
         return m
     }()
+
+    /// Where a new photo's display transform starts, in stops, so an untouched raw lands near the camera's own brightness.
+    /// The field's own default stays 0: a saved edit that has no value (older sidecars) means "no lift".
+    static let defaultExposureBias = 0.5
 
     /// Flip, straighten and crop, with darktable's parameter names (read from its introspection) so one
     /// stack drives either engine. Their pixels come from `CIGeometry`; `apply` here is never called.

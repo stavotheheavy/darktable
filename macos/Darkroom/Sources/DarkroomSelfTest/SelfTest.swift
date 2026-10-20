@@ -1223,7 +1223,7 @@ struct SelfTest {
             model.zoom = .fit
             await model.settle()
             let names = model.proPanelEntries.map { $0.modules[0].operation }
-            check(Set(names) == Set(DarkroomModel.proBasics), "a new photo's panel holds the four basics (\(names.joined(separator: ", ")))")
+            check(Set(names) == Set(DarkroomModel.proBasics), "a new photo's panel holds the basics (\(names.joined(separator: ", ")))")
             if let shadhi = model.proMenu.flatMap(\.entries).first(where: { $0.modules[0].operation == "colorbalancergb" }) {
                 let before = bytes(model.frame), step = model.historyIndex
                 // colour balance is a basic: give it a visible setting so on/off shows in the frame

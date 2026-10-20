@@ -14,7 +14,7 @@ extension DarkroomModel {
     /// Shown and switched as one section: crop, straighten and the quarter turn its Rotate button writes.
     static let geometryOperations: Set<String> = ["crop", "ashift", "flip"]
     /// A new photo starts with these in the panel, at neutral settings.
-    public static let proBasics: Set<String> = ["temperature", "exposure", "tonecurve", "colorbalancergb"]
+    public static let proBasics: Set<String> = ["temperature", "exposure", "tonecurve", "colorbalancergb", "display"]
 
     /// The menu's groups, by operation; anything not listed (darktable has many more) goes under Other.
     static let proGroups: [(name: String, operations: Set<String>)] = [

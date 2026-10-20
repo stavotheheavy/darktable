@@ -29,6 +29,9 @@ public actor CIEngine: PhotoEngine {
         /// The decoder's own tone settings, restored when no scene-referred module is on.
         let boost: Float
         let localToneMap: Float
+        let boostShadow: Float
+        let shadowBias: Float
+        let sharpness: Float
         /// The camera's orientation. The decoder runs in sensor orientation (`native` is the sensor's size)
         /// and geometry applies this as the default flip, as darktable orders it.
         let camera: Orientation
@@ -148,7 +151,9 @@ public actor CIEngine: PhotoEngine {
             return ModuleInfo(operation: m.operation, name: m.name, iopOrder: m.iopOrder,
                        enabled: m.defaultEnabled, defaultEnabled: m.defaultEnabled,
                        supportsBlending: blends, noMasks: !blends,
-                       params: Dictionary(uniqueKeysWithValues: m.fields.map { ($0.name, $0.defaultValue) }),
+                       params: Dictionary(uniqueKeysWithValues: m.fields.map { f in
+                           (f.name, m.operation == "display" && f.name == "exposure" ? .number(CIModule.defaultExposureBias) : f.defaultValue)
+                       }),
                        blend: blends ? BlendInfo() : nil)
         }
     }
@@ -181,11 +186,8 @@ public actor CIEngine: PhotoEngine {
             let hdr = try Self.process(decoded, stack, camera: s.camera, hdrPeak: peak, scale: s.fit, rasters: maskRasters)
             return try Self.hdrJPEG(context: context, sdr: sdr, hdr: hdr, headroom: peak)
         }
-        s.raw.extendedDynamicRangeAmount = 0
-        let sdr = try edited(try decode(s, scale: s.fit, stack: stack), stack, camera: s.camera, scale: s.fit)
-        s.raw.extendedDynamicRangeAmount = 1
-        let hdr = try edited(try decode(s, scale: s.fit, stack: stack), stack, camera: s.camera, scale: s.fit)
-        s.raw.extendedDynamicRangeAmount = 0
+        let sdr = try edited(try decode(s, scale: s.fit, stack: stack, edr: 0), stack, camera: s.camera, scale: s.fit)
+        let hdr = try edited(try decode(s, scale: s.fit, stack: stack, edr: 1), stack, camera: s.camera, scale: s.fit)
         return try Self.hdrJPEG(context: context, sdr: sdr, hdr: hdr, headroom: peak)
     }
 
@@ -337,19 +339,26 @@ public actor CIEngine: PhotoEngine {
         let fit = long > 0 ? min(1, Double(maxSide) / Double(long)) : 1
         return Session(url: url, raw: raw, native: native, fit: fit, maxSide: maxSide,
                        boost: raw.boostAmount, localToneMap: raw.localToneMapAmount,
+                       boostShadow: raw.boostShadowAmount, shadowBias: raw.shadowBias, sharpness: raw.sharpnessAmount,
                        camera: CIGeometry.orientation(exif: raw.orientation))
     }
 
     /// Decode at `scale` of the native size. Decoding small is what makes open fast:
-    /// the RAW decoder does the downscale, not a later resample. With a scene-referred module on,
-    /// the decoder's boost curve and local tone map are off, so that module sees scene-linear light.
-    private func decode(_ s: Session, scale: Double, stack: [StackEntry]) throws -> CIImage {
+    /// the RAW decoder does the downscale, not a later resample. With a scene-referred module on, the decoder
+    /// hands over scene-linear light with no look of its own: its boost curve, local tone map and shadow lift are
+    /// off, its shadow bias (a black-point clip) is zero, sharpening is left to our module, and extended range is
+    /// on so highlights past white are kept instead of clipped at 1.0. `edr` overrides the extended-range amount.
+    private func decode(_ s: Session, scale: Double, stack: [StackEntry], edr: Float? = nil) throws -> CIImage {
         s.raw.scaleFactor = Float(scale)
         let sceneLinear = Self.wantsSceneLinear(stack)
         // assign only on a change: setting a filter property can drop the decoder's cached output
-        let boost = sceneLinear ? 0 : s.boost, localToneMap = sceneLinear ? 0 : s.localToneMap
-        if s.raw.boostAmount != boost { s.raw.boostAmount = boost }
-        if s.raw.localToneMapAmount != localToneMap { s.raw.localToneMapAmount = localToneMap }
+        func set(_ current: Float, _ wanted: Float, _ write: (Float) -> Void) { if current != wanted { write(wanted) } }
+        set(s.raw.boostAmount, sceneLinear ? 0 : s.boost) { s.raw.boostAmount = $0 }
+        set(s.raw.localToneMapAmount, sceneLinear ? 0 : s.localToneMap) { s.raw.localToneMapAmount = $0 }
+        set(s.raw.boostShadowAmount, sceneLinear ? 0 : s.boostShadow) { s.raw.boostShadowAmount = $0 }
+        set(s.raw.shadowBias, sceneLinear ? 0 : s.shadowBias) { s.raw.shadowBias = $0 }
+        set(s.raw.sharpnessAmount, sceneLinear ? 0 : s.sharpness) { s.raw.sharpnessAmount = $0 }
+        set(s.raw.extendedDynamicRangeAmount, edr ?? (sceneLinear ? 1 : 0)) { s.raw.extendedDynamicRangeAmount = $0 }
         // always the sensor's orientation: geometry turns it upright (see Session.camera)
         if s.raw.orientation != .up { s.raw.orientation = .up }
         guard let image = s.raw.outputImage else {
