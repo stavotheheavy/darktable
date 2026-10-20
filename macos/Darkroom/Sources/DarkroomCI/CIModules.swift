@@ -247,25 +247,19 @@ extension CIModule {
                 ])
             }),
 
-        // Levels, approximate: black and white points clamp the range, then a gain restores it.
+        // Levels: black, grey and white points on the encoded value, one kernel per pixel. Checked by
+        // LV1-LV5 (darkroom-core-check), the levels Metal check (darkroom-metal-check) and E-LV (darkroom-engine-check).
         CIModule(
-            operation: "rgblevels", name: "rgb levels (approximate)", iopOrder: 33,
+            operation: "rgblevels", name: "rgb levels", iopOrder: 33,
             defaultEnabled: false,
-            fields: [field("black", 0, 0.5, 0), field("white", 0.5, 1, 1)],
+            fields: [field("black", 0, 0.5, 0), field("grey", 0.1, 0.9, 0.5), field("white", 0.5, 1, 1)],
             apply: { image, v in
                 let black = v["black"] ?? 0
                 let white = max(v["white"] ?? 1, black + 0.01)
-                let clamped = image.applyingFilter("CIColorClamp", parameters: [
-                    "inputMinComponents": CIVector(x: black, y: black, z: black, w: 0),
-                    "inputMaxComponents": CIVector(x: white, y: white, z: white, w: 1),
-                ])
-                let gain = CGFloat(1 / (white - black))
-                return clamped.applyingFilter("CIColorMatrix", parameters: [
-                    "inputRVector": CIVector(x: gain, y: 0, z: 0, w: 0),
-                    "inputGVector": CIVector(x: 0, y: gain, z: 0, w: 0),
-                    "inputBVector": CIVector(x: 0, y: 0, z: gain, w: 0),
-                    "inputBiasVector": CIVector(x: -black * gain, y: -black * gain, z: -black * gain, w: 0),
-                ])
+                let grey = min(max(v["grey"] ?? 0.5, 0.01), 0.99)
+                let gamma = log(0.5) / log(grey)
+                return try CIBridge.perPixel(image, source: MetalLevels.source, function: "levelsTex",
+                                             uniforms: [Float(black), Float(white), Float(gamma)])
             }),
 
         // Colorize, approximate: tints the image towards a hue at a strength.

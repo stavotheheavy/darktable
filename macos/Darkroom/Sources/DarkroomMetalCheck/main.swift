@@ -214,5 +214,27 @@ do {
     check("T5 texture path p95 under 16 ms (no host copies)", tp95 < 16, "p95 \(tp95) ms")
 }
 
+// levels (rgblevels): black 0.1, grey 0.4, white 0.9 on a 64 by 64 ramp from 0 to 1.5, on Metal against Levels.apply
+do {
+    let black = 0.1, grey = 0.4, white = 0.9
+    let hi = max(white, black + 0.01)
+    let mid = min(max(grey, 0.01), 0.99)
+    let gamma = log(0.5) / log(mid)
+    let levelsRamp = (0..<(n * n)).map { i -> SIMD4<Float> in
+        let v = 1.5 * Float(i) / Float(n * n - 1)
+        return SIMD4(v, v, v, 1)
+    }
+    let levelsOut = try MetalPerPixel.run(source: MetalLevels.source, function: "levelsBuf", pixels: levelsRamp,
+                                          uniforms: [Float(black), Float(hi), Float(gamma)])
+    func shown(_ v: Double) -> Double { min(max(Transfer.linearToSRGB(v), 0), 1) }
+    var worstLevels = 0.0
+    for (px, g) in zip(levelsRamp, levelsOut) {
+        let cpu = Levels.apply(Double(px.x), black: black, grey: grey, white: white)
+        worstLevels = max(worstLevels, abs(shown(cpu) - shown(Double(g.x))))
+    }
+    check("levels on Metal matches Levels.apply within 1/255 (encoded)",
+          levelsOut.count == levelsRamp.count && worstLevels <= 1.0 / 255, "worst \(worstLevels), count \(levelsOut.count)")
+}
+
 print(failures == 0 ? "\nall Metal checks passed" : "\n\(failures) failed")
 exit(failures == 0 ? 0 : 1)
