@@ -63,6 +63,39 @@ func run(_ stack: [StackEntry]) -> [SIMD4<Float>] {
 
 let tol = 1.0 / 255
 
+// The S5 detail modules are checked on a textured image (the 64 by 64 gradient above has no detail to act on).
+let detailW = 48, detailH = 40
+let detailImg = DetailCommon.fixture(width: detailW, height: detailH)
+let detailPx: [SIMD4<Float>] = detailImg.map { SIMD4(Float($0.x), Float($0.y), Float($0.z), 1) }
+
+func runDetail(_ stack: [StackEntry]) -> [SIMD4<Float>] {
+    do { return try CIEngineProbe.render(stack: stack, pixels: detailPx, width: detailW, height: detailH) } catch {
+        print("FAIL  probe threw: \(error)")
+        failures += 1
+        return []
+    }
+}
+
+/// Tile seams for a detail module: three regions rendered alone must equal the same pixels of the full frame, and
+/// the full frame must be the oracle's (so two blank renders cannot match each other).
+func detailSeams(_ stack: [StackEntry], oracle: [SIMD3<Double>]) -> (seam: Double, fullVsOracle: Double, ok: Bool) {
+    let full = runDetail(stack)
+    let fullErr = worstLinear(full, oracle)
+    var seam = 0.0, ok = full.count == detailW * detailH && fullErr < 2e-4
+    for reg in [(x: 17, y: 9, w: 20, h: 18), (x: 0, y: 0, w: 15, h: 15), (x: 30, y: 25, w: 18, h: 15)] {
+        guard let part = try? CIEngineProbe.renderRegion(stack: stack, pixels: detailPx, width: detailW, height: detailH, region: reg),
+              part.count == reg.w * reg.h, full.count == detailW * detailH else { ok = false; continue }
+        for yy in 0..<reg.h { for xx in 0..<reg.w {
+            let a = part[yy * reg.w + xx], b = full[(reg.y + yy) * detailW + reg.x + xx]
+            for c in 0..<4 {
+                guard a[c].isFinite else { ok = false; continue }
+                seam = max(seam, abs(Double(a[c]) - Double(b[c])))
+            }
+        } }
+    }
+    return (seam, fullErr, ok && seam < 1e-6)
+}
+
 // E0 an empty stack is the identity
 let identity = run([])
 check("E0 empty stack returns the input", worst(identity, scene) < 1e-6, "\(worst(identity, scene))")
