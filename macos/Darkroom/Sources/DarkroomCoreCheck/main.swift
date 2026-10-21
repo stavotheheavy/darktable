@@ -3252,5 +3252,30 @@ do {
     let small = RadialBlur.samples(width: 40, height: 30, spin: true, amount: 0.1), big = RadialBlur.samples(width: 4000, height: 3000, spin: true, amount: 1), mid = RadialBlur.samples(width: 800, height: 600, spin: false, amount: 1)
     check("RDB6 the sample count grows with the blur's length: 12 for a tiny blur, more for a long one, never above 100", small == 12 && big == 100 && mid > 12 && mid < 100, "\(small) \(mid) \(big)")
 }
+// LPS low-pass of the tone, RLT fill light
+do {
+    let w = 41, h = 31
+    func gap(_ a: SIMD3<Double>, _ b: SIMD3<Double>) -> Double { max(abs(a.x - b.x), abs(a.y - b.y), abs(a.z - b.z)) }
+    var textured = [SIMD3<Double>](repeating: .zero, count: w * h)
+    for y in 0..<h { for x in 0..<w { textured[y * w + x] = SIMD3(0.4 + 0.2 * sin(Double(x) * 0.9), 0.3 + 0.1 * cos(Double(y) * 1.1), 0.2 + 0.05 * sin(Double(x + y))) } }
+    check("LPS1 radius 0 is the identity", LowPass.apply(textured, width: w, height: h, radius: 0) == textured)
+    let flat = [SIMD3<Double>](repeating: SIMD3(0.3, 0.2, 0.1), count: w * h)
+    check("LPS2 a flat picture is unchanged (within 1e-12)", zip(LowPass.apply(flat, width: w, height: h, radius: 3), flat).allSatisfy { gap($0, $1) < 1e-12 })
+    let lp = LowPass.apply(textured, width: w, height: h, radius: 3)
+    check("LPS3 colour ratios are kept at every pixel (a gain on all three channels, within 1e-9)", zip(lp, textured).allSatisfy { abs($0.x / $0.y - $1.x / $1.y) < 1e-9 && abs($0.y / $0.z - $1.y / $1.z) < 1e-9 })
+    func lumVar(_ a: [SIMD3<Double>]) -> Double { let m = a.map { ColorCommon.luminance($0) }; let mean = m.reduce(0, +) / Double(m.count); return m.map { pow($0 - mean, 2) }.reduce(0, +) / Double(m.count) }
+    check("LPS4 the fine detail of the light is smoothed: the luminance variance falls under 50%", lumVar(lp) < 0.5 * lumVar(textured), "\(lumVar(lp)) vs \(lumVar(textured))")
+    let bl = Blur.apply(textured, width: w, height: h, radius: 3)
+    check("LPS5 it is not the plain blur: it keeps the colour ratios the blur mixes (the blur's red/green ratio differs from the input's somewhere)", zip(bl, textured).contains { abs($0.x / $0.y - $1.x / $1.y) > 1e-3 })
+    func rlGap(_ a: SIMD3<Double>, _ b: SIMD3<Double>) -> Double { max(abs(a.x - b.x), abs(a.y - b.y), abs(a.z - b.z)) }
+    check("RLT1 ev 0 is the identity (exactly)", Relight.apply(SIMD3(0.3, 0.2, 0.1), ev: 0, center: -1, width: 4) == SIMD3(0.3, 0.2, 0.1))
+    let atCentre = SIMD3(repeating: 0.18 * 0.5)       // -1 EV: the centre
+    check("RLT2 at the centre of the window the full change applies: +1 EV doubles a pixel at -1 EV (within 1e-12)", rlGap(Relight.apply(atCentre, ev: 1, center: -1, width: 4), atCentre * 2) < 1e-12)
+    let farUp = SIMD3(repeating: 0.18 * 64)           // +6 EV, 7 EV from the centre, well past the half width of 2
+    check("RLT3 far from the centre the pixel is nearly untouched (gain under 1.001 for +1 EV, width 4)", Relight.apply(farUp, ev: 1, center: -1, width: 4).x / farUp.x < 1.001)
+    let half = Relight.gain(logLuminance: -1 + 2, ev: 1, center: -1, width: 4)
+    check("RLT4 at half the width from the centre the weight is 0.5 (gain 2^0.5, within 1e-9), and colour ratios are kept",
+          abs(half - pow(2, 0.5)) < 1e-9 && abs(Relight.apply(SIMD3(0.04, 0.02, 0.01), ev: 1, center: -1, width: 4).x / Relight.apply(SIMD3(0.04, 0.02, 0.01), ev: 1, center: -1, width: 4).y - 2) < 1e-9, "\(half)")
+}
 print(failures == 0 ? "\nall checks passed" : "\n\(failures) failed")
 exit(failures == 0 ? 0 : 1)

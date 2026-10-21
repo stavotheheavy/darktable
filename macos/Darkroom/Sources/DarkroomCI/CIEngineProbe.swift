@@ -140,6 +140,7 @@ public enum CIEngineProbe {
         // the settings the display golden is rendered at: a little contrast, the default white point and path to white, no lift
         // a lift of the shadows, a pull on the highlights and a rise of one zone, at a radius that fits the 48 by 40 fixture
         // modules whose defaults do nothing: the golden must exercise the maths (these four were identity goldens, which guard nothing)
+        "relight": ["ev": 1.5, "center": 0, "width": 4],
         "chromalimit": ["limit": 0.1],
         "highlightrolloff": ["white": 1, "knee": 0.4, "amount": 1],
         "deband": ["radius": 9, "threshold": 0.05, "strength": 1],

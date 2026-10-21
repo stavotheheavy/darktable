@@ -198,6 +198,14 @@ extension CIBridge {
         return try applying(sqrtLuminance: sNew, to: image)
     }
 
+    // MARK: low-pass
+
+    /// DarkroomCore.LowPass.apply on the GPU: the blurred square-root luminance given back as a gain.
+    public static func lowPass(_ image: CIImage, radius: Int) throws -> CIImage {
+        guard radius > 0 else { return image }
+        return try applying(sqrtLuminance: try blur(try sqrtLuminance(image), radius: radius), to: image)
+    }
+
     // MARK: halation
 
     private static let halationSource = MetalColorCommon.source + #"""

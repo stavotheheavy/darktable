@@ -21,7 +21,7 @@ struct CIModule: Sendable {
     static let fusableOperations: Set<String> = [
         "temperature", "exposure", "colorbalancergb", "channelmixer", "tonecurve", "monochrome", "rgblevels", "splittoning", "display", "invert", "colisa", "velvia", "colorzones", "satcurvergb", "colorbalance", "rgbcurve", "colorcontrast", "colorcorrection", "basecurve", "dither", "colorize", "solarize", "negadoctor", "lowlight", "channelmixerrgb",
         "gradientmap", "crossprocess", "bleachbypass", "photofilter", "channelcurves", "chromalimit", "huerotate", "warmth",
-        "highlightrolloff", "lumabands", "fadelook", "lumacurve", "reinhard", "scurve", "colorharmonizer", "bwmixer", "selectivecolor",
+        "highlightrolloff", "lumabands", "fadelook", "lumacurve", "reinhard", "scurve", "colorharmonizer", "bwmixer", "selectivecolor", "relight",
     ]
 
     /// The fused op a fusable module stands for with these values, or nil when the module does nothing at them. This is the one place the
@@ -172,6 +172,9 @@ struct CIModule: Sendable {
         case "selectivecolor":
             let u: [Float] = SelectiveColor.families.flatMap { f in SelectiveColor.inks.map { Float(v["\(f)_\($0)"] ?? 0) } }
             return u.allSatisfy { $0 == 0 } ? nil : FusedOp(.selectiveColor, u)
+        case "relight":
+            let ev = v["ev"] ?? 0
+            return ev == 0 ? nil : FusedOp(.relight, [Float(ev), Float(v["center"] ?? -1), Float(v["width"] ?? 4)])
         case "rgblevels":
             let black = v["black"] ?? 0
             let white = max(v["white"] ?? 1, black + 0.01)
@@ -218,7 +221,7 @@ struct CIModule: Sendable {
     /// `invert` is raw-level negative inversion and stays early; `bloom` is glow from over-bright light, a scene-light effect. Checked, module by module, by darkroom-engine-check E-DOM.
     static let displayReferredOperations: Set<String> = [
         "tonecurve", "rgblevels", "rgbcurve", "basecurve", "colisa", "colorcorrection", "colorcontrast", "velvia", "shadhi",
-        "relight", "dither", "colorize", "clahe", "splittoning", "solarize", "grain", "highpass", "crossprocess", "bleachbypass", "channelcurves", "fadelook", "lumacurve", "scurve",
+        "dither", "colorize", "clahe", "splittoning", "solarize", "grain", "highpass", "crossprocess", "bleachbypass", "channelcurves", "fadelook", "lumacurve", "scurve",
         // a negative is of what is on screen: complemented before the tone map, the dark scene values come out bright and the picture washes out
         "invert",
     ]
@@ -459,13 +462,12 @@ extension CIModule {
                 try CIBridge.blur(image, radius: Blur.radius(px: (v["radius"] ?? 0) * (v["_scale"] ?? 1)))
             }),
 
-        // Low-pass: the picture with its fine detail removed, which is the same blur as `blurs` (checked by E-LPF).
+        // Low-pass: a blur of the tone (the square-root luminance) given back as a gain, so colour detail survives (unlike `blurs`). LowPass in DarkroomCore is the oracle
+        // (LPS1-LPS5, E-LPF).
         CIModule(
-            operation: "lowpass", name: "lowpass", iopOrder: 49, defaultEnabled: false,
+            operation: "lowpass", name: "lowpass (tone)", iopOrder: 49, defaultEnabled: false,
             fields: [field("radius", 0, 50, 0)],
-            apply: { image, v in
-                try CIBridge.blur(image, radius: Blur.radius(px: (v["radius"] ?? 0) * (v["_scale"] ?? 1)))
-            }),
+            apply: { image, v in try CIBridge.lowPass(image, radius: Blur.radius(px: (v["radius"] ?? 0) * (v["_scale"] ?? 1))) }),
 
         // Dither or posterize: the encoded value quantised to a number of levels per channel, no noise. Posterize in DarkroomCore is
         // the oracle (DTH1-DTH5, posterizeBuf in darkroom-metal-check, E-DTH in darkroom-engine-check).
@@ -989,16 +991,12 @@ extension CIModule {
             ],
             apply: { image, v in try CIModule.applyFused("rgbcurve", image, v) }),
 
-        // Relight (fill light), approximate: lifts the shadows, leaves the highlights.
+        // Relight (fill light): an exposure change through a Gaussian window of tone (centre and width in EV over middle grey), per pixel. Relight in DarkroomCore is the oracle
+        // (RLT1-RLT4, E-RLT, relightBuf in darkroom-metal-check).
         CIModule(
-            operation: "relight", name: "fill light (approximate)", iopOrder: 26, defaultEnabled: false,
-            fields: [field("fill", 0, 1, 0)],
-            apply: { image, v in
-                image.applyingFilter("CIHighlightShadowAdjust", parameters: [
-                    "inputShadowAmount": v["fill"] ?? 0,
-                    "inputHighlightAmount": 1,
-                ])
-            }),
+            operation: "relight", name: "fill light", iopOrder: 26, defaultEnabled: false,
+            fields: [field("ev", -2, 2, 0), field("center", -5, 3, -1), field("width", 1, 10, 4)],
+            apply: { image, v in try CIModule.applyFused("relight", image, v) }),
 
         // Colour contrast: the OkLab saturation step of colour balance on its own. ColorContrast in DarkroomCore is the oracle (CCT1-CCT4,
         // E-CCT); it runs on the colour balance kernel.
@@ -1147,12 +1145,14 @@ extension CIModule {
         "distortion": 2, "perspective": 2, "caradial": 2,
         // refine 1: the radial blur takes as many samples as its length needs (it was a fixed 25, which showed as ghost arcs)
         "radialblur": 2,
+        // refine 2: lowpass is a low-pass of the tone with colour kept (3, was the same blur as blurs), and relight is shadhi's shadows control (was Core Image's shadow adjust)
+        "relight": 2,
         // same: colorcontrast and colorcorrection were Core Image's colour controls and are now the OkLab saturation and the colisa maths
         "colorcontrast": 2, "colorcorrection": 2,
         // same: basecurve (CIGammaAdjust), dither (CIColorPosterize) and colorize (CIColorMonochrome) are now their own maths on the encoded value or in OkLab
         "basecurve": 2, "dither": 2,
         // same: blurs, lowpass, soften and censorize were Core Image filters (a Gaussian, a pixellate) and are now the box-cascade blur and the mosaic
-        "blurs": 2, "lowpass": 2, "soften": 2, "censorize": 2,
+        "blurs": 2, "lowpass": 3, "soften": 2, "censorize": 2,
     ]
 
     static let all: [CIModule] = (catalogue + [display] + geometryModules).map { module in

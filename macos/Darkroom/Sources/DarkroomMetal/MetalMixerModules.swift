@@ -60,3 +60,25 @@ kernel void selectivecolorBuf(device const float4 *src [[buffer(0)]], device flo
 }
 """#
 }
+
+public enum MetalRelight {
+    /// Uniforms: u[0] the change in EV, u[1] the centre (EV over middle grey), u[2] the full width at half maximum (EV).
+    public static let function = #"""
+
+static float3 relight_apply(float3 rgb, constant float *u) {
+    float y = max(cc_luminance(rgb), 1e-6f);
+    float b = log2(y / 0.18f);
+    float sigma = max(u[2], 1e-6f) / 2.3548200450309493f;
+    float d = (isfinite(b) ? b : u[1]) - u[1];
+    return rgb * exp2(u[0] * exp(-d * d / (2.0f * sigma * sigma)));
+}
+"""#
+
+    public static let source = MetalColorCommon.source + function + #"""
+
+kernel void relightBuf(device const float4 *src [[buffer(0)]], device float4 *dst [[buffer(1)]], constant float *u [[buffer(2)]], uint i [[thread_position_in_grid]]) {
+    float4 c = src[i];
+    dst[i] = float4(relight_apply(c.rgb, u), c.a);
+}
+"""#
+}

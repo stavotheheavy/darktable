@@ -791,7 +791,7 @@ do {
         if gap(engineOrder, after) > 1e-4 { wrong.append("\(c.operation) \(gap(engineOrder, after))") }
         if gap(engineOrder, before) < 4.0 / 255 { commute.append(c.operation) }
     }
-    check("E-DOM all \(order.count) display-referred modules run after the display transform", wrong.isEmpty && order.count == 24, "\(wrong)")
+    check("E-DOM all \(order.count) display-referred modules run after the display transform", wrong.isEmpty && order.count == 23, "\(wrong)")
     check("E-DOM for each of them the other order gives a visibly different picture (those that do not: \(commute))", commute.isEmpty, "\(commute)")
     check("E-DOM zones and the scene modules are not in the display set", !CIEngineProbe.displayReferredOperations.contains("zones")
           && !CIEngineProbe.displayReferredOperations.contains("exposure") && !CIEngineProbe.displayReferredOperations.contains("bloom") && !CIEngineProbe.displayReferredOperations.contains("colorbalancergb"))
@@ -1707,7 +1707,7 @@ do {
 // E-BLR blur, E-LPF low-pass, E-SOF soften, E-MSC censorize: the GPU paths against Blur, Soften and Mosaic in DarkroomCore, across tile seams
 do {
     let blurWant = Blur.apply(detailImg, width: detailW, height: detailH, radius: Blur.radius(px: 12))
-    for (op, tag) in [("blurs", "E-BLR"), ("lowpass", "E-LPF")] {
+    for (op, tag) in [("blurs", "E-BLR")] {
         let stack = [StackEntry(operation: op, params: ["radius": .number(12)])]
         let got = runDetail(stack)
         check("\(tag) \(op) matches the oracle within 1/255 and unclamped within 2e-4", worst(got, blurWant) < tol && worstLinear(got, blurWant) < 2e-4,
@@ -2039,5 +2039,25 @@ do {
     check("E-EDGE \(cases.count) gather modules after another module match their oracle over the whole 300 x 200 frame, borders included", bad.isEmpty, "\(bad)")
 }
 
+// E-LPF low-pass (a blur of the tone, colour kept) and E-RLT fill light (shadhi's shadows), against their oracles with seams
+do {
+    let lp = [StackEntry(operation: "lowpass", params: ["radius": .number(12)])]
+    let lpWant = LowPass.apply(detailImg, width: detailW, height: detailH, radius: Blur.radius(px: 12))
+    let lpGot = runDetail(lp)
+    check("E-LPF lowpass matches the oracle within 1/255 and unclamped within 5e-4", worst(lpGot, lpWant) < tol && worstLinear(lpGot, lpWant) < 5e-4, "encoded \(worst(lpGot, lpWant)), linear \(worstLinear(lpGot, lpWant))")
+    check("E-LPF the oracle really changes the fixture", worstLinear(detailPx, lpWant) > 0.005, "\(worstLinear(detailPx, lpWant))")
+    let lpSeams = detailSeams(lp, oracle: lpWant)
+    check("E-LPF-seam lowpass renders the same in a region as in the full frame", lpSeams.ok, "seam \(lpSeams.seam), full vs oracle \(lpSeams.fullVsOracle)")
+    check("E-LPF-zero radius 0 returns the input untouched", runDetail([StackEntry(operation: "lowpass", params: [:])]) == detailPx)
+    // fill light is a per-pixel tone window: a darkened copy of the fixture (an exposure of -3 EV first) puts tones where its window is
+    let gain = pow(2.0, -3.0)
+    let dark = detailImg.map { $0 * gain }
+    let rl = [StackEntry(operation: "exposure", params: ["exposure": .number(-3)]), StackEntry(operation: "relight", params: ["ev": .number(1.5), "center": .number(-1), "width": .number(4)])]
+    let rlWant = dark.map { Relight.apply($0, ev: 1.5, center: -1, width: 4) }
+    let rlGot = runDetail(rl)
+    check("E-RLT fill light matches the oracle within 1/255 and unclamped within 1e-3", worst(rlGot, rlWant) < tol && worstLinear(rlGot, rlWant) < 1e-3, "encoded \(worst(rlGot, rlWant)), linear \(worstLinear(rlGot, rlWant))")
+    check("E-RLT the oracle really changes the darkened fixture", worstLinear(rlGot.map { $0 }, dark) > 0.005, "\(worstLinear(rlGot, dark))")
+    check("E-RLT-zero ev 0 returns the input untouched", runDetail([StackEntry(operation: "relight", params: [:])]) == detailPx)
+}
 print(failures == 0 ? "\nall checks passed" : "\n\(failures) failed")
 exit(failures == 0 ? 0 : 1)

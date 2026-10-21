@@ -810,5 +810,9 @@ do {
                        oracle: { SelectiveColor.apply($0, adjust: slc.map { Double(Float($0)) }) })
 }
 
+// fill light on Metal against Relight
+metalPerPixelCheck("RLT-M fill light", source: MetalRelight.source, function: "relightBuf", uniforms: [1.2, -0.5, 3.5], tolerance: 1e-4,
+                   oracle: { Relight.apply($0, ev: Double(Float(1.2)), center: Double(Float(-0.5)), width: Double(Float(3.5))) })
+
 print(failures == 0 ? "\nall Metal checks passed" : "\n\(failures) failed")
 exit(failures == 0 ? 0 : 1)
