@@ -10,9 +10,24 @@
 //     (B. Ottosson, "sRGB gamut clipping", 2021, the constant-lightness projection), instead of being cut per channel.
 // Written from those references and from Apple's colour documentation only.
 //
+// Colours come in and go out in the engine's working primaries (linear Rec.2020, ColorSpaces.workingToXYZ). The gamut step maps them
+// into the cube of the OUTPUT gamut (sRGB for exports and thumbnails, Display P3 for the canvas) and hands them back in working
+// primaries, so Core Image's last conversion to the destination never has to clip a colour the display can show.
+//
 // This replaces ToneMap's per-channel extended Reinhard curve, whose `min(..., 1)` was a hard clip at +2.7 EV over grey.
 
 import Foundation
+
+/// The gamut the display transform maps into. Its cube is where "in gamut" is tested; the picture stays in working primaries.
+public enum OutputGamut: Int, Sendable {
+    case sRGB = 0, displayP3 = 1
+
+    var toXYZ: Mat3 { self == .sRGB ? ColorSpaces.srgbToXYZ : ColorSpaces.p3ToXYZ }
+    /// Working-space RGB to this gamut's linear RGB (components outside 0...1 are out of gamut).
+    public var fromWorking: Mat3 { toXYZ.inverse()!.mul(ColorSpaces.workingToXYZ) }
+    /// This gamut's linear RGB to working-space RGB.
+    public var toWorking: Mat3 { ColorSpaces.workingToXYZ.inverse()!.mul(toXYZ) }
+}
 
 public struct SceneTone: Sendable {
     public static let grey = 0.18
@@ -38,18 +53,21 @@ public struct SceneTone: Sendable {
     public let kneeSlope: Double
     /// Shoulder length in EV (knee to the white point of this render).
     public let shoulderEV: Double
+    /// The gamut the picture is mapped into.
+    public let target: OutputGamut
 
     public static let defaultWhiteEV = 4.5
     public static let defaultPurity = 0.5
     /// The display value the straight part may reach before the shoulder takes over, before the monotone limit lowers it.
     static let kneeLevel = 0.55
 
-    public init(contrast: Double = 0, whiteEV: Double = SceneTone.defaultWhiteEV, purity: Double = SceneTone.defaultPurity, peak: Double = 1) {
+    public init(contrast: Double = 0, whiteEV: Double = SceneTone.defaultWhiteEV, purity: Double = SceneTone.defaultPurity, peak: Double = 1,
+                target: OutputGamut = .sRGB) {
         let c = contrast.isFinite ? min(max(contrast, -100), 100) / 100 : 0
         let slope = c >= 0 ? 1 + 0.55 * c : 1 + 0.4 * c
         let peak = peak.isFinite ? min(max(peak, 1), 8) : 1
         let w = whiteEV.isFinite ? min(max(whiteEV, 1.5), 8) : Self.defaultWhiteEV
-        self.contrast = contrast; self.peak = peak; self.slope = slope
+        self.contrast = contrast; self.peak = peak; self.slope = slope; self.target = target
         self.purity = purity.isFinite ? min(max(purity, 0), 1) : Self.defaultPurity
 
         // The knee comes from the SDR render, so an HDR render agrees with it everywhere below the knee. A knee that
@@ -86,10 +104,11 @@ public struct SceneTone: Sendable {
         return curve(log2(ne / Self.grey))
     }
 
-    public static func luminance(_ p: SIMD3<Double>) -> Double { 0.2627 * p.x + 0.6780 * p.y + 0.0593 * p.z }
-    static func luminanceSRGB(_ p: SIMD3<Double>) -> Double { 0.2126 * p.x + 0.7152 * p.y + 0.0722 * p.z }
+    /// Luminance of a working-space colour (the Y row of the working primaries).
+    public static func luminance(_ p: SIMD3<Double>) -> Double { ColorCommon.luminance(p) }
 
-    /// Scene-linear Rec.2020 to display-linear sRGB in 0...peak: the norm, the way to white, the gamut step.
+    /// A scene-linear working-space colour to display-linear, in working primaries and inside the target gamut's cube (0...peak): the
+    /// norm, the way to white, the gamut step.
     public func displayLinear(_ rgb: SIMD3<Double>) -> SIMD3<Double> {
         guard rgb.x.isFinite, rgb.y.isFinite, rgb.z.isFinite else { return .zero }
         let n = Self.luminance(rgb)
@@ -99,30 +118,38 @@ public struct SceneTone: Sendable {
         var out = rgb * (t / ne)
         let h = purity * Self.smoothstep(kneeEV, kneeEV + shoulderEV, x)
         if h > 0 { out += (SIMD3(repeating: t) - out) * h }
-        return gamutMap(ColorSpaces.rec2020ToSRGB.apply(out))
+        return gamutMap(out)
     }
 
-    /// Display-linear sRGB `s` (any values) into the cube 0...peak: a colour already inside is returned unchanged; one outside
-    /// keeps its OkLab lightness and hue and has its chroma reduced (bisected) until it fits. Lightness at or past white gives
-    /// white, at or under black gives black.
-    public func gamutMap(_ s: SIMD3<Double>) -> SIMD3<Double> {
+    /// `displayLinear` after a per-channel gain on the input (white balance, exposure and the display module's lift folded into one
+    /// multiply).
+    public func displayLinear(working rgb: SIMD3<Double>, gain: SIMD3<Double> = SIMD3(repeating: 1)) -> SIMD3<Double> {
+        displayLinear(rgb * gain)
+    }
+
+    /// A working-space colour (any values) into the target gamut's cube 0...peak, returned in working primaries: a colour already inside is
+    /// returned unchanged; one outside keeps its OkLab lightness and hue and has its chroma reduced (bisected) until it fits. Lightness at or
+    /// past white gives white, at or under black gives black.
+    public func gamutMap(_ working: SIMD3<Double>) -> SIMD3<Double> {
         let eps = 1e-5
+        let toTarget = target.fromWorking, toWorking = target.toWorking
         func inside(_ u: SIMD3<Double>) -> Bool { min(u.x, u.y, u.z) >= -eps && max(u.x, u.y, u.z) <= 1 + eps }
-        func clamped(_ u: SIMD3<Double>) -> SIMD3<Double> {
-            SIMD3(min(max(u.x, 0), 1), min(max(u.y, 0), 1), min(max(u.z, 0), 1)) * peak
+        func clampedWorking(_ u: SIMD3<Double>) -> SIMD3<Double> {
+            toWorking.apply(SIMD3(min(max(u.x, 0), 1), min(max(u.y, 0), 1), min(max(u.z, 0), 1)) * peak)
         }
-        let u = s / peak
-        guard u.x.isFinite, u.y.isFinite, u.z.isFinite else { return .zero }
-        if inside(u) { return clamped(u) }
-        let lab = OkLab.fromWorking(u)
+        let wn = working / peak
+        guard wn.x.isFinite, wn.y.isFinite, wn.z.isFinite else { return .zero }
+        let u = toTarget.apply(wn)
+        if inside(u) { return clampedWorking(u) }
+        let lab = OkLab.fromWorking(wn)
         if lab.x <= 0 { return .zero }
-        if lab.x >= 1 { return SIMD3(repeating: peak) }
+        if lab.x >= 1 { return toWorking.apply(SIMD3(repeating: peak)) }
         var lo = 0.0, hi = 1.0
         for _ in 0..<Self.gamutIterations {
             let mid = (lo + hi) / 2
-            if inside(OkLab.toWorking(SIMD3(lab.x, lab.y * mid, lab.z * mid))) { lo = mid } else { hi = mid }
+            if inside(toTarget.apply(OkLab.toWorking(SIMD3(lab.x, lab.y * mid, lab.z * mid)))) { lo = mid } else { hi = mid }
         }
-        return clamped(OkLab.toWorking(SIMD3(lab.x, lab.y * lo, lab.z * lo)))
+        return clampedWorking(toTarget.apply(OkLab.toWorking(SIMD3(lab.x, lab.y * lo, lab.z * lo))))
     }
 
     /// Bisection steps of the gamut projection (the kernel runs the same number).
@@ -133,21 +160,15 @@ public struct SceneTone: Sendable {
         return t * t * (3 - 2 * t)
     }
 
-    /// The whole stage from the working space (linear sRGB primaries): a per-channel gain (white balance, exposure and the display
-    /// module's own lift folded into one multiply), the move to Rec.2020, then `displayLinear`.
-    public func displayLinear(working rgb: SIMD3<Double>, gain: SIMD3<Double> = SIMD3(repeating: 1)) -> SIMD3<Double> {
-        displayLinear(ColorSpaces.srgbToRec2020.apply(rgb * gain))
-    }
-
-    /// What the Metal kernel reads (see MetalSceneTone): grey, slope, kneeEV, kneeValue, kneeSlope, shoulderEV, peak, purity,
-    /// ymin, a spare, the nine entries of the Rec.2020 to sRGB matrix row by row, the three gains, then the nine entries of the
-    /// working-space (linear sRGB) to Rec.2020 matrix.
+    /// What the Metal kernel reads (see MetalSceneTone): grey, slope, kneeEV, kneeValue, kneeSlope, shoulderEV, peak, purity, ymin, a spare,
+    /// the nine entries of the working-to-target matrix row by row, the three gains, then the nine entries of the target-to-working matrix.
     public func uniforms(gain: SIMD3<Double> = SIMD3(repeating: 1)) -> [Float] {
         var u: [Float] = [Float(Self.grey), Float(slope), Float(kneeEV), Float(kneeValue), Float(kneeSlope)]
         u += [Float(shoulderEV), Float(peak), Float(purity), Float(Self.ymin), 0]
-        for r in 0..<3 { for c in 0..<3 { u.append(Float(ColorSpaces.rec2020ToSRGB.m[r][c])) } }
+        let wt = target.fromWorking.m, tw = target.toWorking.m
+        for r in 0..<3 { for c in 0..<3 { u.append(Float(wt[r][c])) } }
         u += [Float(gain.x), Float(gain.y), Float(gain.z)]
-        for r in 0..<3 { for c in 0..<3 { u.append(Float(ColorSpaces.srgbToRec2020.m[r][c])) } }
+        for r in 0..<3 { for c in 0..<3 { u.append(Float(tw[r][c])) } }
         return u
     }
 }

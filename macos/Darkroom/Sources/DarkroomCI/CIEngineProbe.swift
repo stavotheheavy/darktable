@@ -11,6 +11,9 @@ import Foundation
 import Metal
 
 public enum CIEngineProbe {
+    /// The engine's working space (linear Rec.2020), for callers that build their own contexts.
+    public static var workingColorSpace: CGColorSpace { CIEngine.workingSpace }
+
     /// `pixels` are RGBA float in the engine's working space (extended linear sRGB), `width` by `height`.
     /// Returns the rendered pixels in the same space and layout, with no colour management on the way out.
     public static func render(stack: [StackEntry], pixels: [SIMD4<Float>], width: Int, height: Int, scale: Double = 1) throws -> [SIMD4<Float>] {
@@ -23,7 +26,7 @@ public enum CIEngineProbe {
                                    rasters: [MaskPicture] = [], fuse: Bool = true) throws
         -> (pixels: [SIMD4<Float>], width: Int, height: Int) {
         guard pixels.count == width * height, width > 0, height > 0 else { throw EngineError("probe: size mismatch") }
-        guard let space = CGColorSpace(name: CGColorSpace.extendedLinearSRGB),
+        guard let space = CGColorSpace(name: CGColorSpace.extendedLinearITUR_2020),
               let device = MTLCreateSystemDefaultDevice() else { throw EngineError("probe: no colour space or device") }
         let rowBytes = width * MemoryLayout<SIMD4<Float>>.stride
         let data = pixels.withUnsafeBytes { Data($0) }
@@ -54,7 +57,7 @@ public enum CIEngineProbe {
     /// Renders `stack` as the HDR export does: the SDR picture and an HDR version (display transform peak `headroom`),
     /// written as a JPEG with a gain map. For darkroom-engine-check's T10.
     public static func hdrJPEG(stack: [StackEntry], pixels: [SIMD4<Float>], width: Int, height: Int, headroom: Double) throws -> Data {
-        guard pixels.count == width * height, let space = CGColorSpace(name: CGColorSpace.extendedLinearSRGB),
+        guard pixels.count == width * height, let space = CGColorSpace(name: CGColorSpace.extendedLinearITUR_2020),
               let device = MTLCreateSystemDefaultDevice() else { throw EngineError("probe: bad input") }
         let input = CIImage(bitmapData: pixels.withUnsafeBytes { Data($0) }, bytesPerRow: width * 16,
                             size: CGSize(width: width, height: height), format: .RGBAf, colorSpace: space)
@@ -66,7 +69,7 @@ public enum CIEngineProbe {
 
     /// `render` with the HDR peak: the pixels a viewer with `headroom` of display headroom should see (linear, unclamped).
     public static func renderHDR(stack: [StackEntry], pixels: [SIMD4<Float>], width: Int, height: Int, headroom: Double) throws -> [SIMD4<Float>] {
-        guard pixels.count == width * height, let space = CGColorSpace(name: CGColorSpace.extendedLinearSRGB),
+        guard pixels.count == width * height, let space = CGColorSpace(name: CGColorSpace.extendedLinearITUR_2020),
               let device = MTLCreateSystemDefaultDevice() else { throw EngineError("probe: bad input") }
         let input = CIImage(bitmapData: pixels.withUnsafeBytes { Data($0) }, bytesPerRow: width * 16,
                             size: CGSize(width: width, height: height), format: .RGBAf, colorSpace: space)
@@ -86,7 +89,7 @@ public enum CIEngineProbe {
     /// tile seams can be compared with the full frame (darkroom-engine-check F-E4 does this for the bare filters).
     public static func renderRegion(stack: [StackEntry], pixels: [SIMD4<Float>], width: Int, height: Int,
                                     region: (x: Int, y: Int, w: Int, h: Int), rasters: [MaskPicture] = []) throws -> [SIMD4<Float>] {
-        guard pixels.count == width * height, let space = CGColorSpace(name: CGColorSpace.extendedLinearSRGB),
+        guard pixels.count == width * height, let space = CGColorSpace(name: CGColorSpace.extendedLinearITUR_2020),
               let device = MTLCreateSystemDefaultDevice() else { throw EngineError("probe: bad input") }
         let input = CIImage(bitmapData: pixels.withUnsafeBytes { Data($0) }, bytesPerRow: width * 16,
                             size: CGSize(width: width, height: height), format: .RGBAf, colorSpace: space)
@@ -106,7 +109,7 @@ public enum CIEngineProbe {
     /// height, top-left origin) so tile seams can be compared with the full frame.
     public static func filter(_ filter: Filter, pixels: [SIMD4<Float>], width: Int, height: Int,
                               region: (x: Int, y: Int, w: Int, h: Int)? = nil) throws -> [SIMD4<Float>] {
-        guard pixels.count == width * height, let space = CGColorSpace(name: CGColorSpace.extendedLinearSRGB),
+        guard pixels.count == width * height, let space = CGColorSpace(name: CGColorSpace.extendedLinearITUR_2020),
               let device = MTLCreateSystemDefaultDevice() else { throw EngineError("probe: bad input") }
         let input = CIImage(bitmapData: pixels.withUnsafeBytes { Data($0) }, bytesPerRow: width * 16,
                             size: CGSize(width: width, height: height), format: .RGBAf, colorSpace: space)

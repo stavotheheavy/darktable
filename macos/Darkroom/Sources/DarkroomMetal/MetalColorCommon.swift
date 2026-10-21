@@ -14,6 +14,13 @@ import DarkroomCore
 import Foundation
 
 public enum MetalColorCommon {
+    /// The working space's luminance weights as a Metal `float3(...)`, derived from ColorCommon.lumaWeights, for every kernel that needs
+    /// a luminance (so the Swift oracle and the GPU use the very same numbers).
+    public static var lumaVector: String {
+        let w = ColorCommon.lumaWeights
+        return String(format: "float3(%.9ff, %.9ff, %.9ff)", w.x, w.y, w.z)
+    }
+
     public static let source: String = {
         func mat(_ name: String, _ m: Mat3) -> String {
             // float3x3 takes columns
@@ -41,7 +48,7 @@ public enum MetalColorCommon {
             return cc_working_from_lms * (c * c * c);
         }
 
-        static float cc_luminance(float3 rgb) { return dot(rgb, float3(0.2126f, 0.7152f, 0.0722f)); }
+        static float cc_luminance(float3 rgb) { return dot(rgb, \(lumaVector)); }
 
         static float cc_smoothstep(float e0, float e1, float x) {
             float t = clamp((x - e0) / (e1 - e0), 0.0f, 1.0f);

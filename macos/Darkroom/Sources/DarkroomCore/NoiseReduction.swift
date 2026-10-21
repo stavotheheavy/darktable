@@ -59,7 +59,7 @@ public enum NoiseReduction {
             let y = ys[i]
             guard y > DetailCommon.minLuminance else { return rgb[i] }
             let q2 = SIMD3(shrunk[0].values[i], shrunk[1].values[i], shrunk[2].values[i])
-            let k = 0.2126 * q2.x + 0.7152 * q2.y + 0.0722 * q2.z
+            let k = ColorCommon.luminance(q2)
             guard k > 1e-6 else { return rgb[i] }
             return q2 * (y / k)
         }

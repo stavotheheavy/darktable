@@ -6,8 +6,9 @@
 // Checked against the oracle by darkroom-metal-check and, through Core Image, by darkroom-engine-check (E3, E4).
 //
 // Uniforms: u[0] grey, u[1] slope, u[2] kneeEV, u[3] kneeValue, u[4] kneeSlope, u[5] shoulderEV, u[6] peak, u[7] purity,
-// u[8] ymin, u[10...18] the Rec.2020 to sRGB matrix, row by row, u[19...21] the gain on the input, u[22...30] the working-space
-// (linear sRGB) to Rec.2020 matrix. The input is the working space: the gain applies there, then the move to Rec.2020.
+// u[8] ymin, u[10...18] the working-to-target matrix, row by row, u[19...21] the gain on the input, u[22...30] the target-to-working
+// matrix. The input and the output are both the working space (Rec.2020): the gain applies there, the output gamut is only where the
+// gamut step tests.
 
 import DarkroomCore
 
@@ -26,12 +27,9 @@ public enum MetalSceneTone {
     }
 
     static float3 st_apply(float3 work, constant float *u) {
-        work *= float3(u[19], u[20], u[21]);
-        float3 rgb = float3(u[22] * work.x + u[23] * work.y + u[24] * work.z,
-                            u[25] * work.x + u[26] * work.y + u[27] * work.z,
-                            u[28] * work.x + u[29] * work.y + u[30] * work.z);
+        float3 rgb = work * float3(u[19], u[20], u[21]);
         if (!(isfinite(rgb.x) && isfinite(rgb.y) && isfinite(rgb.z))) { return float3(0.0f); }
-        float n = 0.2627f * rgb.x + 0.6780f * rgb.y + 0.0593f * rgb.z;
+        float n = dot(rgb, \#(MetalColorCommon.lumaVector));
         float ne = max(n, u[8]);
         float x = log2(ne / u[0]);
         float t = st_curve(x, u);
@@ -39,24 +37,26 @@ public enum MetalSceneTone {
         float tt = clamp((x - u[2]) / u[5], 0.0f, 1.0f);
         float h = u[7] * (tt * tt * (3.0f - 2.0f * tt));
         if (h > 0.0f) { o += (float3(t) - o) * h; }
-        float3 s = float3(u[10] * o.x + u[11] * o.y + u[12] * o.z,
-                          u[13] * o.x + u[14] * o.y + u[15] * o.z,
-                          u[16] * o.x + u[17] * o.y + u[18] * o.z);
+        // the gamut step: tested in the target's cube (working to target, u[10...18]), mapped by OkLab lightness and hue, and handed back
+        // in working primaries (target to working, u[22...30])
         float peak = u[6];
-        float3 q = s / peak;
+        float3x3 toTarget = float3x3(float3(u[10], u[13], u[16]), float3(u[11], u[14], u[17]), float3(u[12], u[15], u[18]));
+        float3x3 toWorking = float3x3(float3(u[22], u[25], u[28]), float3(u[23], u[26], u[29]), float3(u[24], u[27], u[30]));
+        float3 wn = o / peak;
         const float eps = 1e-5f;
-        if (min(q.x, min(q.y, q.z)) >= -eps && max(q.x, max(q.y, q.z)) <= 1.0f + eps) { return clamp(s, 0.0f, peak); }
-        float3 lab = cc_to_oklab(q);
+        float3 q = toTarget * wn;
+        if (min(q.x, min(q.y, q.z)) >= -eps && max(q.x, max(q.y, q.z)) <= 1.0f + eps) { return toWorking * (clamp(q, 0.0f, 1.0f) * peak); }
+        float3 lab = cc_to_oklab(wn);
         if (lab.x <= 0.0f) { return float3(0.0f); }
-        if (lab.x >= 1.0f) { return float3(peak); }
+        if (lab.x >= 1.0f) { return toWorking * float3(peak); }
         float lo = 0.0f, hi = 1.0f;
         for (int i = 0; i < 20; i++) {
             float mid = 0.5f * (lo + hi);
-            float3 c = cc_from_oklab(float3(lab.x, lab.y * mid, lab.z * mid));
+            float3 c = toTarget * cc_from_oklab(float3(lab.x, lab.y * mid, lab.z * mid));
             if (min(c.x, min(c.y, c.z)) >= -eps && max(c.x, max(c.y, c.z)) <= 1.0f + eps) { lo = mid; } else { hi = mid; }
         }
-        s = cc_from_oklab(float3(lab.x, lab.y * lo, lab.z * lo)) * peak;
-        return clamp(s, 0.0f, peak);
+        float3 r = toTarget * cc_from_oklab(float3(lab.x, lab.y * lo, lab.z * lo));
+        return toWorking * (clamp(r, 0.0f, 1.0f) * peak);
     }
 
     // texture entry point for the Core Image bridge (CIBridge.perPixel)

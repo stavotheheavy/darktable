@@ -136,7 +136,7 @@ check("E2 exposure matches the oracle within 1/255", e2 < tol, "\(e2)")
 // E3 display transform: working sRGB -> Rec.2020 -> SceneTone (luminance norm, shoulder, gamut step), at three contrasts
 for contrast in [0.0, 40.0, -60.0] {
     let tone = SceneTone(contrast: contrast)
-    let oracle = scene.map { tone.displayLinear(ColorSpaces.srgbToRec2020.apply($0)) }
+    let oracle = scene.map { tone.displayLinear($0) }
     let e3 = worst(run([StackEntry(operation: "display", params: ["contrast": .number(contrast)])]), oracle)
     check("E3 display transform at contrast \(Int(contrast)) matches the oracle within 1/255", e3 < tol, "\(e3)")
 }
@@ -147,7 +147,7 @@ let chain = [StackEntry(operation: "display", params: ["contrast": .number(20)])
              wbStack[0]]
 let tone20 = SceneTone(contrast: 20)
 let chainOracle = scene.map { p -> SIMD3<Double> in
-    tone20.displayLinear(ColorSpaces.srgbToRec2020.apply(p * coeff * Exposure.gain(ev: -0.7)))
+    tone20.displayLinear(p * coeff * Exposure.gain(ev: -0.7))
 }
 let e4 = worst(run(chain), chainOracle)
 check("E4 white balance, exposure, display chain matches the oracle within 1/255", e4 < tol, "\(e4)")
@@ -229,7 +229,7 @@ do {
     let curve = StackEntry(operation: "tonecurve", params: ["y0": .number(0), "y1": .number(0.15), "y2": .number(0.5), "y3": .number(0.85), "y4": .number(1)])
     let display = StackEntry(operation: "display", params: ["contrast": .number(0)])
     let tone = SceneTone(contrast: 0)
-    let toDisplay: (SIMD3<Double>) -> SIMD3<Double> = { tone.displayLinear(ColorSpaces.srgbToRec2020.apply($0)) }
+    let toDisplay: (SIMD3<Double>) -> SIMD3<Double> = { tone.displayLinear($0) }
     let after = scene.map { ToneCurve.apply(toDisplay($0), ys: ys) }
     let before = scene.map { toDisplay(ToneCurve.apply($0, ys: ys)) }
     // listed curve-first on purpose: the engine orders them, not the list
@@ -411,7 +411,7 @@ do {
         let e = worstAgainst(run(.atrous(level)), (0..<3).map { Filters.atrousSmooth(plane($0), level: level) })
         check("F-E2 à trous smoothing level \(level) on the GPU matches the oracle within 2e-6", e < 2e-6, "\(e)")
     }
-    let lum = Plane(width: fw, height: fh, values: px.map { 0.2126 * Double($0.x) + 0.7152 * Double($0.y) + 0.0722 * Double($0.z) })
+    let lum = Plane(width: fw, height: fh, values: px.map { ColorCommon.luminance(SIMD3(Double($0.x), Double($0.y), Double($0.z))) })
     let ge = worstAgainst(run(.guided(4, 1e-3)), (0..<3).map { Filters.guided(guide: lum, input: plane($0), radius: 4, eps: 1e-3) })
     check("F-E3 guided filter (radius 4, eps 1e-3, luminance guide) on the GPU matches the oracle within 2e-4", ge < 2e-4, "\(ge)")
     // F-E4 tile seams: a region renders exactly what the full frame has there, inside and at the edges, and the
@@ -741,7 +741,7 @@ do {
     let both = runDetail([StackEntry(operation: "display", params: ["contrast": .number(0)]), StackEntry(operation: "zones", params: ze)])
     let displayOnly = runDetail([StackEntry(operation: "display", params: ["contrast": .number(0)])])
     let tone = SceneTone()
-    let zonesThenDisplay = want.map { tone.displayLinear(ColorSpaces.srgbToRec2020.apply($0)) }
+    let zonesThenDisplay = want.map { tone.displayLinear($0) }
     check("E-ZE-order with display on, zones runs before it (scene light)", worst(both, zonesThenDisplay) < tol && worst(both, zonesThenDisplay) < worst(displayOnly, zonesThenDisplay),
           "\(worst(both, zonesThenDisplay))")
 }
@@ -812,6 +812,9 @@ do {
 // E-SEG segment cache: a render through the cache is the render without it (the texture's orientation included), a slider moved after a
 // neighbourhood module reuses the cached picture, and anything that changes the pixels before it makes a new entry
 do {
+    // a stored segment is a 16-bit float texture and the uncached chain keeps 32-bit intermediates: the two agree to half-float rounding (sharpening
+    // amplifies it a little); an upside-down or stale picture is off by 0.5 or more
+    let segTol = 4e-3
     if let probe = try? SegmentProbe() {
         let wb = StackEntry(operation: "temperature", params: ["red": .number(1.3), "green": .number(1), "blue": .number(0.8)])
         func stack(contrast: Double = 0, sharpen: Double = 0.5, ev: Double = 0.4) -> [StackEntry] {
@@ -835,24 +838,24 @@ do {
             let direct = (try? own?.render(stack: s, pixels: detailPx, width: detailW, height: detailH, cached: false)) ?? nil
             let hit = (try? own?.render(stack: s, pixels: detailPx, width: detailW, height: detailH, cached: true)) ?? nil
             check("E-SEG-orient \(n) stored segment\(n == 1 ? "" : "s") come back upright (first render and a cache hit both equal the uncached picture; an upside-down one is far off)",
-                  via != nil && direct != nil && hit != nil && gap(via!, direct!) < 2e-3 && gap(hit!, direct!) < 2e-3 && own!.entries == n,
+                  via != nil && direct != nil && hit != nil && gap(via!, direct!) < segTol && gap(hit!, direct!) < segTol && own!.entries == n,
                   "first \(via.map { gap($0, direct ?? []) } ?? -1), hit \(hit.map { gap($0, direct ?? []) } ?? -1), entries \(own?.entries ?? -1)")
         }
         let first = r(stack(), true), plain = r(stack(), false)
-        check("E-SEG the first render through the cache (it stores two segments) equals the render without it", gap(first, plain) < 2e-3 && probe.entries == 2, "gap \(gap(first, plain)), entries \(probe.entries)")
+        check("E-SEG the first render through the cache (it stores two segments) equals the render without it", gap(first, plain) < segTol && probe.entries == 2, "gap \(gap(first, plain)), entries \(probe.entries)")
         let hits0 = probe.hits
         let again = r(stack(), true)
         check("E-SEG the same stack again is served from the cache and is identical", probe.hits == hits0 + 1 && again == first, "hits \(probe.hits - hits0)")
         let moved = r(stack(contrast: 35), true)
         check("E-SEG a slider moved after the neighbourhood modules reuses the cache (no new entry) and matches an uncached render",
-              probe.hits == hits0 + 2 && probe.entries == 2 && gap(moved, r(stack(contrast: 35), false)) < 2e-3 && gap(moved, first) > 0.01,
+              probe.hits == hits0 + 2 && probe.entries == 2 && gap(moved, r(stack(contrast: 35), false)) < segTol && gap(moved, first) > 0.01,
               "hits \(probe.hits - hits0), entries \(probe.entries), gap \(gap(moved, r(stack(contrast: 35), false)))")
         let sharper = r(stack(sharpen: 1.2), true)
         check("E-SEG changing a module inside the segment makes a new entry; the picture is the new one, never the old (no stale hit)",
-              probe.entries > 2 && gap(sharper, r(stack(sharpen: 1.2), false)) < 2e-3 && gap(sharper, first) > 1e-3, "entries \(probe.entries), vs old \(gap(sharper, first))")
+              probe.entries > 2 && gap(sharper, r(stack(sharpen: 1.2), false)) < segTol && gap(sharper, first) > 1e-3, "entries \(probe.entries), vs uncached \(gap(sharper, r(stack(sharpen: 1.2), false))), vs old \(gap(sharper, first))")
         let earlier = r(stack(ev: -0.8), true)
         check("E-SEG changing a gain before the segments invalidates them (exposure -0.8: not the old picture, matches uncached)",
-              gap(earlier, r(stack(ev: -0.8), false)) < 2e-3 && gap(earlier, first) > 0.01, "\(gap(earlier, first))")
+              gap(earlier, r(stack(ev: -0.8), false)) < segTol && gap(earlier, first) > 0.01, "\(gap(earlier, first))")
         // a render that draws a mask over the picture skips the cache
         let entriesBefore = probe.entries
         var shown = stack()
@@ -864,7 +867,7 @@ do {
     }
 }
 
-// E-CTX the app's own context (half float, linear sRGB, CIEngine.makeContext) renders what the full-precision probe context does: the
+// E-CTX the app's own context (half float, linear Rec.2020, CIEngine.makeContext) renders what the full-precision probe context does: the
 // oracle checks above run in float, so this is what ties them to the pictures the app shows
 do {
     if let probe = try? SegmentProbe() {
@@ -987,11 +990,11 @@ do {
         }
         let r = { (s: [StackEntry], cached: Bool) in (try? probe.render(stack: s, pixels: detailPx, width: detailW, height: detailH, cached: cached)) ?? [] }
         let first = r(zs(1.0), true)
-        check("E-SEG-zones the first render through the cache (base and result stored) equals the uncached one", gap(first, r(zs(1.0), false)) < 2e-3 && probe.entries == 2, "entries \(probe.entries), gap \(gap(first, r(zs(1.0), false)))")
+        check("E-SEG-zones the first render through the cache (base and result stored) equals the uncached one", gap(first, r(zs(1.0), false)) < 4e-3 && probe.entries == 2, "entries \(probe.entries), gap \(gap(first, r(zs(1.0), false)))")
         let hits0 = probe.hits
         let moved = r(zs(1.6, -0.5), true)
         check("E-SEG-zones moving the sliders reuses the base (one new entry, the result; one hit) and matches the uncached render",
-              probe.entries == 3 && probe.hits == hits0 + 1 && gap(moved, r(zs(1.6, -0.5), false)) < 2e-3 && gap(moved, first) > 0.01,
+              probe.entries == 3 && probe.hits == hits0 + 1 && gap(moved, r(zs(1.6, -0.5), false)) < 4e-3 && gap(moved, first) > 0.01,
               "entries \(probe.entries), hits \(probe.hits - hits0), gap \(gap(moved, r(zs(1.6, -0.5), false)))")
     } else {
         check("E-SEG-zones the segment probe could not start", false)

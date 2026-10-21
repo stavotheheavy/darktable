@@ -14,7 +14,7 @@ using namespace metal;
 
 constant float detailMinLuminance = 1.0e-6f;
 
-static float detail_luminance(float3 rgb) { return dot(rgb, float3(0.2126f, 0.7152f, 0.0722f)); }
+static float detail_luminance(float3 rgb) { return dot(rgb, \#(MetalColorCommon.lumaVector)); }
 static float detail_sqrt_luma(float3 rgb) { return sqrt(max(detail_luminance(rgb), 0.0f)); }
 
 // DetailCommon.gain: Y'/Y with Y' = max(newS, 0)^2, and 1 at or under the minimum luminance

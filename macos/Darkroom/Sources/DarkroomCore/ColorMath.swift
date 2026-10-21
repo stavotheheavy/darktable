@@ -61,14 +61,25 @@ public enum ColorSpaces {
                      [prim.m[2][0] * s.x, prim.m[2][1] * s.y, prim.m[2][2] * s.z]])
     }
 
-    /// Linear BT.2020 (D65) to CIE XYZ. The engine's WORKING space (what every module's pixels are in) is linear sRGB primaries:
-    /// Core Image's extended linear sRGB, which `CIEngine.makeContext` names explicitly. Rec.2020 is where the display transform's
-    /// tone stage computes (SceneTone), and the matrices here move between the two.
+    /// Linear BT.2020 (D65) to CIE XYZ.
     public static let rec2020ToXYZ = rgbToXYZ(r: SIMD2(0.708, 0.292), g: SIMD2(0.170, 0.797),
                                               b: SIMD2(0.131, 0.046), white: d65)
     /// Linear sRGB / Rec.709 (D65) to CIE XYZ.
     public static let srgbToXYZ = rgbToXYZ(r: SIMD2(0.640, 0.330), g: SIMD2(0.300, 0.600),
                                            b: SIMD2(0.150, 0.060), white: d65)
+    /// Linear Display P3 (D65) to CIE XYZ.
+    public static let p3ToXYZ = rgbToXYZ(r: SIMD2(0.680, 0.320), g: SIMD2(0.265, 0.690),
+                                         b: SIMD2(0.150, 0.060), white: d65)
+
+    /// The engine's WORKING space, the one every module's pixels are in: linear Rec.2020 primaries, Core Image's extended linear ITU-R
+    /// 2020 (`CIEngine.makeContext` names it). It holds every colour a camera records and every colour a display can show, so no module
+    /// works on negative components for ordinary colours, and the display transform maps into the OUTPUT gamut (sRGB, Display P3) only at
+    /// the end. The luminance weights and the OkLab matrices are derived from it, here and in the Metal kernels.
+    public static let workingToXYZ = rec2020ToXYZ
+    public static var workingToSRGB: Mat3 { srgbToXYZ.inverse()!.mul(workingToXYZ) }
+    public static var sRGBToWorking: Mat3 { workingToXYZ.inverse()!.mul(srgbToXYZ) }
+    public static var workingToP3: Mat3 { p3ToXYZ.inverse()!.mul(workingToXYZ) }
+    public static var p3ToWorking: Mat3 { workingToXYZ.inverse()!.mul(p3ToXYZ) }
     /// Linear Rec.2020 to linear sRGB (values outside 0...1 are out of gamut and left to the caller).
     public static var rec2020ToSRGB: Mat3 { srgbToXYZ.inverse()!.mul(rec2020ToXYZ) }
     public static var srgbToRec2020: Mat3 { rec2020ToXYZ.inverse()!.mul(srgbToXYZ) }
@@ -99,13 +110,13 @@ public enum OkLab {
         ])
     }()
     private static let toLMS = xyzToLMS.mul(ColorSpaces.rec2020ToXYZ)
-    /// The engine's working space (linear sRGB primaries) to LMS, and the matrices Metal kernels bake in
+    /// The engine's working space (linear Rec.2020 primaries) to LMS, and the matrices Metal kernels bake in
     /// (see DarkroomMetal's MetalColorCommon, generated from these so the two cannot disagree).
     /// Each row is scaled to sum to 1, so working white (and every grey) lands on equal LMS and so on
-    /// a = b = 0 exactly: our sRGB-to-XYZ white, built from the primaries, is a hair off the white OkLab's
+    /// a = b = 0 exactly: our primaries' white, built from the primaries, is a hair off the white OkLab's
     /// matrix assumes, which left greys with about 7e-5 of chroma and let colour filters tint them.
     public static let workingToLMS: Mat3 = {
-        let m = xyzToLMS.mul(ColorSpaces.srgbToXYZ).m
+        let m = xyzToLMS.mul(ColorSpaces.workingToXYZ).m
         return Mat3(m.map { row in let sum = row.reduce(0, +); return row.map { $0 / sum } })
     }()
     public static let workingFromLMS = workingToLMS.inverse()!
@@ -191,8 +202,16 @@ public enum Transfer {
 // MARK: - Shared per-pixel helpers (the Metal twins live in DarkroomMetal's MetalColorCommon)
 
 public enum ColorCommon {
-    /// Rec.709 / sRGB luminance of linear working-space RGB.
-    public static func luminance(_ rgb: SIMD3<Double>) -> Double { 0.2126 * rgb.x + 0.7152 * rgb.y + 0.0722 * rgb.z }
+    /// The luminance weights of the working space: the Y row of its RGB-to-XYZ matrix (0.2627, 0.6780, 0.0593 for Rec.2020), normalised
+    /// to sum to one. Every module that needs a luminance (detail, noise, zones, the tone stage) and every Metal twin takes them from here.
+    public static let lumaWeights: SIMD3<Double> = {
+        let y = ColorSpaces.workingToXYZ.m[1]
+        let s = y[0] + y[1] + y[2]
+        return SIMD3(y[0] / s, y[1] / s, y[2] / s)
+    }()
+
+    /// Luminance of linear working-space RGB.
+    public static func luminance(_ rgb: SIMD3<Double>) -> Double { lumaWeights.x * rgb.x + lumaWeights.y * rgb.y + lumaWeights.z * rgb.z }
 
     /// Hermite smoothstep: 0 below `e0`, 1 above `e1`, 3t^2 - 2t^3 between.
     public static func smoothstep(_ e0: Double, _ e1: Double, _ x: Double) -> Double {

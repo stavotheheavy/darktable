@@ -33,6 +33,7 @@ public actor CIEngine: PhotoEngine {
         let boostShadow: Float
         let shadowBias: Float
         let sharpness: Float
+        let gamutMapping: Bool
         /// The camera's orientation. The decoder runs in sensor orientation (`native` is the sensor's size)
         /// and geometry applies this as the default flip, as darktable orders it.
         let camera: Orientation
@@ -74,14 +75,14 @@ public actor CIEngine: PhotoEngine {
         if let space = made.workingColorSpace { segmentCache = SegmentCache(context: made, device: device, space: space) }
     }
 
-    /// The one definition of the engine's Core Image context: linear sRGB primaries (unclamped, so scene light above 1 survives) in half
-    /// float, named explicitly so an OS default cannot move it. Every module's kernel works in this space (the OkLab matrices and
-    /// luminance weights are sRGB's), the segment cache's textures hold it, and `SegmentProbe` builds its context here so
-    /// darkroom-engine-check measures what the app runs.
+    /// The engine's working space: linear Rec.2020 primaries, unclamped (see ColorSpaces.workingToXYZ).
+    static let workingSpace: CGColorSpace = CGColorSpace(name: CGColorSpace.extendedLinearITUR_2020)!
+
+    /// The one definition of the engine's Core Image context: the working space above in half float, named explicitly so an OS default
+    /// cannot move it. Every module's kernel works in this space (the OkLab matrices and luminance weights are derived from it), the
+    /// segment cache's textures hold it, and `SegmentProbe` builds its context here so darkroom-engine-check measures what the app runs.
     static func makeContext(device: MTLDevice) -> CIContext {
-        var options: [CIContextOption: Any] = [.cacheIntermediates: true, .workingFormat: CIFormat.RGBAh]
-        if let space = CGColorSpace(name: CGColorSpace.extendedLinearSRGB) { options[.workingColorSpace] = space }
-        return CIContext(mtlDevice: device, options: options)
+        CIContext(mtlDevice: device, options: [.cacheIntermediates: true, .workingFormat: CIFormat.RGBAh, .workingColorSpace: workingSpace])
     }
 
     public func shutdown() async {
@@ -142,7 +143,7 @@ public actor CIEngine: PhotoEngine {
         let s = try openedSession()
         cancelFlag.withLock { $0 = false }
         let started = ContinuousClock.now
-        var image = try edited(try ownedDecode(s, scale: scale, stack: stack), stack, camera: s.camera, scale: s.fit * scale, session: s)
+        var image = try edited(try ownedDecode(s, scale: scale, stack: stack), stack, camera: s.camera, scale: s.fit * scale, session: s, target: .displayP3)
         if clippingOverlay { image = try CIBridge.clippingOverlay(image) }
         return try presented(image, crop: nil, since: started)
     }
@@ -152,7 +153,7 @@ public actor CIEngine: PhotoEngine {
         let s = try openedSession()
         cancelFlag.withLock { $0 = false }
         let started = ContinuousClock.now
-        var image = try edited(try ownedDecode(s, scale: scale, stack: stack), stack, camera: s.camera, scale: s.fit * scale, session: s)
+        var image = try edited(try ownedDecode(s, scale: scale, stack: stack), stack, camera: s.camera, scale: s.fit * scale, session: s, target: .displayP3)
         if clippingOverlay { image = try CIBridge.clippingOverlay(image) }
         let ext = image.extent.integral
         let wanted = CGRect(x: ext.minX + CGFloat(x), y: ext.maxY - CGFloat(y) - CGFloat(height), width: CGFloat(width), height: CGFloat(height))
@@ -303,14 +304,15 @@ public actor CIEngine: PhotoEngine {
         return data
     }
 
-    private func edited(_ image: CIImage, _ stack: [StackEntry], camera: Orientation, scale: Double = 1, session: Session? = nil) throws -> CIImage {
+    private func edited(_ image: CIImage, _ stack: [StackEntry], camera: Orientation, scale: Double = 1, session: Session? = nil,
+                        target: OutputGamut = .sRGB) throws -> CIImage {
         // only the open session's renders keep segments: an export or a thumbnail has a session of its own that nothing returns to
         var segments: Segments?
         if let session, let segmentCache {
             // what the decoder hands over depends on the scene-referred switch and the working size, so both are in the key
             segments = Segments(cache: segmentCache, base: "\(session.id)|\(Self.wantsSceneLinear(stack))|\(maskRasterRevision)")
         }
-        return try Self.process(image, stack, camera: camera, scale: scale, rasters: maskRasters, segments: segments, fuse: Self.fusionEnabled)
+        return try Self.process(image, stack, camera: camera, scale: scale, rasters: maskRasters, segments: segments, fuse: Self.fusionEnabled, target: target)
     }
 
     /// The owned decode texture is on unless DARKROOM_NO_OWNED_DECODE is set (to compare against the decoder's own reduced-size decode).
@@ -327,9 +329,11 @@ public actor CIEngine: PhotoEngine {
     /// pixels (sharpen, local contrast, haze removal, mask refinement) take their radius as full-resolution pixels and
     /// shrink it by `scale`, so a preview looks like the export (roadmap T9).
     static func process(_ image: CIImage, _ stack: [StackEntry], camera: Orientation, hdrPeak: Double? = nil,
-                        scale: Double = 1, rasters: [String: MaskRaster] = [:], segments: Segments? = nil, fuse: Bool = true) throws -> CIImage {
+                        scale: Double = 1, rasters: [String: MaskRaster] = [:], segments: Segments? = nil, fuse: Bool = true,
+                        target: OutputGamut = .sRGB) throws -> CIImage {
         CIGeometry.apply(try CIGeometry.spec(stack, camera: camera),
-                         to: try applyStack(image, stack, hdrPeak: hdrPeak, scale: scale, camera: camera, rasters: rasters, segments: segments, fuse: fuse))
+                         to: try applyStack(image, stack, hdrPeak: hdrPeak, scale: scale, camera: camera, rasters: rasters, segments: segments,
+                                            fuse: fuse, target: target))
     }
 
     /// A segment cache and the text that identifies the decoded picture the stack starts from (photo, decode scale and settings).
@@ -349,7 +353,7 @@ public actor CIEngine: PhotoEngine {
     /// does not have is an error, never a silent skip. Static so `CIEngineProbe` runs this exact code.
     static func applyStack(_ image: CIImage, _ stack: [StackEntry], hdrPeak: Double? = nil, scale: Double = 1,
                            camera: Orientation = .none, rasters: [String: MaskRaster] = [:], segments: Segments? = nil,
-                           fuse: Bool = true) throws -> CIImage {
+                           fuse: Bool = true, target: OutputGamut = .sRGB) throws -> CIImage {
         let sceneReferred = wantsSceneLinear(stack)
         let ordered = try stack.filter { $0.enabled && !CIGeometry.operations.contains($0.operation) }.map { entry -> (CIModule, StackEntry) in
             guard let m = CIModule.named(entry.operation) else {
@@ -371,7 +375,7 @@ public actor CIEngine: PhotoEngine {
         var inputKeys: [Int: String] = [:]
         var start = 0
         if let segments, !ordered.contains(where: { ($0.1.blend["mask_show"]?.double ?? 0) != 0 }) {
-            var prefix = "\(segments.base)|\(hdrPeak.map { "\($0)" } ?? "sdr")|\(scale)|\(camera.rawValue)"
+            var prefix = "\(segments.base)|\(hdrPeak.map { "\($0)" } ?? "sdr")|\(scale)|\(camera.rawValue)|\(target)"
             for (i, (m, entry)) in ordered.enumerated() {
                 inputKeys[i] = prefix
                 prefix += "\n" + fingerprint(entry)
@@ -397,6 +401,7 @@ public actor CIEngine: PhotoEngine {
             let maskMode = entry.blend["mask_mode"]?.double ?? 0
             var values = m.values(from: entry.params)
             if let hdrPeak, m.operation == "display" { values["peak"] = hdrPeak }
+            if m.operation == "display" { values["_target"] = Double(target.rawValue) }   // the gamut the display transform maps into
             if fuse, maskMode == 0, (entry.blend["opacity"]?.double ?? 100) >= 100, CIModule.fusableOperations.contains(m.operation) {
                 if let op = CIModule.fusedOp(m.operation, values) { pending.append(op) }
                 continue
@@ -477,6 +482,7 @@ public actor CIEngine: PhotoEngine {
         return Session(url: url, raw: raw, native: native, fit: fit, maxSide: maxSide,
                        boost: raw.boostAmount, localToneMap: raw.localToneMapAmount,
                        boostShadow: raw.boostShadowAmount, shadowBias: raw.shadowBias, sharpness: raw.sharpnessAmount,
+                       gamutMapping: raw.isGamutMappingEnabled,
                        camera: CIGeometry.orientation(exif: raw.orientation))
     }
 
@@ -496,6 +502,8 @@ public actor CIEngine: PhotoEngine {
         set(s.raw.shadowBias, sceneLinear ? 0 : s.shadowBias) { s.raw.shadowBias = $0 }
         set(s.raw.sharpnessAmount, sceneLinear ? 0 : s.sharpness) { s.raw.sharpnessAmount = $0 }
         set(s.raw.extendedDynamicRangeAmount, edr ?? (sceneLinear ? 1 : 0)) { s.raw.extendedDynamicRangeAmount = $0 }
+        // the decoder compresses camera colour into its own gamut; the working space is wide enough to keep it, and the one gamut step is ours, at the end
+        if s.raw.isGamutMappingEnabled != (sceneLinear ? false : s.gamutMapping) { s.raw.isGamutMappingEnabled = sceneLinear ? false : s.gamutMapping }
         // always the sensor's orientation: geometry turns it upright (see Session.camera)
         if s.raw.orientation != .up { s.raw.orientation = .up }
         guard let image = s.raw.outputImage else {

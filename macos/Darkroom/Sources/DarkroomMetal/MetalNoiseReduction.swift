@@ -77,7 +77,7 @@ kernel void noiseChromaTex(texture2d<float, access::read> base [[texture(0)]],
     q2 += float3(nr_soft(m2.x - m3.x, u[3]), nr_soft(m2.y - m3.y, u[3]), nr_soft(m2.z - m3.z, u[3]));
     q2 += float3(nr_soft(m3.x - m4.x, u[4]), nr_soft(m3.y - m4.y, u[4]), nr_soft(m3.z - m4.z, u[4]));
     float y1 = detail_luminance(c.rgb);
-    float k = 0.2126f * q2.x + 0.7152f * q2.y + 0.0722f * q2.z;
+    float k = dot(q2, \#(MetalColorCommon.lumaVector));
     if (!(y1 > detailMinLuminance) || !(k > 1.0e-6f)) {
         dst.write(c, gid);
         return;

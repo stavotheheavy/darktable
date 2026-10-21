@@ -85,6 +85,7 @@ struct SelfTest {
         let previewVsExport = has("--preview-vs-export")
         let viewportBench = has("--viewport-bench")
         let highlightProbe = has("--highlight-probe")
+        let gamutReport = has("--gamut-report")
         // darktable is the default; `ci` runs the clean engine (only --bench supports it so far)
         let engineName = take("--engine") ?? "darktable"
         guard let path = args.first else {
@@ -109,6 +110,8 @@ struct SelfTest {
                 try await runOneShot(engine: engine, sessionPath: path, other: oneShot)
             } else if let visionMasks {
                 try runVisionMasks(path: path, out: visionMasks)
+            } else if gamutReport {
+                try await runGamutReport(engine: engine, path: path)
             } else if highlightProbe {
                 try runHighlightProbe(path: path)
             } else if viewportBench {
@@ -719,6 +722,40 @@ struct SelfTest {
             if !ok { failed = true }
         }
         if failed { throw EngineError("HDR export check failed") }
+    }
+
+    /// What the wide-gamut canvas path carries: the picture rendered as the canvas does (Display P3 target, a 16-bit texture), and how many of
+    /// its pixels hold a colour outside sRGB, which the old sRGB-only output could not show. For one raw or a folder (the first `--max` files).
+    static func runGamutReport(engine: any PhotoEngine, path: String) async throws {
+        var isDir: ObjCBool = false
+        FileManager.default.fileExists(atPath: path, isDirectory: &isDir)
+        let raws = ["nef", "arw", "cr2", "cr3", "dng", "raf"]
+        let files: [String] = isDir.boolValue
+            ? ((try? FileManager.default.contentsOfDirectory(atPath: path)) ?? []).sorted()
+                .filter { raws.contains(($0 as NSString).pathExtension.lowercased()) }.map { path + "/" + $0 }
+            : [path]
+        guard let ci = engine as? CIEngine else { print("the gamut report is the clean engine's"); return }
+        let toSRGB = ColorSpaces.p3ToWorking   // P3 linear to working, then working to sRGB
+        let p3ToSRGB = ColorSpaces.workingToSRGB.mul(toSRGB)
+        print("file\tpixels outside sRGB %\tmost saturated pixel (OkLab chroma)")
+        var total = 0.0, count = 0.0
+        for f in files {
+            try await ci.openSession(path: f, maxSide: 800)
+            guard let p = try await ci.sessionRenderPresentable(stack: [StackEntry(operation: "display", params: ["contrast": .number(0), "exposure": .number(0.5)])], scale: 1) else { continue }
+            var half = [UInt16](repeating: 0, count: p.width * p.height * 4)
+            p.texture.getBytes(&half, bytesPerRow: p.width * 8, from: MTLRegionMake2D(0, 0, p.width, p.height), mipmapLevel: 0)
+            var outside = 0, maxChroma = 0.0
+            for i in stride(from: 0, to: half.count, by: 4) {
+                let p3 = SIMD3(Double(Float16(bitPattern: half[i])), Double(Float16(bitPattern: half[i + 1])), Double(Float16(bitPattern: half[i + 2])))
+                let s = p3ToSRGB.apply(p3)
+                if min(s.x, s.y, s.z) < -0.002 || max(s.x, s.y, s.z) > 1.002 { outside += 1 }
+                maxChroma = max(maxChroma, OkLab.lch(OkLab.fromWorking(toSRGB.apply(p3))).y)
+            }
+            let pct = Double(outside) / Double(p.width * p.height) * 100
+            total += pct; count += 1
+            print("\((f as NSString).lastPathComponent)\t\(String(format: "%.2f", pct))\t\(String(format: "%.3f", maxChroma))")
+        }
+        if count > 1 { print("mean over \(Int(count)) photos: \(String(format: "%.2f", total / count)) % of pixels hold a colour outside sRGB") }
     }
 
     /// How Apple's decoder leaves clipped highlights, measured on its scene-linear output (the engine's own decode settings: boost,

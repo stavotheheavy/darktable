@@ -69,7 +69,8 @@ struct CIModule: Sendable {
             // the module's own lift is a gain on the input, inside the tone kernel
             let lift = Exposure.gain(ev: v["exposure"] ?? 0)
             let tone = SceneTone(contrast: v["contrast"] ?? 0, whiteEV: v["white"] ?? SceneTone.defaultWhiteEV,
-                                 purity: v["purity"] ?? SceneTone.defaultPurity, peak: v["peak"] ?? 1)
+                                 purity: v["purity"] ?? SceneTone.defaultPurity, peak: v["peak"] ?? 1,
+                                 target: OutputGamut(rawValue: Int(v["_target"] ?? 0)) ?? .sRGB)
             return FusedOp(.sceneTone, tone.uniforms(gain: SIMD3(repeating: lift)))
         default:
             return nil
@@ -612,7 +613,20 @@ extension CIModule {
     }()
 
     /// The catalogue as the engine lists it: the Core Image modules, the display transform, then geometry.
-    static let all: [CIModule] = catalogue + [display] + geometryModules
+    /// Modules whose output moved when the working space changed from sRGB primaries to Rec.2020 (their luminance, OkLab or tone stage is
+    /// in the working primaries): a saved edit made before shows the "maths changed" notice. The other modules (gains, curves, levels,
+    /// the curves, levels) are per channel and did not move. `colorize` is a Core Image filter that weighs the channels, so it moved too.
+    static let workingSpaceVersions: [String: Int] = [
+        "display": 3, "colorbalancergb": 2, "monochrome": 2, "splittoning": 2, "sharpen": 2, "bilat": 2, "atrous": 2,
+        "denoiseprofile": 2, "hazeremoval": 2, "zones": 2, "colorize": 2,
+    ]
+
+    static let all: [CIModule] = (catalogue + [display] + geometryModules).map { module in
+        guard let version = workingSpaceVersions[module.operation] else { return module }
+        var m = module
+        m.algorithmVersion = version
+        return m
+    }
 
     static func named(_ operation: String) -> CIModule? {
         all.first { $0.operation == operation }

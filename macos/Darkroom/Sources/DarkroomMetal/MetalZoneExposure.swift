@@ -21,7 +21,7 @@ public enum MetalZoneExposure {
                            uint2 gid [[thread_position_in_grid]]) {
         if (gid.x >= dst.get_width() || gid.y >= dst.get_height()) { return; }
         float3 c = src.read(uint2(int2(gid) + off[0])).rgb;
-        float y = max(dot(c, float3(0.2126f, 0.7152f, 0.0722f)), 1e-6f);
+        float y = max(dot(c, \#(MetalColorCommon.lumaVector)), 1e-6f);
         float z = log2(y / 0.18f);
         dst.write(float4(z, z, z, 1.0f), gid);
     }

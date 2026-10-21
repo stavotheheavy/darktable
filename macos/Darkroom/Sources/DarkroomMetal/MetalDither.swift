@@ -49,8 +49,14 @@ public enum MetalDither {
 }
 
 extension CIBridge {
-    /// The viewport's last step before 8 bits: triangular dither of `peak` codes in the sRGB-encoded domain (see MetalDither).
+    /// The viewport's last step before 8 bits: triangular dither of `peak` codes in the sRGB-encoded domain (see MetalDither). The image is
+    /// in the working space (Rec.2020); the dither is added in linear sRGB primaries, where the 8-bit codes will be made (a per-channel
+    /// noise in other primaries would be mixed by the conversion and come out amplified), and the image goes back to the working space,
+    /// so the conversion Core Image does on output undoes the first one exactly.
     public static func dither8(_ image: CIImage, peak: Double = 1) throws -> CIImage {
-        try perPixel(image, source: MetalDither.source, function: "ditherTex", uniforms: [Float(peak)])
+        guard let srgb = CGColorSpace(name: CGColorSpace.extendedLinearSRGB) else { return image }
+        let inSRGB = image.matchedFromWorkingSpace(to: srgb) ?? image
+        let noisy = try perPixel(inSRGB, source: MetalDither.source, function: "ditherTex", uniforms: [Float(peak)])
+        return noisy.matchedToWorkingSpace(from: srgb) ?? noisy
     }
 }

@@ -516,7 +516,8 @@ do {
 
 // SceneTone: the display module's Metal kernel (scenetoneBuf, working-space input with a folded gain) against the oracle, SDR and HDR, on neutrals and saturated colours
 do {
-    for (label, tone) in [("SDR", SceneTone(contrast: 20)), ("HDR peak 4", SceneTone(peak: 4)), ("purity 0", SceneTone(purity: 0))] {
+    for (label, tone) in [("SDR", SceneTone(contrast: 20)), ("HDR peak 4", SceneTone(peak: 4)), ("purity 0", SceneTone(purity: 0)),
+                          ("Display P3 target", SceneTone(contrast: 20, target: .displayP3)), ("Display P3, HDR peak 4", SceneTone(peak: 4, target: .displayP3))] {
         var pixels: [SIMD4<Float>] = []
         var v = 1e-5
         while v < 40 { pixels.append(SIMD4(Float(v), Float(v), Float(v), 1)); v *= 1.07 }

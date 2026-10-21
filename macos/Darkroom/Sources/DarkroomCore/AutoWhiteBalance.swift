@@ -15,7 +15,7 @@ public enum AutoWhiteBalance {
         var sum = SIMD3<Double>(repeating: 0)
         var count = 0.0
         for p in pixels {
-            let luminance = 0.2126 * p.x + 0.7152 * p.y + 0.0722 * p.z
+            let luminance = ColorCommon.luminance(p)
             guard p.max() < ceiling, luminance >= 0.02 else { continue }
             sum += p
             count += 1

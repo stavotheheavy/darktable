@@ -564,7 +564,9 @@ let moColours = (0..<4096).map { i in
 let moIdentity = moColours.allSatisfy { near(Monochrome.apply($0, intensity: 0, filterHueDegrees: 30, filterStrength: 1), $0, 1e-12) }
 check("MO1 intensity 0 is the identity on 4096 colours", moIdentity)
 let moWhite = Monochrome.apply(SIMD3(0.5, 0.25, 1.0), intensity: 1, filterHueDegrees: 30, filterStrength: 0)
-check("MO2 plain black and white is the luminance grey 0.3573", near(moWhite, SIMD3(repeating: 0.3573), 1e-12), "\(moWhite)")
+let moLumaGrey = ColorCommon.luminance(SIMD3(0.5, 0.25, 1.0))   // the working space's weights (Rec.2020: 0.2627, 0.6780, 0.0593)
+check("MO2 plain black and white is the working space's luminance grey (\(String(format: "%.4f", moLumaGrey)), not Rec.709's 0.3573)",
+      near(moWhite, SIMD3(repeating: moLumaGrey), 1e-12) && abs(moLumaGrey - 0.3573) > 0.002, "\(moWhite)")
 let moGrey = Monochrome.apply(SIMD3(repeating: 0.3), intensity: 1, filterHueDegrees: 30, filterStrength: 1)
 check("MO3 greys ignore the filter", near(moGrey, SIMD3(repeating: 0.3), 1e-9), "\(moGrey)")
 func moColour(_ hueDegrees: Double) -> SIMD3<Double> {
@@ -1406,9 +1408,14 @@ do {
     }
     let cq = alpha(["mask_kind": 4, "mask_hue": 30, "mask_hue_width": 40, "mask_chroma_min": 0.02, "mask_feather": 0.5], rgb: col(0.6, 0.1, 55))
     check("MR4 colour: dh 25 in the 20...40 fade is 1 - 0.15625", close(cq, 0.84375), "\(cq)")
-    // luminance must be Rec.709: (0.5, 0.2, 0.1) is s = 0.5065; the channel mean (s 0.5164) and Rec.601 (0.5276) are above 0.51
-    let c709 = alpha(["mask_kind": 3, "mask_low": 0.51, "mask_high": 0.8, "mask_feather": 0], rgb: SIMD3(0.5, 0.2, 0.1))
-    check("MR5 luminance mask uses Rec.709 weights (mean or Rec.601 would be inside the 0.51...0.8 window)", c709 == 0, "\(c709)")
+    // the luminance is the working space's (Rec.2020 weights): (0.5, 0.2, 0.1) is s = sqrt(Y); Rec.709 (0.5065), the channel mean (0.5164) and
+    // Rec.601 (0.5276) are all more than 0.005 away, so a narrow window around the right s catches any of them
+    let sYes = ColorCommon.luminance(SIMD3(0.5, 0.2, 0.1)).squareRoot()
+    let inWindow = alpha(["mask_kind": 3, "mask_low": sYes - 0.002, "mask_high": sYes + 0.002, "mask_feather": 0], rgb: SIMD3(0.5, 0.2, 0.1))
+    let belowWindow = alpha(["mask_kind": 3, "mask_low": sYes + 0.003, "mask_high": 0.9, "mask_feather": 0], rgb: SIMD3(0.5, 0.2, 0.1))
+    let others = [0.5065, 0.5164, 0.5276].allSatisfy { abs($0 - sYes) > 0.005 }
+    check("MR5 luminance mask uses the working space's weights (a window around s = \(String(format: "%.4f", sYes)) holds it; Rec.709, Rec.601 and the mean are outside)",
+          inWindow == 1 && belowWindow == 0 && others, "in \(inWindow), below \(belowWindow), others apart \(others)")
     // lightness must not leak into the colour weight: inside both soft bands the answer is 0.25 at every lightness
     let leaks = [0.2, 0.6, 0.9].map {
         alpha(["mask_kind": 4, "mask_hue": 30, "mask_hue_width": 20, "mask_chroma_min": 0.02, "mask_feather": 0.5], rgb: col($0, 0.015, 45))
@@ -1803,11 +1810,17 @@ do {
     check("TS4 with purity 0.5 chroma at +3.5 EV is under half of chroma at +1 EV (the path to white)", chromaHigh < 0.5 * chromaLow, "\(chromaHigh) vs \(chromaLow)")
 }
 
-// TS5 gamut: for a 20 x 20 x 20 grid of Rec.2020 colours up to +4 EV no output channel leaves 0...1, a colour the step had to move keeps its
-// OkLab lightness (within 1e-6) and hue (within 0.05 degrees), and one that was already inside is returned unchanged
-do {
-    let t = SceneTone()
-    var outOfRange = 0, worstL = 0.0, worstHue = 0.0, grid = 0, moved = 0, untouchedDiff = 0.0, cutLightness = 0.0
+// TS5 gamut, for each output gamut (sRGB and Display P3): over a 20 x 20 x 20 grid of working-space colours up to +4 EV no output leaves the target's
+// cube 0...1, a colour the step had to move keeps its OkLab lightness (within 1e-6) and hue (within 0.05 degrees), one already inside is returned
+// unchanged, and the output stays in working primaries (so Core Image's last conversion has nothing to clip)
+for target in [OutputGamut.sRGB, .displayP3] {
+    let t = SceneTone(target: target)
+    let name = target == .sRGB ? "sRGB" : "Display P3"
+    func inCube(_ w: SIMD3<Double>, _ eps: Double = 1e-9) -> Bool {
+        let u = target.fromWorking.apply(w)
+        return min(u.x, u.y, u.z) >= -eps && max(u.x, u.y, u.z) <= 1 + eps
+    }
+    var outOfRange = 0, worstL = 0.0, worstHue = 0.0, grid = 0, moved = 0, untouchedDiff = 0.0, cutLightness = 0.0, untouchedCount = 0
     let top = 0.18 * pow(2, 4.0)
     for i in 0..<20 { for j in 0..<20 { for k in 0..<20 {
         let rgb = SIMD3(Double(i), Double(j), Double(k)) * (top / 19)
@@ -1815,33 +1828,47 @@ do {
         guard n > 1e-3 else { continue }
         grid += 1
         let o = t.displayLinear(rgb)
-        if min(o.x, o.y, o.z) < 0 || max(o.x, o.y, o.z) > 1 + 1e-12 || !(o.x.isFinite && o.y.isFinite && o.z.isFinite) { outOfRange += 1 }
-        let raw = ColorSpaces.rec2020ToSRGB.apply(rgb * (t.apply(n) / n))
-        let h = t.kneeEV, x = log2(n / 0.18)
-        _ = h
-        guard x <= t.kneeEV else { continue }   // above the knee the way to white also moves colour; check the step on its own below
-        let inside = min(raw.x, raw.y, raw.z) >= 0 && max(raw.x, raw.y, raw.z) <= 1
-        if inside { untouchedDiff = max(untouchedDiff, max(abs(o.x - raw.x), abs(o.y - raw.y), abs(o.z - raw.z))) }
+        if !(o.x.isFinite && o.y.isFinite && o.z.isFinite) || !inCube(o, 1e-6) { outOfRange += 1 }
+        let raw = rgb * (t.apply(n) / n)
+        guard log2(n / 0.18) <= t.kneeEV else { continue }   // above the knee the way to white also moves colour; the step on its own is checked below
+        if inCube(raw, 0) { untouchedCount += 1; untouchedDiff = max(untouchedDiff, max(abs(o.x - raw.x), abs(o.y - raw.y), abs(o.z - raw.z))) }
     } } }
-    // the step on its own, on colours the matrix throws far outside sRGB
+    // the step on its own, on colours far outside the target gamut
     for i in 0..<40 { for j in 0..<40 {
         let lab = SIMD3(0.35 + 0.5 * Double(i) / 39, 0.45 * cos(Double(j) * .pi / 20), 0.45 * sin(Double(j) * .pi / 20))
         let s = OkLab.toWorking(lab)
         let g = t.gamutMap(s)
-        if min(s.x, s.y, s.z) < -1e-5 || max(s.x, s.y, s.z) > 1 + 1e-5 {
+        if !inCube(s, 1e-5) {
             moved += 1
             let after = OkLab.fromWorking(g)
             worstL = max(worstL, abs(after.x - lab.x))
             if OkLab.lch(after).y > 0.003 { worstHue = max(worstHue, abs(ColorCommon.hueDifference(OkLab.lch(after).z * 180 / .pi, OkLab.lch(lab).z * 180 / .pi))) }
-            let cut = SIMD3(min(max(s.x, 0), 1), min(max(s.y, 0), 1), min(max(s.z, 0), 1))
+            let u = target.fromWorking.apply(s)
+            let cut = target.toWorking.apply(SIMD3(min(max(u.x, 0), 1), min(max(u.y, 0), 1), min(max(u.z, 0), 1)))
             cutLightness = max(cutLightness, abs(OkLab.fromWorking(cut).x - lab.x))
         }
     } }
-    check("TS5 no output channel outside 0...1 over \(grid) grid colours", outOfRange == 0, "\(outOfRange)")
-    check("TS5 a colour already inside the display gamut is returned unchanged (below the knee)", untouchedDiff < 1e-9, "\(untouchedDiff)")
-    check("TS5 over \(moved) colours outside the gamut the step keeps OkLab lightness within 1e-6", moved > 200 && worstL < 1e-3, "moved \(moved), worst \(worstL)")
-    check("TS5 and keeps their hue within 0.05 degrees", worstHue < 0.05, "\(worstHue)")
-    check("TS5 mutation: cutting channels changes OkLab lightness by more than 0.02 somewhere", cutLightness > 0.02, "\(cutLightness)")
+    check("TS5 (\(name)) no output outside the target's cube 0...1 over \(grid) grid colours", outOfRange == 0, "\(outOfRange)")
+    check("TS5 (\(name)) a colour already inside (\(untouchedCount) of them, below the knee) is returned unchanged", untouchedCount > 50 && untouchedDiff < 1e-9, "\(untouchedCount), \(untouchedDiff)")
+    check("TS5 (\(name)) over \(moved) colours outside the gamut the step keeps OkLab lightness within 1e-6", moved > 200 && worstL < 1e-3, "moved \(moved), worst \(worstL)")
+    check("TS5 (\(name)) and keeps their hue within 0.05 degrees", worstHue < 0.05, "\(worstHue)")
+    check("TS5 (\(name)) mutation: cutting channels changes OkLab lightness by more than 0.02 somewhere", cutLightness > 0.02, "\(cutLightness)")
+}
+
+// TS5b Display P3 holds colours sRGB cannot: for saturated colours the P3 output is at least as chromatic as the sRGB one, and clearly more on some
+do {
+    let srgb = SceneTone(purity: 0, target: .sRGB), p3 = SceneTone(purity: 0, target: .displayP3)
+    var never = true, gain = 0.0, more = 0
+    for k in 0..<36 {
+        let h = (Double(k) * 10 - 175) * .pi / 180
+        let base = OkLab.toWorking(OkLab.lab(SIMD3(0.7, 0.2, h)))   // a vivid colour, outside sRGB for most hues
+        let scene = base * (0.18 * pow(2, 1.5) / SceneTone.luminance(base))
+        let cs = OkLab.lch(OkLab.fromWorking(srgb.displayLinear(scene))).y, cp = OkLab.lch(OkLab.fromWorking(p3.displayLinear(scene))).y
+        if cp < cs - 1e-9 { never = false }
+        gain = max(gain, cp - cs)
+        if cp > cs + 0.01 { more += 1 }
+    }
+    check("TS5b the Display P3 target never has less chroma than sRGB, and keeps more on \(more) of 36 vivid hues (up to +\(String(format: "%.3f", gain)))", never && more >= 12 && gain > 0.03, "\(never) \(more) \(gain)")
 }
 
 // TS6 HDR: a peak-4 render equals the SDR render below the knee, and reaches 4 two stops past the SDR white point
@@ -1855,19 +1882,21 @@ do {
     check("TS6 the HDR curve never dips under the SDR curve", stride(from: -14.0, through: 8.0, by: 0.01).allSatisfy { hdr.curve($0) >= sdr.curve($0) - 1e-12 })
 }
 
-// TS7 hostile input: black, negative channels, NaN, infinity and huge values give finite output inside 0...peak
+// TS7 hostile input: black, negative channels, NaN, infinity and huge values give finite output inside the target's cube, for both gamuts
 do {
-    let t = SceneTone()
     let cases: [SIMD3<Double>] = [.zero, SIMD3(-0.1, 0.02, -0.3), SIMD3(-1, -1, -1), SIMD3(.nan, 1, 1), SIMD3(.infinity, 0, 0),
                                   SIMD3(1e30, 1e30, 1e30), SIMD3(1e-30, 0, 0), SIMD3(5, -5, 0.3)]
-    let ok = cases.allSatisfy { c in
-        let o = t.displayLinear(c)
-        return o.x.isFinite && o.y.isFinite && o.z.isFinite && min(o.x, o.y, o.z) >= 0 && max(o.x, o.y, o.z) <= 1
+    for target in [OutputGamut.sRGB, .displayP3] {
+        let t = SceneTone(target: target)
+        let ok = cases.allSatisfy { c in
+            let o = t.displayLinear(c)
+            let u = target.fromWorking.apply(o)
+            return o.x.isFinite && o.y.isFinite && o.z.isFinite && min(u.x, u.y, u.z) >= -1e-6 && max(u.x, u.y, u.z) <= 1 + 1e-6
+        }
+        check("TS7 (\(target == .sRGB ? "sRGB" : "Display P3")) black, negative, NaN, infinite and huge inputs give finite output inside the cube", ok)
     }
-    check("TS7 black, negative, NaN, infinite and huge inputs give finite output inside 0...1", ok)
     check("TS7 non-finite settings fall back to the defaults", SceneTone(contrast: .nan, whiteEV: .nan, purity: .nan, peak: .nan).apply(0.5) == SceneTone().apply(0.5))
 }
-
 
 // MARK: ZoneExposure (the zones module)
 

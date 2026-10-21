@@ -77,7 +77,7 @@ enum FilterKernels {
                                constant float *u [[buffer(0)]], constant int2 *off [[buffer(1)]], uint2 gid [[thread_position_in_grid]]) {
         if (gid.x >= dst.get_width() || gid.y >= dst.get_height()) { return; }
         float4 c = p.read(uint2(int2(gid) + off[0]));
-        float y = dot(c.rgb, float3(0.2126f, 0.7152f, 0.0722f));
+        float y = dot(c.rgb, \#(MetalColorCommon.lumaVector));
         dst.write(float4(y, y, y, c.a), gid);
     }
     kernel void filtersMulTex(texture2d<float, access::read> a [[texture(0)]], texture2d<float, access::read> b [[texture(1)]],
