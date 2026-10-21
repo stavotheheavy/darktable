@@ -1014,17 +1014,13 @@ extension CIModule {
             fields: [field("brightness", -1, 1, 0), field("contrast", -1, 1, 0)],
             apply: { image, v in try CIModule.applyFused("colorcorrection", image, v) }),
 
-        // Clahe, approximate: local contrast by unsharp masking; not the tile-based CLAHE.
+        // Clahe: contrast limited adaptive histogram equalisation on a grid of tiles (Zuiderveld 1994), the new luminance given back as a gain. Clahe in DarkroomCore is the oracle
+        // (CLH1-CLH6, E-CLH); the GPU twin builds each tile's mapping in a threadgroup.
         CIModule(
-            operation: "clahe", name: "old local contrast (approximate)", iopOrder: 64,
+            operation: "clahe", name: "adaptive contrast (CLAHE)", iopOrder: 64,
             defaultEnabled: false,
-            fields: [field("strength", 0, 2, 0)],
-            apply: { image, v in
-                image.applyingFilter("CIUnsharpMask", parameters: [
-                    kCIInputRadiusKey: 8 * (v["_scale"] ?? 1),
-                    kCIInputIntensityKey: v["strength"] ?? 0,
-                ])
-            }),
+            fields: [field("amount", 0, 1, 0), field("tiles", 2, 16, 8), field("clip", 1, 10, 3)],
+            apply: { image, v in try CIBridge.clahe(image, tiles: Int((v["tiles"] ?? 8).rounded()), clip: v["clip"] ?? 3, amount: v["amount"] ?? 0) }),
     ]
 
     /// A float field whose label is its own name, since darktable's descriptions are not carried here.
@@ -1147,6 +1143,8 @@ extension CIModule {
         "radialblur": 2,
         // refine 2: lowpass is a low-pass of the tone with colour kept (3, was the same blur as blurs), and relight is shadhi's shadows control (was Core Image's shadow adjust)
         "relight": 2,
+        // refine 3: clahe is real tile-histogram equalisation (was an unsharp mask)
+        "clahe": 2,
         // same: colorcontrast and colorcorrection were Core Image's colour controls and are now the OkLab saturation and the colisa maths
         "colorcontrast": 2, "colorcorrection": 2,
         // same: basecurve (CIGammaAdjust), dither (CIColorPosterize) and colorize (CIColorMonochrome) are now their own maths on the encoded value or in OkLab
