@@ -2335,5 +2335,37 @@ do {
     check("LG7 highlights and midtones leave black at black (within 1e-12)", max(blackH.x, blackH.y, blackH.z) < 1e-12, "\(blackH)")
 }
 
+// CCT colour contrast (ColorContrast) and CCR colour correction (ColorCorrection)
+do {
+    func swatch(_ i: Int) -> SIMD3<Double> {
+        let t = Double(i) / 4095, h = t * 37 * 2 * .pi, v = 0.002 + 2.5 * t
+        return SIMD3(v * (0.6 + 0.4 * cos(h)), v * (0.6 + 0.4 * cos(h - 2.1)), v * (0.6 + 0.4 * cos(h + 2.1)))
+    }
+    var idCT = 0.0, idCR = 0.0, finite = true
+    for i in 0..<4096 {
+        let c = swatch(i)
+        let a = ColorContrast.apply(c, saturation: 0), b = ColorCorrection.apply(c, brightness: 0, contrast: 0)
+        for k in 0..<3 {
+            if !a[k].isFinite || !b[k].isFinite { finite = false }
+            idCT = max(idCT, abs(a[k] - c[k]) / abs(c[k])); idCR = max(idCR, abs(b[k] - c[k]) / abs(c[k]))
+        }
+    }
+    check("CCT1 zero saturation is the identity within 1e-9 relative, finite", idCT < 1e-9 && finite, "\(idCT)")
+    check("CCR1 zero brightness and contrast are the identity within 1e-9 relative, finite", idCR < 1e-9 && finite, "\(idCR)")
+    let colour = OkLab.toWorking(SIMD3(0.6, 0.08, -0.05))
+    let grey = OkLab.lch(OkLab.fromWorking(ColorContrast.apply(colour, saturation: -1)))
+    check("CCT2 saturation -1 removes the chroma and keeps lightness (within 1e-9)", grey.y < 1e-9 && abs(grey.x - 0.6) < 1e-9, "\(grey)")
+    let more = OkLab.lch(OkLab.fromWorking(ColorContrast.apply(colour, saturation: 0.5)))
+    check("CCT3 saturation +0.5 is 1.5x the chroma and keeps hue (within 1e-9)", abs(more.y - 1.5 * hypot(0.08, -0.05)) < 1e-9 && abs(ColorCommon.hueDifference(more.z, atan2(-0.05, 0.08))) < 1e-9, "\(more)")
+    let g = ColorContrast.apply(SIMD3(repeating: 0.3), saturation: 1)
+    check("CCT4 a grey stays grey (within 1e-9)", abs(g.x - 0.3) < 1e-9 && abs(g.y - 0.3) < 1e-9 && abs(g.z - 0.3) < 1e-9)
+    let up = ColorCorrection.apply(SIMD3(0.1, 0.2, 0.3), brightness: 1, contrast: 0)
+    check("CCR2 brightness +1 is +2 EV (x4, within 1e-9)", abs(up.x - 0.4) < 1e-9 && abs(up.y - 0.8) < 1e-9 && abs(up.z - 1.2) < 1e-9, "\(up)")
+    let pivot = ColorCorrection.apply(SIMD3(repeating: 0.18), brightness: 0, contrast: 0.8)
+    check("CCR3 contrast leaves middle grey where it is (within 1e-9)", abs(pivot.x - 0.18) < 1e-9, "\(pivot)")
+    let lo = ColorCorrection.apply(SIMD3(repeating: 0.05), brightness: 0, contrast: 0.5), hi = ColorCorrection.apply(SIMD3(repeating: 0.6), brightness: 0, contrast: 0.5)
+    check("CCR4 contrast +0.5 darkens below middle grey and lightens above it", lo.x < 0.05 && hi.x > 0.6, "\(lo) \(hi)")
+}
+
 print(failures == 0 ? "\nall checks passed" : "\n\(failures) failed")
 exit(failures == 0 ? 0 : 1)

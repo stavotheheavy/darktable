@@ -1666,5 +1666,19 @@ do {
     check("E-RC the default curve changes nothing (unclamped within 1e-3)", worstLinear(run([StackEntry(operation: "rgbcurve", params: [:])]), scene) < 1e-3)
 }
 
+// E-CCT colour contrast and E-CCR colour correction: the fused per-pixel kernels through the engine against their oracles
+do {
+    let ctEngine = run([StackEntry(operation: "colorcontrast", params: ["saturation": .number(0.6)])])
+    let ctOracle = scene.map { ColorContrast.apply($0, saturation: 0.6) }
+    check("E-CCT colour contrast matches the oracle within 1/255 and unclamped within 1e-4", worst(ctEngine, ctOracle) < tol && worstLinear(ctEngine, ctOracle) < 1e-4,
+          "encoded \(worst(ctEngine, ctOracle)), linear \(worstLinear(ctEngine, ctOracle))")
+    let crEngine = run([StackEntry(operation: "colorcorrection", params: ["brightness": .number(0.3), "contrast": .number(0.5)])])
+    let crOracle = scene.map { ColorCorrection.apply($0, brightness: 0.3, contrast: 0.5) }
+    check("E-CCR colour correction matches the oracle within 1/255 and unclamped within 1e-4", worst(crEngine, crOracle) < tol && worstLinear(crEngine, crOracle) < 1e-4,
+          "encoded \(worst(crEngine, crOracle)), linear \(worstLinear(crEngine, crOracle))")
+    check("E-CCT E-CCR zero settings change nothing (within float rounding)",
+          worstLinear(run([StackEntry(operation: "colorcontrast", params: [:]), StackEntry(operation: "colorcorrection", params: [:])]), scene) < 1e-4)
+}
+
 print(failures == 0 ? "\nall checks passed" : "\n\(failures) failed")
 exit(failures == 0 ? 0 : 1)

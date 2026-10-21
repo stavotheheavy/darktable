@@ -62,8 +62,8 @@ public enum ParityList {
             // Core Image stand-ins
             e("basecurve", .approximate, "a gamma only"), e("colorize", .approximate), e("blurs", .approximate), e("lowpass", .approximate),
             e("dither", .approximate), e("censorize", .approximate), e("soften", .approximate), e("rgbcurve", .exact, "one curve of five nodes on every channel (darktable's linked mode); the tone curve's oracle and kernel"),
-            e("relight", .approximate, "deprecated in darktable; shadhi or toneequal replace it"), e("colorcontrast", .approximate),
-            e("colorcorrection", .approximate), e("clahe", .approximate, "deprecated in darktable; bilat replaces it"),
+            e("relight", .approximate, "deprecated in darktable; shadhi or toneequal replace it"), e("colorcontrast", .exact, "the OkLab saturation step of colour balance on its own"),
+            e("colorcorrection", .exact, "brightness as 2^(2b) of exposure and contrast about middle grey: colisa without the saturation"), e("clahe", .approximate, "deprecated in darktable; bilat replaces it"),
             // the job is done by something we have
             e("filmicrgb", .covered(by: "display"), "the scene-referred display transform is the tone mapper"),
             e("sigmoid", .covered(by: "display")), e("agx", .covered(by: "display")),

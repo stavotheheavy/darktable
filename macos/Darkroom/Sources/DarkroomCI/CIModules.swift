@@ -19,7 +19,7 @@ struct CIModule: Sendable {
     /// The modules whose work is one pixel in, one pixel out, on our own Metal functions: a run of them is one pass over the frame
     /// (see MetalFused). The engine fuses them when they are unmasked and at full opacity.
     static let fusableOperations: Set<String> = [
-        "temperature", "exposure", "colorbalancergb", "channelmixer", "tonecurve", "monochrome", "rgblevels", "splittoning", "display", "invert", "colisa", "velvia", "colorzones", "satcurvergb", "colorbalance", "rgbcurve",
+        "temperature", "exposure", "colorbalancergb", "channelmixer", "tonecurve", "monochrome", "rgblevels", "splittoning", "display", "invert", "colisa", "velvia", "colorzones", "satcurvergb", "colorbalance", "rgbcurve", "colorcontrast", "colorcorrection",
     ]
 
     /// The fused op a fusable module stands for with these values, or nil when the module does nothing at them. This is the one place the
@@ -75,6 +75,12 @@ struct CIModule: Sendable {
             let t = LiftGammaGain.terms(v)
             let u: [Float] = [t.slope, t.offset, t.power].flatMap { [Float($0.x), Float($0.y), Float($0.z)] }
             return u == [1, 1, 1, 0, 0, 0, 1, 1, 1] ? nil : FusedOp(.liftGammaGain, u)
+        case "colorcontrast":
+            let saturation = v["saturation"] ?? 0
+            return saturation == 0 ? nil : FusedOp(.colorBalance, [0, Float(saturation), 0])
+        case "colorcorrection":
+            let brightness = v["brightness"] ?? 0, contrast = v["contrast"] ?? 0
+            return contrast == 0 && brightness == 0 ? nil : FusedOp(.colisa, [Float(contrast), 0, 0, Float(Colisa.gain(brightness: brightness))])
         case "rgblevels":
             let black = v["black"] ?? 0
             let white = max(v["white"] ?? 1, black + 0.01)
@@ -576,28 +582,21 @@ extension CIModule {
                 ])
             }),
 
-        // Colour contrast, approximate: a saturation change from Core Image's colour controls.
+        // Colour contrast: the OkLab saturation step of colour balance on its own. ColorContrast in DarkroomCore is the oracle (CCT1-CCT4,
+        // E-CCT); it runs on the colour balance kernel.
         CIModule(
-            operation: "colorcontrast", name: "color contrast (approximate)", iopOrder: 29,
+            operation: "colorcontrast", name: "color contrast", iopOrder: 29,
             defaultEnabled: false,
             fields: [field("saturation", -1, 1, 0)],
-            apply: { image, v in
-                image.applyingFilter("CIColorControls", parameters: [
-                    kCIInputSaturationKey: 1 + (v["saturation"] ?? 0),
-                ])
-            }),
+            apply: { image, v in try CIModule.applyFused("colorcontrast", image, v) }),
 
-        // Colour correction, approximate: a brightness and contrast shift.
+        // Colour correction: brightness (2^(2b) of exposure) and contrast (a power about middle grey). ColorCorrection in DarkroomCore
+        // is the oracle (CCR1-CCR4, E-CCR); it runs on the colisa kernel.
         CIModule(
-            operation: "colorcorrection", name: "color correction (approximate)", iopOrder: 31,
+            operation: "colorcorrection", name: "color correction", iopOrder: 31,
             defaultEnabled: false,
             fields: [field("brightness", -1, 1, 0), field("contrast", -1, 1, 0)],
-            apply: { image, v in
-                image.applyingFilter("CIColorControls", parameters: [
-                    kCIInputBrightnessKey: v["brightness"] ?? 0,
-                    kCIInputContrastKey: 1 + (v["contrast"] ?? 0),
-                ])
-            }),
+            apply: { image, v in try CIModule.applyFused("colorcorrection", image, v) }),
 
         // Clahe, approximate: local contrast by unsharp masking; not the tile-based CLAHE.
         CIModule(
@@ -726,6 +725,8 @@ extension CIModule {
         "bloom": 2,
         // same: rgbcurve was Core Image's CIToneCurve and is now the tone curve's monotone cubic on the encoded value
         "rgbcurve": 2,
+        // same: colorcontrast and colorcorrection were Core Image's colour controls and are now the OkLab saturation and the colisa maths
+        "colorcontrast": 2, "colorcorrection": 2,
     ]
 
     static let all: [CIModule] = (catalogue + [display] + geometryModules).map { module in
