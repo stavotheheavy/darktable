@@ -812,6 +812,9 @@ struct SelfTest {
         try await run("exposure slider, with the same four detail modules") { i in
             detail + [StackEntry(operation: "exposure", params: ["exposure": num(Double(i) * 0.05)]), display(0)]
         }
+        try await run("zone exposure, Shadows slider (the base is kept, the gain re-runs)") { i in
+            [StackEntry(operation: "zones", params: ["shadows": num(Double(i) * 0.05), "highlights": num(-0.5)]), display(0)]
+        }
         try await run("draft render (scale 0.5), display contrast slider", scale: 0.5) { i in [display(Double(i))] }
         try await run("draft render (scale 0.5), detail modules + contrast slider", scale: 0.5) { i in detail + [display(Double(i))] }
     }

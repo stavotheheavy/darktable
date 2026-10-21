@@ -972,6 +972,32 @@ do {
 }
 
 
+// E-SEG-zones the zone exposure's base is kept between slider moves: only the gain pass re-runs, and the picture is the one without the cache
+do {
+    if let probe = try? SegmentProbe() {
+        func zs(_ shadows: Double, _ highlights: Double = 0) -> [StackEntry] {
+            [StackEntry(operation: "zones", params: ["shadows": .number(shadows), "highlights": .number(highlights), "scale": .number(0.1)]),
+             StackEntry(operation: "display", params: ["contrast": .number(0), "exposure": .number(0.5)])]
+        }
+        func gap(_ a: [SIMD4<Float>], _ b: [SIMD4<Float>]) -> Double {
+            guard a.count == b.count, !a.isEmpty else { return .infinity }
+            var w = 0.0
+            for (x, y) in zip(a, b) { for k in 0..<3 { w = max(w, abs(Double(x[k]) - Double(y[k])) / max(1, Double(abs(y[k])))) } }
+            return w
+        }
+        let r = { (s: [StackEntry], cached: Bool) in (try? probe.render(stack: s, pixels: detailPx, width: detailW, height: detailH, cached: cached)) ?? [] }
+        let first = r(zs(1.0), true)
+        check("E-SEG-zones the first render through the cache (base and result stored) equals the uncached one", gap(first, r(zs(1.0), false)) < 2e-3 && probe.entries == 2, "entries \(probe.entries), gap \(gap(first, r(zs(1.0), false)))")
+        let hits0 = probe.hits
+        let moved = r(zs(1.6, -0.5), true)
+        check("E-SEG-zones moving the sliders reuses the base (one new entry, the result; one hit) and matches the uncached render",
+              probe.entries == 3 && probe.hits == hits0 + 1 && gap(moved, r(zs(1.6, -0.5), false)) < 2e-3 && gap(moved, first) > 0.01,
+              "entries \(probe.entries), hits \(probe.hits - hits0), gap \(gap(moved, r(zs(1.6, -0.5), false)))")
+    } else {
+        check("E-SEG-zones the segment probe could not start", false)
+    }
+}
+
 // T10 HDR: a ramp from deep shadow to 4 stops over white through the display transform; the SDR render, the HDR
 // render and the exported file (an SDR JPEG carrying a gain map) must agree with each other and with SceneTone
 do {

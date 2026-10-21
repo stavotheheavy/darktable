@@ -328,10 +328,13 @@ public actor CIEngine: PhotoEngine {
         // entry so far; a render starts from the deepest boundary whose key is still there. A render that draws a mask over the
         // picture skips the cache (the matte is made inside the loop).
         var boundaryKeys: [Int: String] = [:]
+        // the text identifying the picture a module receives, for the zone exposure's base (which does not depend on its own settings)
+        var inputKeys: [Int: String] = [:]
         var start = 0
         if let segments, !ordered.contains(where: { ($0.1.blend["mask_show"]?.double ?? 0) != 0 }) {
             var prefix = "\(segments.base)|\(hdrPeak.map { "\($0)" } ?? "sdr")|\(scale)|\(camera.rawValue)"
             for (i, (m, entry)) in ordered.enumerated() {
+                inputKeys[i] = prefix
                 prefix += "\n" + fingerprint(entry)
                 if CIModule.neighbourhoodOperations.contains(m.operation) { boundaryKeys[i] = prefix }
             }
@@ -366,7 +369,23 @@ public actor CIEngine: PhotoEngine {
             if let hdrPeak, m.operation == "display" { values["peak"] = hdrPeak }
             values["_scale"] = scale.isFinite ? min(max(scale, 1e-3), 1) : 1
             values["_camera"] = Double(camera.rawValue)   // modules that draw their own matte need the upright picture
-            out = try m.apply(out, values)
+            if m.operation == "zones", let segments, let inputKey = inputKeys[index] {
+                // the base (a guided filter, the expensive half) is kept under the picture it was made from and its radius, so moving a
+                // zone slider re-runs only the one-pass gain
+                let settings = ZoneExposure.Settings(values: values)
+                if !settings.isIdentity {
+                    let e = out.extent
+                    let radius = ZoneExposure.radius(scale: settings.scale, longSide: Int(max(e.width, e.height)))
+                    let baseKey = inputKey + "\nzone-base|\(radius)|\(e.width)x\(e.height)"
+                    let base: CIImage
+                    if let kept = segments.cache.lookup(baseKey) { base = kept } else {
+                        base = segments.cache.store(try CIBridge.zoneBase(out, radius: radius), key: baseKey)
+                    }
+                    out = try CIBridge.zoneGain(out, base: base, evs: settings.zoneEVs)
+                }
+            } else {
+                out = try m.apply(out, values)
+            }
             // a Core Image filter may grow its output (bloom spreads past the edge) or leave it infinite (a clamped blur):
             // a per-pixel module never changes the frame, geometry does that
             if out.extent != before.extent { out = out.cropped(to: before.extent) }

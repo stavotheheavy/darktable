@@ -49,8 +49,19 @@ extension CIBridge {
     /// DarkroomCore.ZoneExposure.apply on the GPU. `evs` are the ten zone changes in EV after the semantic controls.
     public static func zoneExposure(_ image: CIImage, evs: [Double], radius: Int) throws -> CIImage {
         guard evs.count == 10, evs.contains(where: { $0 != 0 }) else { return image }
+        return try zoneGain(image, base: try zoneBase(image, radius: radius), evs: evs)
+    }
+
+    /// The smooth base of the picture's log luminance (the expensive half: a guided filter). It depends on the picture and the radius
+    /// only, never on the zone changes, so the engine keeps it between slider moves.
+    public static func zoneBase(_ image: CIImage, radius: Int) throws -> CIImage {
         let z = try combine([image], source: MetalZoneExposure.source, function: "zoneLogTex", uniforms: [0])
-        let base = try guided(z, radius: min(max(radius, 1), ZoneExposure.maxRadius), eps: ZoneExposure.eps)
+        return try guided(z, radius: min(max(radius, 1), ZoneExposure.maxRadius), eps: ZoneExposure.eps)
+    }
+
+    /// The cheap half: the gain read from `base` and multiplied onto `image`.
+    public static func zoneGain(_ image: CIImage, base: CIImage, evs: [Double]) throws -> CIImage {
+        guard evs.count == 10, evs.contains(where: { $0 != 0 }) else { return image }
         return try combine([image, base], source: MetalZoneExposure.source, function: "zoneGainTex", uniforms: evs.map { Float($0) })
     }
 }
