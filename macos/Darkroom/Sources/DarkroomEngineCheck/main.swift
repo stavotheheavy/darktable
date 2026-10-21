@@ -791,7 +791,7 @@ do {
         if gap(engineOrder, after) > 1e-4 { wrong.append("\(c.operation) \(gap(engineOrder, after))") }
         if gap(engineOrder, before) < 4.0 / 255 { commute.append(c.operation) }
     }
-    check("E-DOM all \(order.count) display-referred modules run after the display transform", wrong.isEmpty && order.count == 14, "\(wrong)")
+    check("E-DOM all \(order.count) display-referred modules run after the display transform", wrong.isEmpty && order.count == 15, "\(wrong)")
     check("E-DOM for each of them the other order gives a visibly different picture (those that do not: \(commute))", commute.isEmpty, "\(commute)")
     check("E-DOM zones and the scene modules are not in the display set", !CIEngineProbe.displayReferredOperations.contains("zones")
           && !CIEngineProbe.displayReferredOperations.contains("exposure") && !CIEngineProbe.displayReferredOperations.contains("bloom") && !CIEngineProbe.displayReferredOperations.contains("colorbalancergb"))

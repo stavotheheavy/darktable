@@ -106,6 +106,8 @@ struct CIModule: Sendable {
     static let displayReferredOperations: Set<String> = [
         "tonecurve", "rgblevels", "rgbcurve", "basecurve", "colisa", "colorcorrection", "colorcontrast", "velvia", "shadhi",
         "relight", "dither", "colorize", "clahe", "splittoning",
+        // a negative is of what is on screen: complemented before the tone map, the dark scene values come out bright and the picture washes out
+        "invert",
     ]
     /// Goes up whenever the module's maths changes. Saved with an edit (the sidecar), so a later app can tell the picture
     /// would now look different; darkroom-engine-check's golden images (T11) fail until the new version has goldens.
