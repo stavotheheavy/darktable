@@ -450,6 +450,21 @@ extension CIModule {
                 return try CIBridge.blendMasked(before: image, after: after, mask: try CIBridge.localMask(image, spec: spec), opacity: 1)
             }),
 
+        // Graduated filter: an exposure change through a soft linear gradient, for a bright sky or a dark foreground. DarkroomCore.GraduatedFilter is
+        // the oracle; the matte is the engine's own gradient mask on the upright picture. Exposure 0 is the identity.
+        CIModule(
+            operation: "graduated", name: "graduated filter", iopOrder: 53, defaultEnabled: false,
+            fields: [field("exposure", -4, 4, 0), field("position", 0, 1, 0.5), field("angle", -180, 180, -90), field("feather", 0, 1, 0.5)],
+            apply: { image, v in
+                let ev = v["exposure"] ?? 0
+                guard ev != 0 else { return image }
+                var spec = GraduatedFilter.spec(position: v["position"] ?? 0.5, angle: v["angle"] ?? -90, feather: v["feather"] ?? 0.5)
+                spec.orientation = Orientation(value: Int(v["_camera"] ?? 0))
+                let g = Exposure.gain(ev: ev)
+                let after = try CIBridge.gain(image, scale: SIMD3(g, g, g))
+                return try CIBridge.blendMasked(before: image, after: after, mask: try CIBridge.localMask(image, spec: spec), opacity: 1)
+            }),
+
         // Highlight reconstruction: a fully clipped pixel takes its colour from nearby reliable pixels (neutral where there are none), a partly
         // clipped one rebuilds its lost channels from the colour of its surroundings. `clip` is the level the data clips at, in scene units
         // (about 3.0 on the camera files measured); `strength` 0 is off. Off by default: Apple's decoder already leaves clipped highlights

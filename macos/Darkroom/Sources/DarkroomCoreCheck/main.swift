@@ -1514,6 +1514,27 @@ do {
             && Mask.alpha(off, x: 12, y: 10, width: 48, height: 40, rgb: SIMD3(0.3, 0.3, 0.3)) == 0)
 }
 
+// GF graduated filter: an exposure change through a soft linear gradient
+do {
+    let w = 48, h = 40
+    let flat = [SIMD3<Double>](repeating: SIMD3(0.2, 0.15, 0.1), count: w * h)
+    func at(_ img: [SIMD3<Double>], _ x: Int, _ y: Int) -> SIMD3<Double> { img[y * w + x] }
+    let up = GraduatedFilter.spec(position: 0.5, angle: -90, feather: 0)
+    check("GF1 exposure 0 is the identity", GraduatedFilter.apply(flat, width: w, height: h, ev: 0, spec: up) == flat)
+    let out = GraduatedFilter.apply(flat, width: w, height: h, ev: -1, spec: up)
+    check("GF2 angle -90 lands on the top: the top row halves per EV, the bottom row is untouched",
+          at(out, 24, 0) == SIMD3(0.1, 0.075, 0.05) && at(out, 24, h - 1) == SIMD3(0.2, 0.15, 0.1))
+    let down = GraduatedFilter.apply(flat, width: w, height: h, ev: -1, spec: GraduatedFilter.spec(position: 0.5, angle: 90, feather: 0))
+    check("GF3 angle 90 lands on the bottom, the opposite side", at(down, 24, h - 1) == SIMD3(0.1, 0.075, 0.05) && at(down, 24, 0) == SIMD3(0.2, 0.15, 0.1))
+    let soft = GraduatedFilter.apply(flat, width: w, height: h, ev: -1, spec: GraduatedFilter.spec(position: 0.5, angle: -90, feather: 0.6))
+    var rising = true
+    for y in 1..<h where at(soft, 24, y).x < at(soft, 24, y - 1).x - 1e-12 { rising = false }
+    check("GF4 with a feather the change eases in: values rise monotonically from the filtered side to the clear side and pass through the middle",
+          rising && at(soft, 24, 0).x < at(soft, 24, h - 1).x && at(soft, 24, h / 2).x > 0.1 && at(soft, 24, h / 2).x < 0.2)
+    let left = GraduatedFilter.apply(flat, width: w, height: h, ev: -1, spec: GraduatedFilter.spec(position: 0.5, angle: 180, feather: 0))
+    check("GF5 angle 180 lands on the left", at(left, 0, 20) == SIMD3(0.1, 0.075, 0.05) && at(left, w - 1, 20) == SIMD3(0.2, 0.15, 0.1))
+}
+
 // RL radial light: an exposure change through a soft ellipse
 do {
     let w = 48, h = 40

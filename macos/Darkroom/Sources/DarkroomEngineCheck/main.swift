@@ -1409,6 +1409,21 @@ do {
     check("E-MS1 a module with no local mask ignores the flag", flat == flatPlain)
 }
 
+// E-GF graduated filter through the engine: against the oracle, tile seams, the zero shortcut
+do {
+    let params: [String: ParamValue] = ["exposure": .number(-1.3), "position": .number(0.45), "angle": .number(-70), "feather": .number(0.4)]
+    let stack = [StackEntry(operation: "graduated", params: params)]
+    let spec = GraduatedFilter.spec(position: 0.45, angle: -70, feather: 0.4)
+    let want = GraduatedFilter.apply(detailImg, width: detailW, height: detailH, ev: -1.3, spec: spec)
+    let got = runDetail(stack)
+    check("E-GF graduated filter matches the oracle within 1/255 and unclamped within 2e-4", worst(got, want) < tol && worstLinear(got, want) < 2e-4,
+          "encoded \(worst(got, want)), linear \(worstLinear(got, want))")
+    check("E-GF the oracle really changes the fixture (a no-op GPU path would fail)", worstLinear(detailPx, want) > 0.05)
+    let seams = detailSeams(stack, oracle: want)
+    check("E-GF-seam graduated filter renders the same in a region as in the full frame", seams.ok, "seam \(seams.seam), full vs oracle \(seams.fullVsOracle)")
+    check("E-GF-zero exposure 0 returns the input untouched", runDetail([StackEntry(operation: "graduated", params: ["exposure": .number(0)])]) == detailPx)
+}
+
 // E-RL radial light through the engine: against the oracle, tile seams, the zero shortcut, and in a portrait-shot frame
 do {
     let params: [String: ParamValue] = ["exposure": .number(1.2), "x": .number(0.4), "y": .number(0.6), "size": .number(0.25), "shape": .number(0.7),

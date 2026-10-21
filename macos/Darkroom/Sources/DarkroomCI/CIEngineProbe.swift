@@ -140,6 +140,7 @@ public enum CIEngineProbe {
         // the settings the display golden is rendered at: a little contrast, the default white point and path to white, no lift
         // a lift of the shadows, a pull on the highlights and a rise of one zone, at a radius that fits the 48 by 40 fixture
         "zones": ["shadows": 1.2, "highlights": -1, "blacks": 0.5, "z_p1": 0.4, "scale": 0.1],
+        "graduated": ["exposure": -1.2, "position": 0.45, "angle": -70, "feather": 0.4],
         // the fixture's corner patch (3.2, 2.6, 1.9) is clipped in some channels at this level
         "highlights": ["clip": 2, "strength": 1],
         "display": ["exposure": 0, "contrast": 30, "white": 4.5, "purity": 0.5],
