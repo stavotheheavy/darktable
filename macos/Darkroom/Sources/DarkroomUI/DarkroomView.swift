@@ -347,8 +347,10 @@ struct TopBar: View {
                 Button { model.zoom = z } label: {
                     Text(z.rawValue)
                         .font(.callout.weight(.medium))
+                        // never truncated: when the row is too tight ViewThatFits drops the whole zoom group instead
+                        .lineLimit(1)
+                        .fixedSize(horizontal: true, vertical: false)
                         .padding(.horizontal, 12)
-                        
                         .frame(height: 44)
                         .background(model.zoom == z ? Color.white.opacity(0.22) : .clear, in: Capsule())
                 }
