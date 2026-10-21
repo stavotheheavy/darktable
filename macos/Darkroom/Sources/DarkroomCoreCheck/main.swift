@@ -2774,5 +2774,137 @@ do {
     check("SCC5 below black, above white and NaN stay finite and in 0...1", [wild.x, wild.y, wild.z].allSatisfy { $0.isFinite && $0 >= 0 && $0 <= 1 }, "\(wild)")
 }
 
+// DCV deconvolution, CDN chroma denoise, MDN median, DBD deband, SKS skin smooth, TXB texture bands, HLT halation
+do {
+    func gap(_ a: SIMD3<Double>, _ b: SIMD3<Double>) -> Double { max(abs(a.x - b.x), abs(a.y - b.y), abs(a.z - b.z)) }
+    func allGap(_ a: [SIMD3<Double>], _ b: [SIMD3<Double>]) -> Double { zip(a, b).map { gap($0, $1) }.max() ?? 0 }
+    func finiteAll(_ a: [SIMD3<Double>]) -> Bool { a.allSatisfy { $0.x.isFinite && $0.y.isFinite && $0.z.isFinite } }
+    let w = 40, h = 24
+    let flat = [SIMD3<Double>](repeating: SIMD3(0.3, 0.2, 0.1), count: w * h)
+    var step = [SIMD3<Double>](repeating: SIMD3(repeating: 0.1), count: w * h)
+    for y in 0..<h { for x in w / 2..<w { step[y * w + x] = SIMD3(repeating: 0.9) } }
+
+    // DCV
+    check("DCV1 amount 0, radius 0 or no iterations is the identity", Deconvolution.apply(step, width: w, height: h, radius: 2, iterations: 4, amount: 0) == step
+          && Deconvolution.apply(step, width: w, height: h, radius: 0, iterations: 4, amount: 1) == step && Deconvolution.apply(step, width: w, height: h, radius: 2, iterations: 0, amount: 1) == step)
+    check("DCV2 a flat picture is a fixed point (within 1e-9)", allGap(Deconvolution.apply(flat, width: w, height: h, radius: 2, iterations: 5, amount: 1), flat) < 1e-9)
+    let blurredStep = Blur.apply(step, width: w, height: h, radius: 2)
+    func err(_ a: [SIMD3<Double>]) -> Double { zip(a, step).map { pow($0.x - $1.x, 2) }.reduce(0, +) }
+    let restored2 = Deconvolution.apply(blurredStep, width: w, height: h, radius: 2, iterations: 2, amount: 1)
+    let restored = Deconvolution.apply(blurredStep, width: w, height: h, radius: 2, iterations: 8, amount: 1)
+    let restored40 = Deconvolution.apply(blurredStep, width: w, height: h, radius: 2, iterations: 40, amount: 1)
+    check("DCV3 deconvolving a blurred step converges toward the step: the error falls with the iterations (blur > 2 > 8 > 40) and ends under 70% of the blur's",
+          err(blurredStep) > err(restored2) && err(restored2) > err(restored) && err(restored) > err(restored40) && err(restored40) < 0.7 * err(blurredStep),
+          "blur \(err(blurredStep)), 2: \(err(restored2)), 8: \(err(restored)), 40: \(err(restored40))")
+    var pointImg = [SIMD3<Double>](repeating: SIMD3(repeating: 0.05), count: w * h)
+    pointImg[12 * w + 20] = SIMD3(repeating: 5)
+    let blurredPoint = Blur.apply(pointImg, width: w, height: h, radius: 2)
+    let sharpPoint = Deconvolution.apply(blurredPoint, width: w, height: h, radius: 2, iterations: 20, amount: 1)
+    check("DCV3b a blurred point source regains its peak: the peak after 20 iterations is at least 2x the blurred peak and above the 5-iteration peak", sharpPoint[12 * w + 20].x > 2 * blurredPoint[12 * w + 20].x && sharpPoint[12 * w + 20].x > Deconvolution.apply(blurredPoint, width: w, height: h, radius: 2, iterations: 5, amount: 1)[12 * w + 20].x,
+          "\(blurredPoint[12 * w + 20].x) -> \(sharpPoint[12 * w + 20].x)")
+    let lightIn = blurredStep.map { $0.x }.reduce(0, +), lightOut = restored.map { $0.x }.reduce(0, +)
+    check("DCV4 the light is conserved within 2%", abs(lightOut / lightIn - 1) < 0.02, "\(lightIn) -> \(lightOut)")
+    let wildD = Deconvolution.apply([SIMD3(0, 0, 0), SIMD3(-1, 5, 1e6), SIMD3(0.2, 0.2, 0.2), SIMD3(0, 9, 0)], width: 2, height: 2, radius: 1, iterations: 6, amount: 1)
+    check("DCV5 black, negative and huge values stay finite", finiteAll(wildD), "\(wildD)")
+
+    // CDN
+    func labOf(_ c: SIMD3<Double>) -> SIMD3<Double> { OkLab.fromWorking(c) }
+    var noisy = [SIMD3<Double>](repeating: .zero, count: w * h)
+    var seed: UInt64 = 7
+    func rnd() -> Double { seed = seed &* 6364136223846793005 &+ 1442695040888963407; return Double(seed >> 33) / Double(1 << 31) - 0.5 }
+    for i in noisy.indices { noisy[i] = OkLab.toWorking(SIMD3(0.5, 0.06 * rnd(), 0.06 * rnd())) }
+    check("CDN1 amount 0 or radius 0 is the identity", ChromaDenoise.apply(noisy, width: w, height: h, radius: 4, amount: 0) == noisy && ChromaDenoise.apply(noisy, width: w, height: h, radius: 0, amount: 1) == noisy)
+    check("CDN2 a flat picture stays flat (within 1e-9)", allGap(ChromaDenoise.apply(flat, width: w, height: h, radius: 4, amount: 1), flat) < 1e-9)
+    let den = ChromaDenoise.apply(noisy, width: w, height: h, radius: 5, amount: 1)
+    func chromaVar(_ a: [SIMD3<Double>]) -> Double { a.map { pow(labOf($0).y, 2) + pow(labOf($0).z, 2) }.reduce(0, +) / Double(a.count) }
+    check("CDN3 the chroma noise power drops to under 30% and the lightness is unchanged (within 1e-9)",
+          chromaVar(den) < 0.3 * chromaVar(noisy) && zip(den, noisy).allSatisfy { abs(labOf($0).x - labOf($1).x) < 1e-9 }, "\(chromaVar(den)) vs \(chromaVar(noisy))")
+    var edge = [SIMD3<Double>](repeating: OkLab.toWorking(SIMD3(0.3, 0.1, 0)), count: w * h)
+    for y in 0..<h { for x in w / 2..<w { edge[y * w + x] = OkLab.toWorking(SIMD3(0.8, -0.1, 0)) } }
+    let ed = ChromaDenoise.apply(edge, width: w, height: h, radius: 4, amount: 1)
+    check("CDN4 a colour edge that is also a luminance edge is kept (a stays within 0.03 of each side's value)",
+          abs(labOf(ed[10 * w + 18]).y - 0.1) < 0.03 && abs(labOf(ed[10 * w + 21]).y + 0.1) < 0.03, "\(labOf(ed[10 * w + 18]).y) \(labOf(ed[10 * w + 21]).y)")
+    let half = ChromaDenoise.apply(noisy, width: w, height: h, radius: 5, amount: 0.5)
+    check("CDN5 amount 0.5 is halfway between the picture and the full result (a plane, within 1e-9)",
+          abs(labOf(half[300]).y - (labOf(noisy[300]).y + labOf(den[300]).y) / 2) < 1e-9)
+
+    // MDN
+    var hot = flat
+    hot[12 * w + 20] = SIMD3(100, 100, 100)
+    check("MDN1 amount 0 or radius 0 is the identity", MedianDenoise.apply(hot, width: w, height: h, radius: 1, amount: 0) == hot && MedianDenoise.apply(hot, width: w, height: h, radius: 0, amount: 1) == hot)
+    check("MDN2 an isolated hot pixel is removed (radius 1) and nothing else changes (within 1e-9)", allGap(MedianDenoise.apply(hot, width: w, height: h, radius: 1, amount: 1), flat) < 1e-9)
+    check("MDN3 a step edge is kept exactly (3 x 3 median of a straight edge)", MedianDenoise.apply(step, width: w, height: h, radius: 1, amount: 1) == step)
+    var block = flat
+    for dy in -1...1 { for dx in -1...1 { block[(12 + dy) * w + 20 + dx] = SIMD3(100, 100, 100) } }
+    check("MDN4 a 3 x 3 hot block survives the 3 x 3 median at its centre but not the 5 x 5",
+          MedianDenoise.apply(block, width: w, height: h, radius: 1, amount: 1)[12 * w + 20].x == 100 && abs(MedianDenoise.apply(block, width: w, height: h, radius: 2, amount: 1)[12 * w + 20].x - 0.3) < 1e-9)
+    let mh = MedianDenoise.apply(hot, width: w, height: h, radius: 1, amount: 0.5)
+    check("MDN5 amount 0.5 is halfway (within 1e-9)", abs(mh[12 * w + 20].x - (100 + 0.3) / 2) < 1e-9)
+
+    // DBD
+    var ramp = [SIMD3<Double>](repeating: .zero, count: w * h), truth = ramp
+    for y in 0..<h { for x in 0..<w {
+        let e = 0.30 + 0.20 * Double(x) / Double(w - 1)
+        truth[y * w + x] = SIMD3(repeating: Transfer.srgbToLinear(e))
+        ramp[y * w + x] = SIMD3(repeating: Transfer.srgbToLinear((e * 100).rounded(.down) / 100))
+    } }
+    check("DBD1 strength 0 or radius 0 is the identity", Deband.apply(ramp, width: w, height: h, radius: 6, threshold: 0.02, strength: 0) == ramp && Deband.apply(ramp, width: w, height: h, radius: 0, threshold: 0.02, strength: 1) == ramp)
+    let db = Deband.apply(ramp, width: w, height: h, radius: 9, threshold: 0.02, strength: 1)
+    func rampErr(_ a: [SIMD3<Double>]) -> Double { (12..<(w - 12)).map { pow(a[12 * w + $0].x - truth[12 * w + $0].x, 2) }.reduce(0, +) }
+    check("DBD2 a ramp quantised to 100 levels comes out closer to the true ramp (error under 50%)", rampErr(db) < 0.5 * rampErr(ramp), "\(rampErr(db)) vs \(rampErr(ramp))")
+    let dbEdge = Deband.apply(step, width: w, height: h, radius: 9, threshold: 0.02, strength: 1)
+    check("DBD3 a hard edge is not smoothed at its own pixels (within 1e-9)", gap(dbEdge[10 * w + 19], step[10 * w + 19]) < 1e-9 && gap(dbEdge[10 * w + 20], step[10 * w + 20]) < 1e-9)
+    check("DBD4 a larger threshold smooths at least as much (error not larger)", rampErr(Deband.apply(ramp, width: w, height: h, radius: 9, threshold: 0.05, strength: 1)) <= rampErr(db) + 1e-12)
+    check("DBD5 a flat picture stays flat (within 1e-9)", allGap(Deband.apply(flat, width: w, height: h, radius: 6, threshold: 0.02, strength: 1), flat) < 1e-9)
+
+    // SKS
+    var skin = [SIMD3<Double>](repeating: .zero, count: w * h)
+    for i in skin.indices { skin[i] = OkLab.toWorking(SIMD3(0.65 + 0.03 * rnd(), 0.06 + 0.01 * rnd(), 0.08 + 0.01 * rnd())) }
+    check("SKS1 amount 0 or radius 0 is the identity", SkinSmooth.apply(skin, width: w, height: h, radius: 5, amount: 0, hueDegrees: 55, widthDegrees: 35) == skin
+          && SkinSmooth.apply(skin, width: w, height: h, radius: 0, amount: 1, hueDegrees: 55, widthDegrees: 35) == skin)
+    let blue = [SIMD3<Double>](repeating: OkLab.toWorking(SIMD3(0.5, -0.03, -0.12)), count: w * h)
+    var blueNoisy = blue
+    for i in blueNoisy.indices { blueNoisy[i] = OkLab.toWorking(SIMD3(0.5 + 0.05 * rnd(), -0.03, -0.12)) }
+    check("SKS2 a non-skin colour (blue) is not touched (within 1e-12)", allGap(SkinSmooth.apply(blueNoisy, width: w, height: h, radius: 5, amount: 1, hueDegrees: 55, widthDegrees: 35), blueNoisy) < 1e-12)
+    let sm = SkinSmooth.apply(skin, width: w, height: h, radius: 5, amount: 1, hueDegrees: 55, widthDegrees: 35)
+    func lumVar(_ a: [SIMD3<Double>]) -> Double { let m = a.map { ColorCommon.luminance($0) }; let mean = m.reduce(0, +) / Double(m.count); return m.map { pow($0 - mean, 2) }.reduce(0, +) / Double(m.count) }
+    check("SKS3 skin texture is smoothed: the luminance variance falls under 50%", lumVar(sm) < 0.5 * lumVar(skin), "\(lumVar(sm)) vs \(lumVar(skin))")
+    check("SKS4 a flat skin patch is unchanged (within 1e-9)", allGap(SkinSmooth.apply([SIMD3<Double>](repeating: skin[0], count: w * h), width: w, height: h, radius: 5, amount: 1, hueDegrees: 55, widthDegrees: 35), [SIMD3<Double>](repeating: skin[0], count: w * h)) < 1e-9)
+    let sh = SkinSmooth.apply(skin, width: w, height: h, radius: 5, amount: 0.5, hueDegrees: 55, widthDegrees: 35)
+    check("SKS5 amount 0.5 is halfway between the picture and the full result (within 1e-9)", gap(sh[300], (skin[300] + sm[300]) / 2) < 1e-9)
+
+    // TXB
+    var bump = [SIMD3<Double>](repeating: SIMD3(repeating: 0.2), count: w * h)
+    for y in 9..<15 { for x in 17..<23 { bump[y * w + x] = SIMD3(repeating: 0.4) } }
+    check("TXB1 amount 0 is the identity", TextureBands.apply(bump, width: w, height: h, radiusPixels: 3, amount: 0) == bump)
+    check("TXB2 a flat picture is unchanged (within 1e-12)", allGap(TextureBands.apply(flat, width: w, height: h, radiusPixels: 3, amount: 1.5), flat) < 1e-12)
+    let tx = TextureBands.apply(bump, width: w, height: h, radiusPixels: 3, amount: 1.5)
+    check("TXB3 a bump the size of the band gets more contrast: its centre goes up", tx[12 * w + 20].x > 0.4 + 0.01, "\(tx[12 * w + 20].x)")
+    let colourBump = bump.map { SIMD3($0.x, $0.x * 0.5, $0.x * 0.25) }
+    let tc = TextureBands.apply(colourBump, width: w, height: h, radiusPixels: 3, amount: 1.5)
+    check("TXB4 hue and chroma ratios are kept (within 1e-9)", abs(tc[12 * w + 20].y / tc[12 * w + 20].x - 0.5) < 1e-9 && abs(tc[12 * w + 20].z / tc[12 * w + 20].x - 0.25) < 1e-9)
+    let soft = TextureBands.apply(bump, width: w, height: h, radiusPixels: 3, amount: -1)
+    check("TXB5 a negative amount softens the band (the bump centre comes down) and black stays black",
+          soft[12 * w + 20].x < 0.4 && TextureBands.apply([.zero, .zero, .zero, .zero], width: 2, height: 2, radiusPixels: 3, amount: 1) == [.zero, .zero, .zero, .zero])
+
+    // HLT
+    var dot = [SIMD3<Double>](repeating: SIMD3(0.2, 0.15, 0.1), count: 41 * 41)
+    dot[20 * 41 + 20] = SIMD3(3, 3, 3)
+    let tintH = Halation.tint(hueDegrees: 25)
+    check("HLT1 strength 0 is the identity", Halation.apply(dot, width: 41, height: 41, strength: 0, radius: 2, tint: tintH) == dot)
+    let dark = [SIMD3<Double>](repeating: SIMD3(0.2, 0.15, 0.1), count: 41 * 41)
+    check("HLT2 nothing above the knee gives no glow", Halation.apply(dark, width: 41, height: 41, strength: 1, radius: 2, tint: tintH) == dark)
+    let hl = Halation.apply(dot, width: 41, height: 41, strength: 0.5, radius: 2, tint: tintH)
+    let n = hl[20 * 41 + 22] - dot[20 * 41 + 22]
+    check("HLT3 the glow around a highlight is tinted warm: more added red than blue, and never negative", n.x > n.z && n.x > 0 && zip(hl, dot).allSatisfy { $0.x >= $1.x && $0.y >= $1.y && $0.z >= $1.z - 1e-15 }, "\(n)")
+    var added = SIMD3<Double>.zero
+    for i in hl.indices { added += hl[i] - dot[i] }
+    let excess = 3 * ColorCommon.smoothstep(Bloom.kneeLow, Bloom.kneeHigh, 3)
+    check("HLT4 the glow keeps the light it was given: the added light is strength x tint x the dot's bright light (within 1e-9)", gap(added, 0.5 * tintH * excess) < 1e-9, "\(added) vs \(0.5 * tintH * excess)")
+    var tintsOK = true
+    for hue in stride(from: 0.0, through: 360, by: 15) { let t = Halation.tint(hueDegrees: hue); tintsOK = tintsOK && abs(max(t.x, t.y, t.z) - 1) < 1e-12 && t.x.isFinite && t.y.isFinite && t.z.isFinite }
+    check("HLT5 the tint is finite with its largest channel 1 at every hue", tintsOK)
+}
+
 print(failures == 0 ? "\nall checks passed" : "\n\(failures) failed")
 exit(failures == 0 ? 0 : 1)

@@ -191,7 +191,7 @@ struct CIModule: Sendable {
     /// Modules that read a neighbourhood (a blur radius, a guided filter, wavelet levels): the expensive ones. The segment cache keeps
     /// the picture after each of them, so a slider moved further down the stack does not run them again.
     static let neighbourhoodOperations: Set<String> = [
-        "sharpen", "denoiseprofile", "bilat", "atrous", "hazeremoval", "zones", "clahe", "soften", "blurs", "lowpass", "censorize", "highpass", "hdrtone", "bloom", "highlights",
+        "sharpen", "denoiseprofile", "bilat", "atrous", "hazeremoval", "zones", "clahe", "soften", "blurs", "lowpass", "censorize", "highpass", "hdrtone", "deconvsharp", "chromadenoise", "mediandenoise", "deband", "skinsmooth", "texturebands", "halation", "bloom", "highlights",
     ]
 
     /// The display-referred modules: they assume 0...1 values (a curve, levels, a contrast about 0.5, a lift of the shadows) and are
@@ -648,6 +648,62 @@ extension CIModule {
             operation: "scurve", name: "S-curve contrast", iopOrder: 69, defaultEnabled: false,
             fields: [field("contrast", -1, 1, 0), field("pivot", 0.2, 0.8, 0.5)],
             apply: { image, v in try CIModule.applyFused("scurve", image, v) }),
+
+        // Deconvolution sharpen: Richardson-Lucy with the three-box blur as the point spread function. Deconvolution in DarkroomCore is the oracle (DCV1-DCV5, E-DCV).
+        CIModule(
+            operation: "deconvsharp", name: "deconvolution sharpen", iopOrder: 70, defaultEnabled: false,
+            fields: [field("radius", 1, 10, 2), field("iterations", 1, 10, 4), field("amount", 0, 1, 0)],
+            apply: { image, v in
+                try CIBridge.deconvolve(image, radius: Blur.radius(px: (v["radius"] ?? 2) * (v["_scale"] ?? 1)),
+                                        iterations: Int((v["iterations"] ?? 4).rounded()), amount: v["amount"] ?? 0)
+            }),
+
+        // Chroma denoise: the OkLab a and b planes smoothed by a guided filter guided by luminance; lightness untouched. ChromaDenoise in DarkroomCore is the oracle (CDN1-CDN5, E-CDN).
+        CIModule(
+            operation: "chromadenoise", name: "chroma denoise", iopOrder: 7, defaultEnabled: false,
+            fields: [field("radius", 1, 30, 6), field("amount", 0, 1, 0)],
+            apply: { image, v in
+                try CIBridge.chromaDenoise(image, radius: max(Int(((v["radius"] ?? 6) * (v["_scale"] ?? 1)).rounded()), 1), amount: v["amount"] ?? 0)
+            }),
+
+        // Median denoise: each channel the median of its 3x3 or 5x5 neighbourhood. MedianDenoise in DarkroomCore is the oracle (MDN1-MDN5, E-MDN).
+        CIModule(
+            operation: "mediandenoise", name: "median denoise", iopOrder: 8, defaultEnabled: false,
+            fields: [field("radius", 1, 2, 1), field("amount", 0, 1, 0)],
+            apply: { image, v in try CIBridge.medianDenoise(image, radius: Int((v["radius"] ?? 1).rounded()), amount: v["amount"] ?? 0) }),
+
+        // Deband: smooth gradients replaced by their blur, edges kept. Deband in DarkroomCore is the oracle (DBD1-DBD5, E-DBD).
+        CIModule(
+            operation: "deband", name: "deband", iopOrder: 9, defaultEnabled: false,
+            fields: [field("radius", 2, 30, 8), field("threshold", 0.002, 0.05, 0.01), field("strength", 0, 1, 0)],
+            apply: { image, v in
+                try CIBridge.deband(image, radius: Blur.radius(px: (v["radius"] ?? 8) * (v["_scale"] ?? 1)), threshold: v["threshold"] ?? 0.01, strength: v["strength"] ?? 0)
+            }),
+
+        // Skin smooth: an edge-aware smooth mixed in by a skin-hue matte. SkinSmooth in DarkroomCore is the oracle (SKS1-SKS5, E-SKS).
+        CIModule(
+            operation: "skinsmooth", name: "skin smoothing", iopOrder: 43, defaultEnabled: false,
+            fields: [field("amount", 0, 1, 0), field("radius", 2, 40, 10), field("hue", 0, 360, 55), field("width", 15, 90, 35)],
+            apply: { image, v in
+                try CIBridge.skinSmooth(image, radius: max(Int(((v["radius"] ?? 10) * (v["_scale"] ?? 1)).rounded()), 1), amount: v["amount"] ?? 0,
+                                        hueDegrees: v["hue"] ?? 55, widthDegrees: v["width"] ?? 35)
+            }),
+
+        // Texture bands: a band-pass of the luminance (blur at the radius minus blur at three times it) added back as a gain. TextureBands in DarkroomCore is the
+        // oracle (TXB1-TXB5, E-TXB).
+        CIModule(
+            operation: "texturebands", name: "texture and clarity", iopOrder: 71, defaultEnabled: false,
+            fields: [field("radius", 2, 40, 6), field("amount", -1, 2, 0)],
+            apply: { image, v in try CIBridge.textureBands(image, radiusPixels: (v["radius"] ?? 6) * (v["_scale"] ?? 1), amount: v["amount"] ?? 0) }),
+
+        // Halation: the highlights blurred widely and added back, tinted warm. Halation in DarkroomCore is the oracle (HLT1-HLT5, E-HLT).
+        CIModule(
+            operation: "halation", name: "halation", iopOrder: 72, defaultEnabled: false,
+            fields: [field("strength", 0, 1, 0), field("size", 5, 100, 30), field("hue", 0, 360, 25)],
+            apply: { image, v in
+                try CIBridge.halation(image, strength: v["strength"] ?? 0, radius: Blur.radius(px: (v["size"] ?? 30) * (v["_scale"] ?? 1)),
+                                      tint: Halation.tint(hueDegrees: v["hue"] ?? 25))
+            }),
 
         // Split toning: a shadows tint and a highlights tint in OkLab, each with its own hue and saturation,
         // split at a balance pivot. Checked by ST1-ST7 (darkroom-core-check), splitBuf (darkroom-metal-check)

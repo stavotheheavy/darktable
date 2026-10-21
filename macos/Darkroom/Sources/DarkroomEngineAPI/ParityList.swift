@@ -40,7 +40,7 @@ public enum ParityList {
     """.split(whereSeparator: { $0 == " " || $0 == "\n" }).map(String.init)
 
     /// Modules of ours that darktable does not have under that name.
-    public static let ownModules: [String] = ["display", "graduated", "radiallight", "zones", "solarize", "gradientmap", "crossprocess", "bleachbypass", "photofilter", "channelcurves", "chromalimit", "huerotate", "warmth", "highlightrolloff", "lumabands", "hdrtone", "fadelook", "lumacurve", "reinhard", "scurve"]
+    public static let ownModules: [String] = ["display", "graduated", "radiallight", "zones", "solarize", "gradientmap", "crossprocess", "bleachbypass", "photofilter", "channelcurves", "chromalimit", "huerotate", "warmth", "highlightrolloff", "lumabands", "hdrtone", "fadelook", "lumacurve", "reinhard", "scurve", "deconvsharp", "chromadenoise", "mediandenoise", "deband", "skinsmooth", "texturebands", "halation"]
 
     public static let entries: [ParityEntry] = {
         func e(_ op: String, _ s: ParityStatus, _ note: String = "") -> ParityEntry { ParityEntry(operation: op, status: s, note: note) }
@@ -100,6 +100,13 @@ public enum ParityList {
             e("channelmixerrgb", .exact, "chromatic adaptation (Bradford) from a black-body illuminant to D65, then the mixer's 3x3"),
             e("colorharmonizer", .planned()), e("colorbalance", .exact, "shadows, midtones and highlights each with a tint and a brightness: the ASC CDL offset, power (about scene white) and slope on scene-linear values"),
             // ours
+            e("deconvsharp", .exact, "not a darktable module: Richardson-Lucy deconvolution with a three-box blur as the point spread function"),
+            e("chromadenoise", .exact, "not a darktable module: the OkLab a and b planes smoothed by a luminance-guided filter; lightness untouched"),
+            e("mediandenoise", .exact, "not a darktable module: each channel the median of its 3x3 or 5x5 neighbourhood: hot pixels and impulse noise"),
+            e("deband", .exact, "not a darktable module: smooth gradients replaced by their blur, edges kept"),
+            e("skinsmooth", .exact, "not a darktable module: an edge-aware smooth mixed in by a skin-hue matte"),
+            e("texturebands", .exact, "not a darktable module: a band-pass of the luminance added back as a gain: texture, and clarity at a larger radius"),
+            e("halation", .exact, "not a darktable module: highlights blurred widely and added back tinted warm, as film halation does"),
             e("highlightrolloff", .exact, "not a darktable module: a tanh shoulder on scene luminance above a knee, colour ratios kept"),
             e("lumabands", .exact, "not a darktable module: an exposure change by the pixel's own luminance in five bands (the cheap cousin of zones)"),
             e("hdrtone", .exact, "not a darktable module: base and detail dynamic range compression with the guided filter base, as in Durand and Dorsey"),

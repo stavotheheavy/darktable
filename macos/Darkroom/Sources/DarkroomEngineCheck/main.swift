@@ -1841,5 +1841,33 @@ do {
     check("E-HDT-seam HDR tone renders the same in a region as in the full frame", hdSeams.ok, "seam \(hdSeams.seam), full vs oracle \(hdSeams.fullVsOracle)")
 }
 
+// E-DCV deconvolution, E-CDN chroma denoise, E-MDN median, E-DBD deband, E-SKS skin smooth, E-TXB texture bands, E-HLT halation: the GPU paths against their oracles, across tile seams
+do {
+    func p(_ d: [String: Double]) -> [String: ParamValue] { d.mapValues { .number($0) } }
+    func compare(_ tag: String, _ stack: [StackEntry], _ want: [SIMD3<Double>], linear: Double = 2e-4, zero: [StackEntry]? = nil) {
+        let got = runDetail(stack)
+        check("\(tag) matches the oracle within 1/255 and unclamped within \(linear)", worst(got, want) < tol && worstLinear(got, want) < linear, "encoded \(worst(got, want)), linear \(worstLinear(got, want))")
+        check("\(tag) the oracle really changes the fixture", worstLinear(detailPx, want) > 0.003, "\(worstLinear(detailPx, want))")
+        let seams = detailSeams(stack, oracle: want)
+        check("\(tag)-seam renders the same in a region as in the full frame", seams.ok, "seam \(seams.seam), full vs oracle \(seams.fullVsOracle)")
+        if let zero { check("\(tag)-zero its default (identity) settings return the input untouched", runDetail(zero) == detailPx) }
+    }
+    func zeroStack(_ op: String) -> [StackEntry] { [StackEntry(operation: op, params: [:])] }
+    compare("E-DCV deconvolution", [StackEntry(operation: "deconvsharp", params: p(["radius": 6, "iterations": 4, "amount": 0.8]))],
+            Deconvolution.apply(detailImg, width: detailW, height: detailH, radius: Blur.radius(px: 6), iterations: 4, amount: 0.8), linear: 2e-3, zero: zeroStack("deconvsharp"))
+    compare("E-CDN chroma denoise", [StackEntry(operation: "chromadenoise", params: p(["radius": 5, "amount": 0.8]))],
+            ChromaDenoise.apply(detailImg, width: detailW, height: detailH, radius: 5, amount: 0.8), linear: 1e-3, zero: zeroStack("chromadenoise"))
+    compare("E-MDN median denoise", [StackEntry(operation: "mediandenoise", params: p(["radius": 2, "amount": 0.9]))],
+            MedianDenoise.apply(detailImg, width: detailW, height: detailH, radius: 2, amount: 0.9), zero: zeroStack("mediandenoise"))
+    compare("E-DBD deband", [StackEntry(operation: "deband", params: p(["radius": 9, "threshold": 0.03, "strength": 0.9]))],
+            Deband.apply(detailImg, width: detailW, height: detailH, radius: Blur.radius(px: 9), threshold: 0.03, strength: 0.9), zero: zeroStack("deband"))
+    compare("E-SKS skin smoothing", [StackEntry(operation: "skinsmooth", params: p(["amount": 0.8, "radius": 8, "hue": 55, "width": 35]))],
+            SkinSmooth.apply(detailImg, width: detailW, height: detailH, radius: 8, amount: 0.8, hueDegrees: 55, widthDegrees: 35), linear: 1e-3, zero: zeroStack("skinsmooth"))
+    compare("E-TXB texture bands", [StackEntry(operation: "texturebands", params: p(["radius": 6, "amount": 1.2]))],
+            TextureBands.apply(detailImg, width: detailW, height: detailH, radiusPixels: 6, amount: 1.2), zero: zeroStack("texturebands"))
+    compare("E-HLT halation", [StackEntry(operation: "halation", params: p(["strength": 0.7, "size": 24, "hue": 25]))],
+            Halation.apply(detailImg, width: detailW, height: detailH, strength: 0.7, radius: Blur.radius(px: 24), tint: Halation.tint(hueDegrees: 25)), zero: zeroStack("halation"))
+}
+
 print(failures == 0 ? "\nall checks passed" : "\n\(failures) failed")
 exit(failures == 0 ? 0 : 1)
