@@ -791,7 +791,7 @@ do {
         if gap(engineOrder, after) > 1e-4 { wrong.append("\(c.operation) \(gap(engineOrder, after))") }
         if gap(engineOrder, before) < 4.0 / 255 { commute.append(c.operation) }
     }
-    check("E-DOM all \(order.count) display-referred modules run after the display transform", wrong.isEmpty && order.count == 16, "\(wrong)")
+    check("E-DOM all \(order.count) display-referred modules run after the display transform", wrong.isEmpty && order.count == 18, "\(wrong)")
     check("E-DOM for each of them the other order gives a visibly different picture (those that do not: \(commute))", commute.isEmpty, "\(commute)")
     check("E-DOM zones and the scene modules are not in the display set", !CIEngineProbe.displayReferredOperations.contains("zones")
           && !CIEngineProbe.displayReferredOperations.contains("exposure") && !CIEngineProbe.displayReferredOperations.contains("bloom") && !CIEngineProbe.displayReferredOperations.contains("colorbalancergb"))
@@ -1753,6 +1753,28 @@ do {
     check("E-CMX channel mixer with adaptation matches the oracle within 1/255 and unclamped within 1e-4", worst(cmEngine, cmOracle) < tol && worstLinear(cmEngine, cmOracle) < 1e-4,
           "encoded \(worst(cmEngine, cmOracle)), linear \(worstLinear(cmEngine, cmOracle))")
     check("E-CMX zero strength and identity rows change nothing", worstLinear(run([StackEntry(operation: "channelmixerrgb", params: [:])]), scene) < 1e-4)
+}
+
+// E-GRN grain and E-HPF high pass: the GPU paths against Grain and Highpass in DarkroomCore, across tile seams (grain needs absolute positions)
+do {
+    let grStack = [StackEntry(operation: "grain", params: ["strength": .number(0.8), "size": .number(2.5), "seed": .number(11)])]
+    let grWant = Grain.apply(detailImg, width: detailW, height: detailH, strength: 0.8, size: 2.5, seed: 11)
+    let grGot = runDetail(grStack)
+    check("E-GRN grain matches the oracle within 1/255 and unclamped within 1e-3", worst(grGot, grWant) < tol && worstLinear(grGot, grWant) < 1e-3,
+          "encoded \(worst(grGot, grWant)), linear \(worstLinear(grGot, grWant))")
+    check("E-GRN the oracle really changes the fixture", worstLinear(detailPx, grWant) > 0.005, "\(worstLinear(detailPx, grWant))")
+    let grSeams = detailSeams(grStack, oracle: grWant)
+    check("E-GRN-seam grain renders the same in a region as in the full frame (absolute positions)", grSeams.ok, "seam \(grSeams.seam), full vs oracle \(grSeams.fullVsOracle)")
+    check("E-GRN-zero strength 0 returns the input untouched", runDetail([StackEntry(operation: "grain", params: [:])]) == detailPx)
+
+    let hpStack = [StackEntry(operation: "highpass", params: ["radius": .number(9), "strength": .number(1.5)])]
+    let hpWant = Highpass.apply(detailImg, width: detailW, height: detailH, strength: 1.5, radius: Blur.radius(px: 9))
+    let hpGot = runDetail(hpStack)
+    check("E-HPF high pass matches the oracle within 1/255 and unclamped within 1e-3", worst(hpGot, hpWant) < tol && worstLinear(hpGot, hpWant) < 1e-3,
+          "encoded \(worst(hpGot, hpWant)), linear \(worstLinear(hpGot, hpWant))")
+    check("E-HPF the oracle really changes the fixture", worstLinear(detailPx, hpWant) > 0.01, "\(worstLinear(detailPx, hpWant))")
+    let hpSeams = detailSeams(hpStack, oracle: hpWant)
+    check("E-HPF-seam high pass renders the same in a region as in the full frame", hpSeams.ok, "seam \(hpSeams.seam), full vs oracle \(hpSeams.fullVsOracle)")
 }
 
 print(failures == 0 ? "\nall checks passed" : "\n\(failures) failed")

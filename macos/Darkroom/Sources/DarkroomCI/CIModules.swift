@@ -137,7 +137,7 @@ struct CIModule: Sendable {
     /// Modules that read a neighbourhood (a blur radius, a guided filter, wavelet levels): the expensive ones. The segment cache keeps
     /// the picture after each of them, so a slider moved further down the stack does not run them again.
     static let neighbourhoodOperations: Set<String> = [
-        "sharpen", "denoiseprofile", "bilat", "atrous", "hazeremoval", "zones", "clahe", "soften", "blurs", "lowpass", "censorize", "bloom", "highlights",
+        "sharpen", "denoiseprofile", "bilat", "atrous", "hazeremoval", "zones", "clahe", "soften", "blurs", "lowpass", "censorize", "highpass", "bloom", "highlights",
     ]
 
     /// The display-referred modules: they assume 0...1 values (a curve, levels, a contrast about 0.5, a lift of the shadows) and are
@@ -146,7 +146,7 @@ struct CIModule: Sendable {
     /// `invert` is raw-level negative inversion and stays early; `bloom` is glow from over-bright light, a scene-light effect. Checked, module by module, by darkroom-engine-check E-DOM.
     static let displayReferredOperations: Set<String> = [
         "tonecurve", "rgblevels", "rgbcurve", "basecurve", "colisa", "colorcorrection", "colorcontrast", "velvia", "shadhi",
-        "relight", "dither", "colorize", "clahe", "splittoning", "solarize",
+        "relight", "dither", "colorize", "clahe", "splittoning", "solarize", "grain", "highpass",
         // a negative is of what is on screen: complemented before the tone map, the dark scene values come out bright and the picture washes out
         "invert",
     ]
@@ -477,6 +477,25 @@ extension CIModule {
             fields: [field("temperature", 1700, 25000, 6500), field("strength", 0, 1, 0)]
                 + ["red_r", "red_g", "red_b", "green_r", "green_g", "green_b", "blue_r", "blue_g", "blue_b"].enumerated().map { i, n in field(n, -2, 2, i % 4 == 0 ? 1 : 0) },
             apply: { image, v in try CIModule.applyFused("channelmixerrgb", image, v) }),
+
+        // Grain: lattice value noise from the pixel position, added to the encoded value with a midtone weight, the same on all channels. Grain in
+        // DarkroomCore is the oracle (GRN1-GRN7, E-GRN in darkroom-engine-check).
+        CIModule(
+            operation: "grain", name: "grain", iopOrder: 65, defaultEnabled: false,
+            fields: [field("strength", 0, 1, 0), field("size", 0.5, 12, 1.5), field("seed", 0, 1000, 0)],
+            apply: { image, v in
+                try CIBridge.grain(image, strength: v["strength"] ?? 0, size: (v["size"] ?? 1.5) * (v["_scale"] ?? 1),
+                                   seed: UInt32(min(max((v["seed"] ?? 0).rounded(), 0), 1000)))
+            }),
+
+        // High pass: the encoded value minus its own blur, on mid-grey; edges and texture on a flat grey. Highpass in DarkroomCore is the oracle
+        // (HPF1-HPF5, E-HPF in darkroom-engine-check).
+        CIModule(
+            operation: "highpass", name: "high pass", iopOrder: 66, defaultEnabled: false,
+            fields: [field("radius", 1, 50, 8), field("strength", 0, 4, 1)],
+            apply: { image, v in
+                try CIBridge.highpass(image, strength: v["strength"] ?? 1, radius: Blur.radius(px: (v["radius"] ?? 8) * (v["_scale"] ?? 1)))
+            }),
 
         // Split toning: a shadows tint and a highlights tint in OkLab, each with its own hue and saturation,
         // split at a balance pivot. Checked by ST1-ST7 (darkroom-core-check), splitBuf (darkroom-metal-check)

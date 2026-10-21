@@ -2527,5 +2527,31 @@ do {
     check("CMX6 a temperature outside 1667...25000 or NaN is held to it (finite)", ChannelMixerRGB.illuminantXY(kelvin: 100).x.isFinite && ChannelMixerRGB.illuminantXY(kelvin: 1e9).y.isFinite && ChannelMixerRGB.illuminantXY(kelvin: .nan).x.isFinite)
 }
 
+// GRN grain, HPF high pass
+do {
+    let w = 48, h = 36
+    var flat = [SIMD3<Double>](repeating: SIMD3(repeating: Transfer.srgbToLinear(0.5)), count: w * h)
+    check("GRN1 strength 0 is the identity", Grain.apply(flat, width: w, height: h, strength: 0, size: 1.5, seed: 0) == flat)
+    let g = Grain.apply(flat, width: w, height: h, strength: 1, size: 1.5, seed: 0)
+    check("GRN2 the same position, size and seed always give the same grain (repeatable)", g == Grain.apply(flat, width: w, height: h, strength: 1, size: 1.5, seed: 0))
+    check("GRN3 a different seed gives a different grain", g != Grain.apply(flat, width: w, height: h, strength: 1, size: 1.5, seed: 7))
+    check("GRN4 the grain is neutral: all three channels get the same change", g.allSatisfy { abs($0.x - $0.y) < 1e-12 && abs($0.y - $0.z) < 1e-12 })
+    var mean = 0.0, minE = 1.0, maxE = 0.0
+    for px in g { let e = Transfer.linearToSRGB(px.x); mean += e; minE = min(minE, e); maxE = max(maxE, e) }
+    mean /= Double(g.count)
+    check("GRN5 on mid-grey the grain averages near 0.5 (within 0.03) and swings by about the amplitude (0.05 to 0.2 each way)",
+          abs(mean - 0.5) < 0.03 && maxE - 0.5 > 0.05 && maxE - 0.5 < 0.2 && 0.5 - minE > 0.05 && 0.5 - minE < 0.2, "mean \(mean) min \(minE) max \(maxE)")
+    for i in flat.indices { flat[i] = i % 2 == 0 ? .zero : SIMD3(repeating: 1) }
+    let gbw = Grain.apply(flat, width: w, height: h, strength: 1, size: 1.5, seed: 0)
+    check("GRN6 pure black and pure white get no grain (the midtone weight is 0 there; within 1e-12)",
+          zip(gbw, flat).allSatisfy { abs($0.x - $1.x) < 1e-12 && abs($0.y - $1.y) < 1e-12 && abs($0.z - $1.z) < 1e-12 })
+    let n = (0..<500).map { Grain.noise(x: Double($0) * 0.37, y: Double($0) * 0.91, size: 3, seed: 1) }
+    let nMax = n.map { abs($0) }.max() ?? 0
+    var slope = 0.0
+    for i in 0..<200 { slope = max(slope, abs(Grain.noise(x: Double(i), y: 5, size: 6, seed: 2) - Grain.noise(x: Double(i + 1), y: 5, size: 6, seed: 2))) }
+    check("GRN7 the noise stays within -1...1 and varies smoothly: neighbouring pixels at size 6 never differ by more than the slope bound 2 x 1.5 / 6 = 0.5",
+          nMax <= 1 + 1e-12 && slope <= 0.5 + 1e-9, "max \(nMax), neighbour step \(slope)")
+}
+
 print(failures == 0 ? "\nall checks passed" : "\n\(failures) failed")
 exit(failures == 0 ? 0 : 1)
