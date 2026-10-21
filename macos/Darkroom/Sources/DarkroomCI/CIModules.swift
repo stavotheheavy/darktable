@@ -19,7 +19,7 @@ struct CIModule: Sendable {
     /// The modules whose work is one pixel in, one pixel out, on our own Metal functions: a run of them is one pass over the frame
     /// (see MetalFused). The engine fuses them when they are unmasked and at full opacity.
     static let fusableOperations: Set<String> = [
-        "temperature", "exposure", "colorbalancergb", "channelmixer", "tonecurve", "monochrome", "rgblevels", "splittoning", "display", "invert", "colisa", "velvia",
+        "temperature", "exposure", "colorbalancergb", "channelmixer", "tonecurve", "monochrome", "rgblevels", "splittoning", "display", "invert", "colisa", "velvia", "colorzones",
     ]
 
     /// The fused op a fusable module stands for with these values, or nil when the module does nothing at them. This is the one place the
@@ -65,6 +65,9 @@ struct CIModule: Sendable {
             let brightness = v["brightness"] ?? 0
             let u: [Double] = [v["contrast"] ?? 0, v["saturation"] ?? 0, 0, Colisa.gain(brightness: brightness)]
             return u[0] == 0 && u[1] == 0 && brightness == 0 ? nil : FusedOp(.colisa, u.map { Float($0) })
+        case "colorzones":
+            let u: [Float] = ["hue", "sat", "light"].flatMap { kind in ColorZones.bandNames.map { Float(v["\($0)_\(kind)"] ?? 0) } }
+            return u.allSatisfy { $0 == 0 } ? nil : FusedOp(.colorZones, u)
         case "rgblevels":
             let black = v["black"] ?? 0
             let white = max(v["white"] ?? 1, black + 0.01)
@@ -410,6 +413,15 @@ extension CIModule {
                 ])
                 return mixed.composited(over: image)
             }),
+
+        // Colour zones: a hue shift, a saturation change and a lightness change for each of eight hue bands, blended smoothly
+        // between neighbouring bands in OkLab; greys are left alone. ColorZones in DarkroomCore is the oracle (CZ1-CZ8 in
+        // darkroom-core-check, colorzonesBuf in darkroom-metal-check, E-CZ in darkroom-engine-check).
+        CIModule(
+            operation: "colorzones", name: "color zones", iopOrder: 24,
+            defaultEnabled: false,
+            fields: ["hue", "sat", "light"].flatMap { kind in ColorZones.bandNames.map { field("\($0)_\(kind)", -1, 1, 0) } },
+            apply: { image, v in try CIModule.applyFused("colorzones", image, v) }),
 
         // Split toning: a shadows tint and a highlights tint in OkLab, each with its own hue and saturation,
         // split at a balance pivot. Checked by ST1-ST7 (darkroom-core-check), splitBuf (darkroom-metal-check)

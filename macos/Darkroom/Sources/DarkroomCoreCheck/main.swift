@@ -2178,5 +2178,75 @@ do {
           && ZoneExposure.gain(base: .nan, evs: [Double](repeating: 0, count: 10)) == 0)
 }
 
+// CZ colour zones (ColorZones, OkLab LCh bands)
+func czColour(_ hueDegrees: Double, chroma: Double = 0.1, L: Double = 0.7) -> SIMD3<Double> {
+    OkLab.toWorking(SIMD3(L, chroma * cos(hueDegrees * .pi / 180), chroma * sin(hueDegrees * .pi / 180)))
+}
+func czSliders(_ kind: Int, _ band: String, _ value: Double) -> [Double] {
+    var u = [Double](repeating: 0, count: 24)
+    u[kind * 8 + ColorZones.bandNames.firstIndex(of: band)!] = value
+    return u
+}
+func czLCh(_ c: SIMD3<Double>) -> SIMD3<Double> { OkLab.lch(OkLab.fromWorking(c)) }
+do {
+    // CZ1 zero sliders are the identity on 4096 colours
+    var worstId = 0.0, finite = true
+    for i in 0..<4096 {
+        let t = Double(i) / 4095, c = czColour(t * 37 * 360, chroma: 0.002 + 0.2 * t, L: 0.1 + 0.8 * t)
+        let out = ColorZones.apply(c, u: [Double](repeating: 0, count: 24))
+        for k in 0..<3 {
+            if !out[k].isFinite { finite = false }
+            worstId = max(worstId, abs(out[k] - c[k]) / max(abs(c[k]), 1e-6))
+        }
+    }
+    check("CZ1 zero sliders are the identity within 1e-9 relative, finite", worstId < 1e-9 && finite, "worst \(worstId), finite \(finite)")
+
+    // CZ2 a grey is never touched, whatever the sliders say
+    let allOn = [Double](repeating: 1, count: 24)
+    var greyWorst = 0.0
+    for L in stride(from: 0.05, through: 0.95, by: 0.1) {
+        let g = OkLab.toWorking(SIMD3(L, 0, 0)), out = ColorZones.apply(g, u: allOn)
+        greyWorst = max(greyWorst, abs(out.x - g.x), abs(out.y - g.y), abs(out.z - g.z))
+    }
+    check("CZ2 greys are left alone by every slider (within 1e-9)", greyWorst < 1e-9, "\(greyWorst)")
+
+    // CZ3 the green band at its centre, saturation -1: the colour goes grey
+    let green = czColour(ColorZones.centresDegrees[3])
+    let greyed = czLCh(ColorZones.apply(green, u: czSliders(1, "green", -1)))
+    check("CZ3 green saturation -1 at the green centre removes the chroma (under 1e-9)", greyed.y < 1e-9, "\(greyed.y)")
+
+    // CZ4 the red band at its centre, hue +1: the hue turns by hueRangeDegrees, chroma and lightness stay
+    let red = czColour(ColorZones.centresDegrees[0])
+    let turned = czLCh(ColorZones.apply(red, u: czSliders(0, "red", 1)))
+    check("CZ4 red hue +1 turns the hue by \(ColorZones.hueRangeDegrees) degrees (within 0.01)",
+          abs(turned.z * 180 / .pi - (ColorZones.centresDegrees[0] + ColorZones.hueRangeDegrees)) < 0.01, "\(turned.z * 180 / .pi)")
+    check("CZ4 the hue turn keeps chroma and lightness (within 1e-9)", abs(turned.y - 0.1) < 1e-9 && abs(turned.x - 0.7) < 1e-9, "\(turned)")
+
+    // CZ5 the blue band at its centre, lightness +1: OkLab L rises by lightnessRange
+    let blue = czColour(ColorZones.centresDegrees[5])
+    let lifted = czLCh(ColorZones.apply(blue, u: czSliders(2, "blue", 1)))
+    check("CZ5 blue lightness +1 raises L by \(ColorZones.lightnessRange) (within 1e-9)", abs(lifted.x - 0.7 - ColorZones.lightnessRange) < 1e-9, "\(lifted.x)")
+
+    // CZ6 no jump anywhere on the hue circle, including across 360 to 0: neighbouring hues land close together
+    var jump = 0.0
+    var previous: SIMD3<Double>?
+    var u6 = [Double](repeating: 0, count: 24)
+    for b in 0..<8 { u6[b] = b % 2 == 0 ? 1 : -1; u6[8 + b] = b % 2 == 0 ? -1 : 1; u6[16 + b] = b % 3 == 0 ? 1 : -1 }
+    for step in 0...7200 {
+        let out = ColorZones.apply(czColour(Double(step) * 0.05), u: u6)
+        if let p = previous { jump = max(jump, abs(out.x - p.x), abs(out.y - p.y), abs(out.z - p.z)) }
+        previous = out
+    }
+    check("CZ6 a twentieth of a degree of hue never moves the result by more than 0.005 (smooth, wraps at 360)", jump < 0.005, "\(jump)")
+
+    // CZ7 a band far from a colour leaves it alone: green saturation does not touch red
+    let farOut = ColorZones.apply(red, u: czSliders(1, "green", -1))
+    check("CZ7 the green band leaves a red colour unchanged (within 1e-9)", max(abs(farOut.x - red.x), abs(farOut.y - red.y), abs(farOut.z - red.z)) < 1e-9)
+
+    // CZ8 a mutation that must fail: the same colour with the hue slider on the wrong band is not the same answer
+    let wrong = czLCh(ColorZones.apply(red, u: czSliders(0, "blue", 1)))
+    check("CZ8 the blue hue slider does not turn a red (hue stays within 0.01 degrees)", abs(wrong.z * 180 / .pi - ColorZones.centresDegrees[0]) < 0.01, "\(wrong.z * 180 / .pi)")
+}
+
 print(failures == 0 ? "\nall checks passed" : "\n\(failures) failed")
 exit(failures == 0 ? 0 : 1)

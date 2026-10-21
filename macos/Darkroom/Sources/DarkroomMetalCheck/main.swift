@@ -618,5 +618,30 @@ do {
     check("scene tone kernel ran", false, "\(error)")
 }
 
+// colour zones on Metal against ColorZones.apply (unclamped): every hue, dim to bright, with a different setting on every band
+do {
+    let count = 4096
+    var u = [Double](repeating: 0, count: 24)
+    for k in 0..<24 { u[k] = sin(Double(k) * 1.7 + 0.3) * 0.9 }
+    let pixels = (0..<count).map { i -> SIMD4<Float> in
+        let t = Double(i) / Double(count - 1), h = t * 37 * 2 * .pi, v = 0.002 + 2.5 * t
+        return SIMD4(Float(v * (0.6 + 0.4 * cos(h))), Float(v * (0.6 + 0.4 * cos(h - 2.1))), Float(v * (0.6 + 0.4 * cos(h + 2.1))), 1)
+    }
+    let out = try MetalPerPixel.run(source: MetalColorZones.source, function: "colorzonesBuf", pixels: pixels, uniforms: u.map { Float($0) })
+    var worstRel = 0.0, allFinite = out.count == count
+    for (i, px) in pixels.enumerated() where i < out.count {
+        let cpu = ColorZones.apply(SIMD3(Double(px.x), Double(px.y), Double(px.z)), u: u.map { Double(Float($0)) })
+        let gpu = SIMD3(Double(out[i].x), Double(out[i].y), Double(out[i].z))
+        for c in 0..<3 {
+            if !gpu[c].isFinite { allFinite = false }
+            worstRel = Swift.max(worstRel, Swift.abs(gpu[c] - cpu[c]) / Swift.max(1, Swift.abs(cpu[c])))
+        }
+    }
+    check("CZ-M colour zones on Metal is finite and within 1e-3 of ColorZones.apply (unclamped)", allFinite && worstRel < 1e-3,
+          "finite \(allFinite), worst relative error \(worstRel)")
+} catch {
+    check("CZ-M colour zones kernel ran", false, "\(error)")
+}
+
 print(failures == 0 ? "\nall Metal checks passed" : "\n\(failures) failed")
 exit(failures == 0 ? 0 : 1)

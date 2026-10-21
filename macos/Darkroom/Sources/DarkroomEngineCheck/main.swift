@@ -1618,5 +1618,20 @@ do {
     check("E-TP6 two points (0,0) and (1,1) change nothing (within float rounding)", worstLinear(runDetail([entry(["n": 2, "x0": 0, "y0": 0, "x1": 1, "y1": 1])]), detailImg) < 1e-4)
 }
 
+// E-CZ colour zones: the fused per-pixel kernel through the engine against ColorZones in DarkroomCore
+do {
+    var czU = [Double](repeating: 0, count: 24)
+    for k in 0..<24 { czU[k] = sin(Double(k) * 1.7 + 0.3) * 0.9 }
+    var czParams: [String: ParamValue] = [:]
+    for (kind, name) in ["hue", "sat", "light"].enumerated() {
+        for (b, band) in ColorZones.bandNames.enumerated() { czParams["\(band)_\(name)"] = .number(czU[kind * 8 + b]) }
+    }
+    let czEngine = run([StackEntry(operation: "colorzones", params: czParams)])
+    let czOracle = scene.map { ColorZones.apply($0, u: czU) }
+    let eCZ = worst(czEngine, czOracle)
+    check("E-CZ colour zones match the oracle within 1/255", eCZ < tol, "\(eCZ)")
+    check("E-CZ zero sliders change nothing (within float rounding)", worstLinear(run([StackEntry(operation: "colorzones", params: [:])]), scene) < 1e-4)
+}
+
 print(failures == 0 ? "\nall checks passed" : "\n\(failures) failed")
 exit(failures == 0 ? 0 : 1)

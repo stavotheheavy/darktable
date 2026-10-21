@@ -73,8 +73,8 @@ public enum ParityList {
             // wanted, not built (roughly in order of value to a photographer)
             e("toneequal", .covered(by: "zones")),
             e("highlights", .exact, "off by default: measured 2026-10-20 (dtb-selftest --highlight-probe, 180 raws), Apple's decoder leaves clipped highlights neutral in 24 of the 28 photos with a clip, so this is for the files where it does not"),
-            e("colorequal", .planned("hue-selective colour; the colour-range mask is the base")),
-            e("colorzones", .planned("hue curves (roadmap M3 'later')")), e("satcurvergb", .planned("saturation by lightness curve")),
+            e("colorequal", .covered(by: "colorzones")),
+            e("colorzones", .exact, "eight hue bands, each with a hue shift, a saturation change and a lightness change in OkLab, blended smoothly between neighbours; greys untouched"), e("satcurvergb", .planned("saturation by lightness curve")),
             e("lut3d", .planned("Core Image CIColorCube is the natural base")), e("grain", .planned()), e("lowlight", .planned()),
             e("highpass", .planned("the S5 bases make it small")), e("diffuse", .planned("sharpen and denoise as diffusion; large")),
             e("retouch", .planned("healing needs PatchMatch")), e("liquify", .planned("warp mesh")),
