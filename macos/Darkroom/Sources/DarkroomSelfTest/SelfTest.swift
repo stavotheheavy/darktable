@@ -79,6 +79,7 @@ struct SelfTest {
         let scoreBench = has("--score-bench")
         let visionMasks = take("--vision-masks")
         let previewVsExport = has("--preview-vs-export")
+        let viewportBench = has("--viewport-bench")
         // darktable is the default; `ci` runs the clean engine (only --bench supports it so far)
         let engineName = take("--engine") ?? "darktable"
         guard let path = args.first else {
@@ -103,6 +104,8 @@ struct SelfTest {
                 try await runOneShot(engine: engine, sessionPath: path, other: oneShot)
             } else if let visionMasks {
                 try runVisionMasks(path: path, out: visionMasks)
+            } else if viewportBench {
+                try await runViewportBench(engine: engine, path: path, maxSide: maxSide)
             } else if previewVsExport {
                 try await runPreviewVsExport(engine: engine, path: path)
             } else if scoreBench {
@@ -692,6 +695,51 @@ struct SelfTest {
             if !ok { failed = true }
         }
         if failed { throw EngineError("HDR export check failed") }
+    }
+
+    /// Edit-to-pixels latency of the engine session, the number T5's MetalChain microbenchmark never measured: open at `maxSide`
+    /// (the canvas's backing size), then 30 renders per scenario, each with one slider moved, reporting wall p50 and p95.
+    /// Run it on an idle Mac. `--max 2400` is a typical Retina fit view.
+    static func runViewportBench(engine: any PhotoEngine, path: String, maxSide: Int) async throws {
+        let t0 = Date()
+        try await engine.openSession(path: path, maxSide: maxSide)
+        print(String(format: "open at %d px: %.0f ms", maxSide, Date().timeIntervalSince(t0) * 1000))
+        func num(_ v: Double) -> ParamValue { .number(v) }
+        let detail: [StackEntry] = [
+            StackEntry(operation: "sharpen", params: ["amount": num(60)]),
+            StackEntry(operation: "bilat", params: ["detail": num(40)]),
+            StackEntry(operation: "atrous", params: [:]),
+            StackEntry(operation: "denoiseprofile", params: [:]),
+        ]
+        func stats(_ times: [Double]) -> (Double, Double) {
+            let s = times.sorted()
+            return (s[s.count / 2], s[min(s.count - 1, Int(Double(s.count) * 0.95))])
+        }
+        func run(_ label: String, scale: Double = 1, _ make: (Int) -> [StackEntry]) async throws {
+            _ = try await engine.sessionRender(stack: make(0), scale: scale)   // warm: pipelines, decode cache
+            var times: [Double] = []
+            for i in 1...30 {
+                let s = Date()
+                _ = try await engine.sessionRender(stack: make(i), scale: scale)
+                times.append(Date().timeIntervalSince(s) * 1000)
+            }
+            let (p50, p95) = stats(times)
+            print(String(format: "%-62@ p50 %6.1f ms   p95 %6.1f ms", label as NSString, p50, p95))
+        }
+        func display(_ contrast: Double) -> StackEntry {
+            StackEntry(operation: "display", params: ["contrast": num(contrast), "exposure": num(0.5)])
+        }
+        try await run("default stack, same params (cache behaviour)") { _ in [display(0)] }
+        try await run("exposure slider (exposure + display)") { i in
+            [StackEntry(operation: "exposure", params: ["exposure": num(Double(i) * 0.05)]), display(0)]
+        }
+        try await run("display contrast slider, no detail modules") { i in [display(Double(i))] }
+        try await run("display contrast slider, with sharpen, local contrast, equalizer, noise") { i in detail + [display(Double(i))] }
+        try await run("exposure slider, with the same four detail modules") { i in
+            detail + [StackEntry(operation: "exposure", params: ["exposure": num(Double(i) * 0.05)]), display(0)]
+        }
+        try await run("draft render (scale 0.5), display contrast slider", scale: 0.5) { i in [display(Double(i))] }
+        try await run("draft render (scale 0.5), detail modules + contrast slider", scale: 0.5) { i in detail + [display(Double(i))] }
     }
 
     static func runStack(engine: any PhotoEngine, path: String, maxSide: Int, file: String, out: String?) async throws {
