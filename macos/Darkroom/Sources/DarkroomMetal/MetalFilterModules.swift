@@ -106,7 +106,7 @@ extension CIBridge {
         dst.write(float4(sum / float(2 * L + 1), src.read(uint2(int2(gid) + off[0])).a), gid);
     }
 
-    // u[0] spin (0/1), u[1] amount, u[2], u[3] the centre in frame pixels
+    // u[0] spin (0/1), u[1] amount, u[2], u[3] the centre in frame pixels, u[4] the samples each side
     kernel void radialBlurTex(texture2d<float, access::read> src [[texture(0)]], texture2d<float, access::write> dst [[texture(1)]],
                               constant float *u [[buffer(0)]], constant int2 *off [[buffer(1)]], constant float4 *geom [[buffer(2)]],
                               uint2 gid [[thread_position_in_grid]]) {
@@ -115,7 +115,7 @@ extension CIBridge {
         int ax = int(geom[0].x + 0.5f) + int(gid.x), ay = int(geom[0].y + 0.5f) + int(gid.y);
         int2 base = int2(gid) + off[0] - int2(ax, ay);
         float rx = float(ax) - u[2], ry = float(ay) - u[3];
-        const int S = \#(RadialBlur.samples);
+        int S = int(u[4] + 0.5f);
         float3 sum = float3(0.0f);
         for (int k = -S; k <= S; k++) {
             float f = float(k) / float(S);
@@ -145,7 +145,7 @@ extension CIBridge {
         guard amount != 0 else { return image }
         let w = Int(image.extent.width.rounded()), h = Int(image.extent.height.rounded())
         return try gather(image, source: motionSource, function: "radialBlurTex",
-                          uniforms: [spin ? 1 : 0, Float(amount), Float(centreX * Double(w - 1)), Float(centreY * Double(h - 1))],
+                          uniforms: [spin ? 1 : 0, Float(amount), Float(centreX * Double(w - 1)), Float(centreY * Double(h - 1)), Float(RadialBlur.samples(width: w, height: h, spin: spin, amount: amount))],
                           reach: RadialBlur.reach(width: w, height: h, spin: spin, amount: amount))
     }
 

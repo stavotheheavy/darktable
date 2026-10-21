@@ -1,17 +1,22 @@
-// Method: a radial blur about a centre point: every pixel becomes the mean of 25 bilinear samples (`Remap.sample`, edges clamped) taken along a short path through it,
-// either scaling about the centre (zoom blur: a camera zoomed during the exposure) or rotating about it (spin blur: a rotating subject or a twisted camera). Sample k of
-// -12...12 sits at fraction k / 12 of the extent: zoom scales by 1 + (k / 12) z, spin rotates by (k / 12) a. `amount` 0 is the identity; the zoom extent is z = 0.1 amount and
+// Method: a radial blur about a centre point: every pixel becomes the mean of 2n + 1 bilinear samples (`Remap.sample`, edges clamped) taken along a short path through it,
+// either scaling about the centre (zoom blur: a camera zoomed during the exposure) or rotating about it (spin blur: a rotating subject or a twisted camera). With n samples
+// each side (`samples`, from the blur length), sample k of -n...n sits at fraction k / n of the extent: zoom scales by 1 + (k / n) z, spin rotates by (k / n) a. `amount` 0 is the identity; the zoom extent is z = 0.1 amount and
 // the spin extent a = 10 degrees x amount. The centre is given as fractions of the frame.
 
 import Foundation
 
 public enum RadialBlur {
-    public static let samples = 12
+    /// The samples each side of the pixel: enough that neighbouring samples are about two pixels apart along the longest path (at least 12, at most 100), so a long blur
+    /// is smooth and not a row of ghosts.
+    public static func samples(width: Int, height: Int, spin: Bool, amount: Double) -> Int {
+        min(max(Int((Double(reach(width: width, height: height, spin: spin, amount: amount)) / 2).rounded(.up)), 12), 100)
+    }
     public static let zoomExtent = 0.1, spinExtentDegrees = 10.0
 
     public static func apply(_ rgb: [SIMD3<Double>], width: Int, height: Int, spin: Bool, amount: Double, centreX: Double, centreY: Double) -> [SIMD3<Double>] {
         guard amount != 0 else { return rgb }
         let cx = centreX * Double(width - 1), cy = centreY * Double(height - 1)
+        let samples = samples(width: width, height: height, spin: spin, amount: amount)
         var out = rgb
         for y in 0..<height {
             for x in 0..<width {

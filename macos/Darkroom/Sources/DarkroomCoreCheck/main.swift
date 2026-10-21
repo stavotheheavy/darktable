@@ -3247,5 +3247,10 @@ do {
     }
     check("FIL7 over the whole frame (not only the border): filled, no pixel reads outside; unfilled, some do", outsideCount(z) == 0 && outsideCount(1) > 0, "\(outsideCount(z)) \(outsideCount(1))")
 }
+// RDB6 the radial blur's sample count follows its length
+do {
+    let small = RadialBlur.samples(width: 40, height: 30, spin: true, amount: 0.1), big = RadialBlur.samples(width: 4000, height: 3000, spin: true, amount: 1), mid = RadialBlur.samples(width: 800, height: 600, spin: false, amount: 1)
+    check("RDB6 the sample count grows with the blur's length: 12 for a tiny blur, more for a long one, never above 100", small == 12 && big == 100 && mid > 12 && mid < 100, "\(small) \(mid) \(big)")
+}
 print(failures == 0 ? "\nall checks passed" : "\n\(failures) failed")
 exit(failures == 0 ? 0 : 1)

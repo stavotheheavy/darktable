@@ -1145,6 +1145,8 @@ extension CIModule {
         "rgbcurve": 2,
         // refine 1: the remap modules magnify to fill the frame (their edge pixels were repeated into streaks), and caradial's range is in real-lens units
         "distortion": 2, "perspective": 2, "caradial": 2,
+        // refine 1: the radial blur takes as many samples as its length needs (it was a fixed 25, which showed as ghost arcs)
+        "radialblur": 2,
         // same: colorcontrast and colorcorrection were Core Image's colour controls and are now the OkLab saturation and the colisa maths
         "colorcontrast": 2, "colorcorrection": 2,
         // same: basecurve (CIGammaAdjust), dither (CIColorPosterize) and colorize (CIColorMonochrome) are now their own maths on the encoded value or in OkLab
