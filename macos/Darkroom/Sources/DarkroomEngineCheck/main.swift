@@ -827,6 +827,17 @@ do {
             return w
         }
         let r = { (s: [StackEntry], cached: Bool) in (try? probe.render(stack: s, pixels: detailPx, width: detailW, height: detailH, cached: cached)) ?? [] }
+        // one, two and three stored segments: a flip per segment would cancel in pairs, so the count matters
+        for (n, ops) in [(1, ["sharpen"]), (2, ["sharpen", "atrous"]), (3, ["sharpen", "atrous", "bilat"])] {
+            let own = try? SegmentProbe()
+            let s: [StackEntry] = ops.map { StackEntry(operation: $0, params: [:]) } + [StackEntry(operation: "display", params: ["contrast": .number(0), "exposure": .number(0.5)])]
+            let via = (try? own?.render(stack: s, pixels: detailPx, width: detailW, height: detailH, cached: true)) ?? nil
+            let direct = (try? own?.render(stack: s, pixels: detailPx, width: detailW, height: detailH, cached: false)) ?? nil
+            let hit = (try? own?.render(stack: s, pixels: detailPx, width: detailW, height: detailH, cached: true)) ?? nil
+            check("E-SEG-orient \(n) stored segment\(n == 1 ? "" : "s") come back upright (first render and a cache hit both equal the uncached picture; an upside-down one is far off)",
+                  via != nil && direct != nil && hit != nil && gap(via!, direct!) < 2e-3 && gap(hit!, direct!) < 2e-3 && own!.entries == n,
+                  "first \(via.map { gap($0, direct ?? []) } ?? -1), hit \(hit.map { gap($0, direct ?? []) } ?? -1), entries \(own?.entries ?? -1)")
+        }
         let first = r(stack(), true), plain = r(stack(), false)
         check("E-SEG the first render through the cache (it stores two segments) equals the render without it", gap(first, plain) < 2e-3 && probe.entries == 2, "gap \(gap(first, plain)), entries \(probe.entries)")
         let hits0 = probe.hits
@@ -959,6 +970,7 @@ do {
         check("E-DIT the segment probe could not start", false)
     }
 }
+
 
 // T10 HDR: a ramp from deep shadow to 4 stops over white through the display transform; the SDR render, the HDR
 // render and the exported file (an SDR JPEG carrying a gain map) must agree with each other and with SceneTone

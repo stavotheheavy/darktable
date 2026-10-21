@@ -887,6 +887,24 @@ struct SelfTest {
         // the clean engine's catalogue is its own, and its modules are fast; darktable's checks assume neither
         let clean = engine is CIEngine
         func luma(_ m: DarkroomModel) -> Double { m.frame.map(meanLuma) ?? 0 }
+        /// A frame as a 48 by 48 grey grid, for comparing two pictures' layout.
+        func grid(_ f: CGImage?) -> [Double] {
+            guard let f, let ctx = CGContext(data: nil, width: 48, height: 48, bitsPerComponent: 8, bytesPerRow: 48, space: CGColorSpaceCreateDeviceGray(),
+                                             bitmapInfo: CGImageAlphaInfo.none.rawValue) else { return [] }
+            ctx.interpolationQuality = .medium
+            ctx.draw(f, in: CGRect(x: 0, y: 0, width: 48, height: 48))
+            guard let d = ctx.data else { return [] }
+            return (0..<(48 * 48)).map { Double(d.load(fromByteOffset: $0, as: UInt8.self)) }
+        }
+        func correlation(_ a: [Double], _ b: [Double]) -> Double {
+            guard a.count == b.count, !a.isEmpty else { return 0 }
+            let ma = a.reduce(0, +) / Double(a.count), mb = b.reduce(0, +) / Double(b.count)
+            var sab = 0.0, saa = 0.0, sbb = 0.0
+            for i in 0..<a.count { sab += (a[i] - ma) * (b[i] - mb); saa += (a[i] - ma) * (a[i] - ma); sbb += (b[i] - mb) * (b[i] - mb) }
+            return sab / max((saa * sbb).squareRoot(), 1e-9)
+        }
+        func mirrored(_ g: [Double]) -> [Double] { (0..<g.count).map { g[($0 / 48) * 48 + 47 - $0 % 48] } }
+        func upsideDown(_ g: [Double]) -> [Double] { (0..<g.count).map { g[(47 - $0 / 48) * 48 + $0 % 48] } }
         func module(_ m: DarkroomModel, _ op: String) -> ModuleInfo? { m.modules.first { $0.operation == op } }
         func field(_ m: DarkroomModel, _ mod: ModuleInfo, _ name: String) -> FieldSchema? {
             m.schema(for: mod)?.fields.first { $0.name == name }
@@ -1846,8 +1864,14 @@ struct SelfTest {
             simple.jump(to: 0)
             await simple.settle()
             let zs = simple.historyIndex, zl = luma(simple)
+            let plainGrid = grid(simple.frame)
             simple.setSimple(.shadows, to: 80)
             await simple.settle()
+            // a stored segment of the engine's cache once came back upside down (mirrored once the camera turned it upright); the layout must match
+            let editedGrid = grid(simple.frame)
+            check(correlation(plainGrid, editedGrid) > 0.85 && correlation(plainGrid, editedGrid) > correlation(plainGrid, mirrored(editedGrid)) + 0.2
+                  && correlation(plainGrid, editedGrid) > correlation(plainGrid, upsideDown(editedGrid)) + 0.2,
+                  "SEG1 a photo edited with a neighbourhood module keeps its orientation (layout correlation \(String(format: "%.2f", correlation(plainGrid, editedGrid))), mirrored \(String(format: "%.2f", correlation(plainGrid, mirrored(editedGrid)))))")
             check(luma(simple) > zl + 0.5, "Shadows +80 lifts the frame (\(String(format: "%.1f", zl)) to \(String(format: "%.1f", luma(simple))))")
             check(abs(simple.simpleValue(.shadows) - 80) < 1 && simple.historyIndex == zs + 1, "Shadows reads back from the zone exposure and is one history step")
             let lifted = luma(simple)

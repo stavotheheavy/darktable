@@ -80,9 +80,9 @@ final class SegmentCache: @unchecked Sendable {
     }
 
     private func image(of e: Entry) -> CIImage {
-        // a Metal texture's first row is the top; Core Image's origin is the bottom left
-        let img = CIImage(mtlTexture: e.texture, options: [.colorSpace: space])?
-            .oriented(.downMirrored) ?? CIImage.empty()
+        // CIRenderDestination and CIImage(mtlTexture:) apply the same top-left/bottom-left flip, so the round trip is upright with no fix-up
+        // (a stored boundary that came back flipped went unseen while a stack had two of them, which cancel: E-SEG now covers one to three)
+        let img = CIImage(mtlTexture: e.texture, options: [.colorSpace: space]) ?? CIImage.empty()
         return img.transformed(by: CGAffineTransform(translationX: e.origin.x, y: e.origin.y))
     }
 }
