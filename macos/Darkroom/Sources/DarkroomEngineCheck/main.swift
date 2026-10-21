@@ -384,6 +384,14 @@ check("E-CBS colisa matches the oracle within 1/255", eCL < tol, "\(eCL)")
 let eCLLinear = worstLinear(run(colisaStack), colisaOracle)
 check("E-CBS colisa matches the oracle unclamped (relative 1e-4)", eCLLinear < 1e-4, "\(eCLLinear)")
 
+// E-VE velvia: the fused per-pixel kernel through the engine against Velvia in DarkroomCore
+let velviaStack = [StackEntry(operation: "velvia", params: ["strength": .number(0.7)])]
+let velviaOracle = scene.map { Velvia.apply($0, strength: 0.7) }
+let eVE = worst(run(velviaStack), velviaOracle)
+check("E-VE velvia matches the oracle within 1/255", eVE < tol, "\(eVE)")
+let eVELinear = worstLinear(run(velviaStack), velviaOracle)
+check("E-VE velvia matches the oracle unclamped (relative 1e-4)", eVELinear < 1e-4, "\(eVELinear)")
+
 // E-ST split toning: the same settings through the engine (CIBridge.perPixel, splitTex) against SplitToning in DarkroomCore
 let eSTEngine = run([StackEntry(operation: "splittoning", params: [
     "shadows_hue": .number(220), "shadows_saturation": .number(0.8),

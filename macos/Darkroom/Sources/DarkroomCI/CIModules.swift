@@ -19,7 +19,7 @@ struct CIModule: Sendable {
     /// The modules whose work is one pixel in, one pixel out, on our own Metal functions: a run of them is one pass over the frame
     /// (see MetalFused). The engine fuses them when they are unmasked and at full opacity.
     static let fusableOperations: Set<String> = [
-        "temperature", "exposure", "colorbalancergb", "channelmixer", "tonecurve", "monochrome", "rgblevels", "splittoning", "display", "invert", "colisa",
+        "temperature", "exposure", "colorbalancergb", "channelmixer", "tonecurve", "monochrome", "rgblevels", "splittoning", "display", "invert", "colisa", "velvia",
     ]
 
     /// The fused op a fusable module stands for with these values, or nil when the module does nothing at them. This is the one place the
@@ -57,6 +57,10 @@ struct CIModule: Sendable {
             return FusedOp(.monochrome, [Float(intensity), Float(v["filter_strength"] ?? 0), Float(cos(hue)), Float(sin(hue))])
         case "invert":
             return FusedOp(.invert, [])
+        case "velvia":
+            // Velvia is the colour balance kernel with vibrance only
+            let strength = v["strength"] ?? 0
+            return strength == 0 ? nil : FusedOp(.colorBalance, [0, 0, Float(strength)])
         case "colisa":
             let brightness = v["brightness"] ?? 0
             let u: [Double] = [v["contrast"] ?? 0, v["saturation"] ?? 0, 0, Colisa.gain(brightness: brightness)]
@@ -257,9 +261,8 @@ extension CIModule {
         CIModule(
             operation: "velvia", name: "velvia", iopOrder: 27, defaultEnabled: false,
             fields: [field("strength", 0, 1, 0)],
-            apply: { image, v in
-                image.applyingFilter("CIVibrance", parameters: [kCIInputAmountKey: v["strength"] ?? 0])
-            }),
+            // DarkroomCore's Velvia (the colour balance vibrance) on the oracle-checked per-pixel kernel (darkroom-engine-check E-VE)
+            apply: { image, v in try CIModule.applyFused("velvia", image, v) }),
 
         // Monochrome: black and white with a colour filter. Intensity 0 leaves the image unchanged; greys stay grey.
         CIModule(
@@ -674,6 +677,8 @@ extension CIModule {
         "invert": 2,
         // same: colisa was Core Image's colour controls (pivot 0.5, additive brightness) and is now scene-referred
         "colisa": 2,
+        // same: velvia was Core Image's vibrance and is now the OkLab vibrance step of colour balance
+        "velvia": 2,
     ]
 
     static let all: [CIModule] = (catalogue + [display] + geometryModules).map { module in

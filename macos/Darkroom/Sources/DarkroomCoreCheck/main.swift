@@ -659,6 +659,27 @@ let clExtremeB = Colisa.apply(SIMD3(0, 0, 0), contrast: -1, brightness: 1, satur
 check("CBS6 the extremes are finite past white and at black",
       [clExtremeA, clExtremeB].allSatisfy { $0.x.isFinite && $0.y.isFinite && $0.z.isFinite }, "\(clExtremeA) \(clExtremeB)")
 
+// VE velvia: OkLab chroma times 1 + strength * w, w = 1 - smoothstep(0, 0.2, chroma): pale colours gain most, vivid ones are left alone,
+// lightness and hue are kept
+func veColour(_ chroma: Double, _ hueDegrees: Double = 30) -> SIMD3<Double> {
+    OkLab.toWorking(OkLab.lab(SIMD3(0.6, chroma, hueDegrees * .pi / 180)))
+}
+func veChroma(_ rgb: SIMD3<Double>) -> Double { let lab = OkLab.fromWorking(rgb); return hypot(lab.y, lab.z) }
+func veRatio(_ chroma: Double, _ strength: Double) -> Double { veChroma(Velvia.apply(veColour(chroma), strength: strength)) / veChroma(veColour(chroma)) }
+check("VE1 strength 0 is the identity on 4096 colours", moColours.allSatisfy { near(Velvia.apply($0, strength: 0), $0, 1e-9) })
+let veWant = 1 + 0.8 * (1 - ColorCommon.smoothstep(0, 0.2, 0.02))
+check("VE2 a pale colour (chroma 0.02) at strength 0.8 gains \(String(format: "%.4f", veWant))x", abs(veRatio(0.02, 0.8) - veWant) < 1e-6, "\(veRatio(0.02, 0.8))")
+check("VE3 a vivid colour (chroma 0.25, past the 0.2 fade) is left alone", abs(veRatio(0.25, 1) - 1) < 1e-6, "\(veRatio(0.25, 1))")
+// uniform saturation would give the same ratio at every chroma: the strict order is what tells velvia from it
+let veOrder = [0.03, 0.08, 0.15].map { veRatio($0, 1) }
+check("VE4 the paler the colour the bigger the gain (a uniform saturation boost would not)",
+      veOrder[0] > veOrder[1] && veOrder[1] > veOrder[2] && veOrder[2] > 1, "\(veOrder)")
+let veIn = OkLab.fromWorking(veColour(0.05, 200)), veOut = OkLab.fromWorking(Velvia.apply(veColour(0.05, 200), strength: 1))
+check("VE5 lightness and hue are kept", abs(veOut.x - veIn.x) < 1e-9 && abs(atan2(veOut.z, veOut.y) - atan2(veIn.z, veIn.y)) < 1e-9)
+check("VE6 a grey stays grey", near(Velvia.apply(SIMD3(repeating: 0.3), strength: 1), SIMD3(repeating: 0.3), 1e-9))
+let veExtremes = [Velvia.apply(SIMD3(4, 3, 2), strength: 1), Velvia.apply(SIMD3(0, 0, 0), strength: 1)]
+check("VE7 past white and at black the output is finite", veExtremes.allSatisfy { $0.x.isFinite && $0.y.isFinite && $0.z.isFinite }, "\(veExtremes)")
+
 // ST split toning: greys are built in OkLab (a = b = 0) so their chroma is exactly zero before the tint
 func splitGrey(_ L: Double) -> SIMD3<Double> { OkLab.toWorking(SIMD3(L, 0, 0)) }
 func splitRun(_ c: SIMD3<Double>, shH: Double = 0, shS: Double = 0, hiH: Double = 0, hiS: Double = 0, balance: Double = 0) -> SIMD3<Double> {

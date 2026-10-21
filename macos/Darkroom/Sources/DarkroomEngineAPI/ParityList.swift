@@ -52,11 +52,12 @@ public enum ParityList {
             e("channelmixer", .exact, "deprecated in darktable, kept: it is the 3x3 mixer; channelmixerrgb is a different maths"),
             e("monochrome", .exact), e("invert", .exact, "deprecated in darktable, kept: the complement of the display-encoded value, so middle grey stays put"),
             e("colisa", .exact, "deprecated in darktable, kept; Simple does not use it. Contrast about middle grey, OkLab saturation, brightness as 2^(2b) of exposure"),
+            e("velvia", .exact, "the OkLab vibrance step of colour balance on its own: pale colours gain most, vivid ones are left alone"),
             e("splittoning", .exact), e("sharpen", .exact), e("bilat", .exact, "local contrast"),
             e("atrous", .exact, "contrast equalizer: three groups of wavelet scales"), e("denoiseprofile", .exact, "wavelet shrinkage; no camera noise profiles"),
             e("hazeremoval", .exact), e("flip", .exact), e("ashift", .exact, "rotate and straighten only"), e("crop", .exact),
             // in the catalogue, not yet checked against an oracle
-            e("shadhi", .unverified, "shadows and highlights"),            e("velvia", .unverified), e("vignette", .unverified), e("bloom", .unverified),
+            e("shadhi", .unverified, "shadows and highlights"),            e("vignette", .unverified), e("bloom", .unverified),
             // Core Image stand-ins
             e("basecurve", .approximate, "a gamma only"), e("colorize", .approximate), e("blurs", .approximate), e("lowpass", .approximate),
             e("dither", .approximate), e("censorize", .approximate), e("soften", .approximate), e("rgbcurve", .approximate),

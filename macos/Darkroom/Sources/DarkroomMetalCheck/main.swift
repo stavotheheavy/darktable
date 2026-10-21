@@ -539,6 +539,30 @@ do {
     check("CBS-M colisa kernel ran", false, "\(error)")
 }
 
+// velvia on Metal: it has no kernel of its own, it is colorbalanceBuf with contrast 0, saturation 0 and vibrance = strength; compared with
+// Velvia.apply (unclamped) over every hue and chroma
+do {
+    let veRamp = (0..<4096).map { i -> SIMD3<Double> in
+        let t = Double(i) / 4096
+        let rgb = OkLab.toWorking(OkLab.lab(SIMD3(0.2 + 0.7 * t, 0.01 + 0.24 * Double((i * 5) % 4096) / 4096, 2 * .pi * Double(i % 512) / 512)))
+        return SIMD3(min(max(rgb.x, 0.002), 2.5), min(max(rgb.y, 0.002), 2.5), min(max(rgb.z, 0.002), 2.5))
+    }
+    let veFloat = veRamp.map { SIMD4<Float>(Float($0.x), Float($0.y), Float($0.z), 1) }
+    let veOut = try MetalPerPixel.run(source: MetalColorBalance.source, function: "colorbalanceBuf", pixels: veFloat, uniforms: [0, 0, 0.7])
+    var veFinite = veOut.count == veRamp.count
+    var veWorst = 0.0
+    for (px, g) in zip(veRamp, veOut) {
+        let cpu = Velvia.apply(px, strength: 0.7)
+        let gpu = SIMD3(Double(g.x), Double(g.y), Double(g.z))
+        veFinite = veFinite && gpu.x.isFinite && gpu.y.isFinite && gpu.z.isFinite
+        for k in 0..<3 { veWorst = max(veWorst, abs(gpu[k] - cpu[k]) / max(1, abs(cpu[k]))) }
+    }
+    check("VE-M velvia on the colour balance kernel is finite and within 1e-4 of Velvia.apply", veFinite && veWorst < 1e-4,
+          "finite \(veFinite), worst relative error \(veWorst)")
+} catch {
+    check("VE-M velvia kernel ran", false, "\(error)")
+}
+
 // split toning on Metal against SplitToning.apply (unclamped): every hue, deep shadow to past white
 do {
     let count = 4096
