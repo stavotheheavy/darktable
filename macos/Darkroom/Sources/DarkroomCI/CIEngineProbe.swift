@@ -135,6 +135,8 @@ public enum CIEngineProbe {
 
     private static let goldenOverrides: [String: [String: Double]] = [
         // the settings the display golden is rendered at: a little contrast, the default white point and path to white, no lift
+        // a lift of the shadows, a pull on the highlights and a rise of one zone, at a radius that fits the 48 by 40 fixture
+        "zones": ["shadows": 1.2, "highlights": -1, "blacks": 0.5, "z_p1": 0.4, "scale": 0.1],
         "display": ["exposure": 0, "contrast": 30, "white": 4.5, "purity": 0.5],
         "hazeremoval": ["strength": 1, "radius": 3, "airlight": 1],
         // a point curve with an S, a raised black point and a lowered white point
@@ -170,6 +172,9 @@ public enum CIEngineProbe {
     public static func orientation(exif raw: UInt32) -> Orientation {
         CGImagePropertyOrientation(rawValue: raw).map(CIGeometry.orientation(exif:)) ?? .none
     }
+
+    /// The operations that run after the display transform when it is on.
+    public static var displayReferredOperations: Set<String> { CIModule.displayReferredOperations }
 
     /// Whether the engine would decode scene-linear for this stack.
     public static func wantsSceneLinear(_ stack: [StackEntry]) -> Bool {

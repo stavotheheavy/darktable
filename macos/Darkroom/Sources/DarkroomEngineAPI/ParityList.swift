@@ -40,7 +40,7 @@ public enum ParityList {
     """.split(whereSeparator: { $0 == " " || $0 == "\n" }).map(String.init)
 
     /// Modules of ours that darktable does not have under that name.
-    public static let ownModules: [String] = ["display", "radiallight"]
+    public static let ownModules: [String] = ["display", "radiallight", "zones"]
 
     public static let entries: [ParityEntry] = {
         func e(_ op: String, _ s: ParityStatus, _ note: String = "") -> ParityEntry { ParityEntry(operation: op, status: s, note: note) }
@@ -68,7 +68,7 @@ public enum ParityList {
             e("bilateral", .covered(by: "denoiseprofile")), e("nlmeans", .covered(by: "denoiseprofile")),
             e("contrastntexture", .covered(by: "atrous")), 
             // wanted, not built (roughly in order of value to a photographer)
-            e("toneequal", .planned("masks and a guided-filter base are built; the equalizer on top is not")),
+            e("toneequal", .covered(by: "zones")),
             e("highlights", .planned("DarkroomCore.HighlightRebuild is an oracle with no GPU kernel and no module")),
             e("colorequal", .planned("hue-selective colour; the colour-range mask is the base")),
             e("colorzones", .planned("hue curves (roadmap M3 'later')")), e("satcurvergb", .planned("saturation by lightness curve")),
@@ -99,6 +99,7 @@ public enum ParityList {
             // ours
             e("display", .exact, "not a darktable module: the scene-referred display transform, with an HDR peak"),
             e("radiallight", .exact, "not a darktable module: an exposure change through a soft ellipse, inside or around it"),
+            e("zones", .exact, "not a darktable module: a scene-referred exposure change by zone on an edge-aware base; Simple's Shadows and Highlights drive it"),
         ]
     }()
 

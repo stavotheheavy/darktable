@@ -723,6 +723,56 @@ do {
     check("E-DH-zero strength 0 returns the input untouched", zero == detailPx)
 }
 
+// E-ZE zone exposure through the engine: the guided base and the zone gain on the GPU against ZoneExposure in DarkroomCore, across tile
+// seams, and the identity at all zeros (the radius is a fraction of the frame, so it follows the render scale by itself)
+do {
+    let ze: [String: ParamValue] = ["shadows": .number(1.2), "highlights": .number(-1), "blacks": .number(0.5), "z_p1": .number(0.4), "scale": .number(0.1)]
+    let stack = [StackEntry(operation: "zones", params: ze)]
+    let settings = ZoneExposure.Settings(values: ["shadows": 1.2, "highlights": -1, "blacks": 0.5, "z_p1": 0.4, "scale": 0.1])
+    let want = ZoneExposure.apply(detailImg, width: detailW, height: detailH, settings: settings)
+    let got = runDetail(stack)
+    let eZ = worstLinear(got, want), eEnc = worst(got, want)
+    check("E-ZE zone exposure matches the oracle within 1/255 and unclamped within 2e-4", eEnc < tol && eZ < 2e-4, "encoded \(eEnc), linear \(eZ)")
+    check("E-ZE the oracle really changes the fixture (a no-op GPU path would fail)", worstLinear(detailPx, want) > 0.05, "\(worstLinear(detailPx, want))")
+    let seams = detailSeams(stack, oracle: want)
+    check("E-ZE-seam zone exposure renders the same in a region as in the full frame", seams.ok, "seam \(seams.seam), full vs oracle \(seams.fullVsOracle)")
+    check("E-ZE-zero all zones at zero returns the input untouched", runDetail([StackEntry(operation: "zones", params: [:])]) == detailPx)
+    // it is a scene-domain module: with the display transform on it runs before it, whichever order the stack lists them in
+    let both = runDetail([StackEntry(operation: "display", params: ["contrast": .number(0)]), StackEntry(operation: "zones", params: ze)])
+    let displayOnly = runDetail([StackEntry(operation: "display", params: ["contrast": .number(0)])])
+    let tone = SceneTone()
+    let zonesThenDisplay = want.map { tone.displayLinear(ColorSpaces.srgbToRec2020.apply($0)) }
+    check("E-ZE-order with display on, zones runs before it (scene light)", worst(both, zonesThenDisplay) < tol && worst(both, zonesThenDisplay) < worst(displayOnly, zonesThenDisplay),
+          "\(worst(both, zonesThenDisplay))")
+}
+
+// E-DOM domains: every display-referred module runs after the display transform when it is on (the stack's own order is not
+// what decides), and the result differs from the other order, so the order is not a no-op
+do {
+    let displayEntry = StackEntry(operation: "display", params: ["contrast": .number(0), "exposure": .number(0)])
+    let displayRendered = runDetail([displayEntry])
+    let order = Array(CIEngineProbe.displayReferredOperations).sorted()
+    var wrong: [String] = [], commute: [String] = []
+    for case let c in CIEngineProbe.goldenCases() where order.contains(c.operation) {
+        let entry = c.stack[0]
+        let engineOrder = runDetail([entry, displayEntry])
+        guard let after = try? CIEngineProbe.renderSized(stack: [entry], pixels: displayRendered, width: detailW, height: detailH).pixels,
+              let before = try? CIEngineProbe.renderSized(stack: [displayEntry], pixels: runDetail([entry]), width: detailW, height: detailH).pixels,
+              engineOrder.count == after.count else { wrong.append(c.operation); continue }
+        func gap(_ a: [SIMD4<Float>], _ b: [SIMD4<Float>]) -> Double {
+            var w = 0.0
+            for (x, y) in zip(a, b) { for k in 0..<3 { w = max(w, abs(Double(x[k]) - Double(y[k]))) } }
+            return w
+        }
+        if gap(engineOrder, after) > 1e-4 { wrong.append("\(c.operation) \(gap(engineOrder, after))") }
+        if gap(engineOrder, before) < 4.0 / 255 { commute.append(c.operation) }
+    }
+    check("E-DOM all \(order.count) display-referred modules run after the display transform", wrong.isEmpty && order.count == 14, "\(wrong)")
+    check("E-DOM for each of them the other order gives a visibly different picture (those that do not: \(commute))", commute.isEmpty, "\(commute)")
+    check("E-DOM zones and the scene modules are not in the display set", !CIEngineProbe.displayReferredOperations.contains("zones")
+          && !CIEngineProbe.displayReferredOperations.contains("exposure") && !CIEngineProbe.displayReferredOperations.contains("bloom") && !CIEngineProbe.displayReferredOperations.contains("colorbalancergb"))
+}
+
 // T10 HDR: a ramp from deep shadow to 4 stops over white through the display transform; the SDR render, the HDR
 // render and the exported file (an SDR JPEG carrying a gain map) must agree with each other and with SceneTone
 do {

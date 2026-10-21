@@ -16,9 +16,14 @@ struct CIModule: Sendable {
     let apply: @Sendable (CIImage, [String: Double]) throws -> CIImage
     /// Wants the decoder's scene-linear output (no boost tone curve) when enabled.
     var sceneReferred = false
-    /// Tone curve and its kin shape display values (0...1), so with a scene-referred module on they run after it, where
-    /// the picture is already display light; the curve then acts on what the eye sees, not on raw scene light.
-    static let displayReferredOperations: Set<String> = ["tonecurve"]
+    /// The display-referred modules: they assume 0...1 values (a curve, levels, a contrast about 0.5, a lift of the shadows) and are
+    /// only meaningful on display light, so with a scene-referred module on they run after it. Every other module is scene-referred
+    /// (a gain, a colour balance, white balance, neighbourhood filters, vignette, masks) and runs before the display transform.
+    /// `invert` is raw-level negative inversion and stays early; `bloom` is glow from over-bright light, a scene-light effect. Checked, module by module, by darkroom-engine-check E-DOM.
+    static let displayReferredOperations: Set<String> = [
+        "tonecurve", "rgblevels", "rgbcurve", "basecurve", "colisa", "colorcorrection", "colorcontrast", "velvia", "shadhi",
+        "relight", "dither", "colorize", "clahe", "splittoning",
+    ]
     /// Goes up whenever the module's maths changes. Saved with an edit (the sidecar), so a later app can tell the picture
     /// would now look different; darkroom-engine-check's golden images (T11) fail until the new version has goldens.
     var algorithmVersion = 1
@@ -424,6 +429,26 @@ extension CIModule {
             fields: [field("strength", 0, 1, 0), field("radius", 1, 40, 8), field("airlight", 0.2, 4, 1)],
             apply: { image, v in
                 try CIBridge.dehaze(image, strength: v["strength"] ?? 0, radius: (v["radius"] ?? 8) * (v["_scale"] ?? 1), airlight: v["airlight"] ?? 1)
+            }),
+
+        // Zone exposure: an exposure change in stops by zone, read from the picture's edge-aware smoothed brightness, so shadows
+        // lift and highlights hold without halos or lost texture. Scene domain (runs on scene-linear light, before the display
+        // transform). All zero is the identity. Checked by ZE1 to ZE6 (darkroom-core-check) and E-ZE (darkroom-engine-check).
+        CIModule(
+            operation: "zones", name: "zone exposure", iopOrder: 55, defaultEnabled: false,
+            fields: [
+                field("z_m7", -3, 3, 0), field("z_m6", -3, 3, 0), field("z_m5", -3, 3, 0), field("z_m4", -3, 3, 0),
+                field("z_m3", -3, 3, 0), field("z_m2", -3, 3, 0), field("z_m1", -3, 3, 0), field("z_0", -3, 3, 0),
+                field("z_p1", -3, 3, 0), field("z_p2", -3, 3, 0),
+                field("shadows", -2, 2, 0), field("highlights", -2, 2, 0), field("blacks", -2, 2, 0), field("whites", -2, 2, 0),
+                field("scale", 0.005, 0.2, ZoneExposure.defaultScale),
+            ],
+            apply: { image, v in
+                let settings = ZoneExposure.Settings(values: v)
+                guard !settings.isIdentity else { return image }
+                let e = image.extent
+                let r = ZoneExposure.radius(scale: settings.scale, longSide: Int(max(e.width, e.height)))
+                return try CIBridge.zoneExposure(image, evs: settings.zoneEVs, radius: r)
             }),
 
         // RGB curve, approximate: the same five-node curve as tone curve, applied to every channel.

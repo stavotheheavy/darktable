@@ -1869,5 +1869,75 @@ do {
 }
 
 
+// MARK: ZoneExposure (the zones module)
+
+do {
+    let zw = 48, zh = 40
+    let fix = DetailCommon.fixture(width: zw, height: zh)
+    func ratios(_ a: [SIMD3<Double>], _ b: [SIMD3<Double>]) -> Double {
+        var worst = 0.0
+        for (p, q) in zip(a, b) where p.y > 1e-6 && q.y > 1e-6 {
+            worst = max(worst, abs(p.x / p.y - q.x / q.y), abs(p.z / p.y - q.z / q.y))
+        }
+        return worst
+    }
+    // ZE1 the identity at all zeros, exactly
+    check("ZE1 all zones at zero is the identity, byte for byte", ZoneExposure.apply(fix, width: zw, height: zh, settings: .init()) == fix)
+    // ZE2 the ten weights always sum to one, so the same change on every zone is exactly a global exposure
+    var sumWorst = 0.0
+    var b = -9.0
+    while b < 4 { sumWorst = max(sumWorst, abs(ZoneExposure.weights(b).reduce(0, +) - 1)); b += 0.013 }
+    check("ZE2 zone weights sum to 1 for any base brightness", sumWorst < 1e-12, "\(sumWorst)")
+    let allPlus = ZoneExposure.apply(fix, width: zw, height: zh, settings: .init(zones: [Double](repeating: 1, count: 10)))
+    var globalErr = 0.0
+    for (p, q) in zip(fix, allPlus) { globalErr = max(globalErr, abs(q.x - 2 * p.x), abs(q.y - 2 * p.y), abs(q.z - 2 * p.z)) }
+    check("ZE2 +1 EV on every zone is exactly 2x on a textured picture", globalErr < 1e-12, "\(globalErr)")
+    // a flat field at -3 EV with the -3 zone at +1: exactly twice
+    let flatColour = SIMD3(1.0, 0.7, 0.4)
+    let flat = [SIMD3<Double>](repeating: flatColour * (0.18 * pow(2, -3) / ColorCommon.luminance(flatColour)), count: zw * zh)   // luminance 0.18 * 2^-3
+    var s2 = ZoneExposure.Settings(); s2.zones[4] = 1
+    let flatOut = ZoneExposure.apply(flat, width: zw, height: zh, settings: s2)
+    let flatZ = ZoneExposure.logLuminance(flat[0])
+    check("ZE2 a flat field sitting on zone -3 doubles with z_m3 = +1 (z \(flatZ))", abs(flatZ + 3) < 0.01 && abs(flatOut[0].x / flat[0].x - 2) < 0.02, "\(flatOut[0].x / flat[0].x)")
+    // ZE3 colour ratios are kept at the strongest settings
+    let strong = ZoneExposure.apply(fix, width: zw, height: zh, settings: .init(shadows: 2, highlights: -2, blacks: 1, whites: -1, scale: 0.1))
+    check("ZE3 colour ratios are kept (a gain on all three channels)", ratios(fix, strong) < 1e-9, "\(ratios(fix, strong))")
+    check("ZE3 the strongest setting really moves the picture", zip(fix, strong).contains { abs($0.y - $1.y) > 0.05 })
+    // ZE4 halo: a step edge of 4 EV (left 0.18 * 2^-3, right 0.18 * 2^+1), shadows +2 EV. The gain must follow each side's own
+    // brightness right up to the edge; a plain box mean of the same radius (the mutation) blurs it across and overshoots.
+    let sw = 80, sh = 20
+    let left = 0.18 * pow(2, -3.0), right = 0.18 * pow(2, 1.0)
+    let stepImg: [SIMD3<Double>] = (0..<(sw * sh)).map { i in SIMD3(repeating: (i % sw) < sw / 2 ? left : right) }
+    let evs = ZoneExposure.Settings(shadows: 2).zoneEVs
+    let radius = 8
+    let zPlane = Plane(width: sw, height: sh, values: stepImg.map { ZoneExposure.logLuminance($0) })
+    let good = ZoneExposure.apply(stepImg, base: Filters.guided(guide: zPlane, input: zPlane, radius: radius, eps: ZoneExposure.eps), evs: evs)
+    let boxed = ZoneExposure.apply(stepImg, base: Filters.boxMean(zPlane, radius: radius), evs: evs)
+    let ideal: [Double] = (0..<(sw * sh)).map { i in (i % sw) < sw / 2 ? left * pow(2, ZoneExposure.gain(base: -3, evs: evs)) : right }
+    func overshoot(_ out: [SIMD3<Double>]) -> Double {
+        var w = 0.0
+        for i in 0..<(sw * sh) { w = max(w, abs(out[i].y - ideal[i])) }
+        return w / (ideal[sw - 1] - ideal[0])
+    }
+    let haloGood = overshoot(good), haloBox = overshoot(boxed)
+    check("ZE4 a 4 EV step with shadows +2 EV: error at the edge under 2% of the step", haloGood < 0.02, "\(haloGood)")
+    check("ZE4 mutation: a box-mean base of the same radius misses by more than 5% of the step", haloBox > 0.05, "\(haloBox)")
+    // ZE5 texture is kept: the high-pass energy of the log luminance changes by under 10% at a moderate shadows lift
+    func highPass(_ img: [SIMD3<Double>]) -> Double {
+        let z = Plane(width: zw, height: zh, values: img.map { ZoneExposure.logLuminance($0) })
+        let low = Filters.boxMean(z, radius: 2)
+        return zip(z.values, low.values).reduce(0.0) { $0 + ($1.0 - $1.1) * ($1.0 - $1.1) }
+    }
+    let lifted = ZoneExposure.apply(fix, width: zw, height: zh, settings: .init(shadows: 1, scale: 0.12))
+    let hpRatio = highPass(lifted) / highPass(fix)
+    check("ZE5 texture energy is within 10% of the original after a +1 EV shadows lift", abs(hpRatio - 1) < 0.10, "\(hpRatio)")
+    // ZE6 the radius follows the frame (a fraction of the long side), within its cap
+    check("ZE6 the radius is the scale times the long side, between 1 and the cap",
+          ZoneExposure.radius(scale: 0.04, longSide: 2400) == 96 && ZoneExposure.radius(scale: 0.2, longSide: 9000) == ZoneExposure.maxRadius
+          && ZoneExposure.radius(scale: 0.005, longSide: 10) == 1 && ZoneExposure.radius(scale: .nan, longSide: 1000) == 40)
+    check("ZE6 hostile values: NaN settings and base give the identity gain", ZoneExposure.Settings(values: ["shadows": .nan]).isIdentity
+          && ZoneExposure.gain(base: .nan, evs: [Double](repeating: 0, count: 10)) == 0)
+}
+
 print(failures == 0 ? "\nall checks passed" : "\n\(failures) failed")
 exit(failures == 0 ? 0 : 1)

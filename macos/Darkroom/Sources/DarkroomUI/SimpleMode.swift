@@ -13,8 +13,10 @@ public enum EditMode: String, CaseIterable, Sendable {
 }
 
 public enum SimpleControl: String, CaseIterable, Identifiable, Sendable {
-    case light = "Light", contrast = "Contrast", color = "Color", warmth = "Warmth", detail = "Detail"
+    case light = "Light", shadows = "Shadows", highlights = "Highlights", contrast = "Contrast", color = "Color", warmth = "Warmth", detail = "Detail"
     public var id: String { rawValue }
+    /// Shadows and Highlights are the zone exposure module's; the darktable engine has no such module, so Simple leaves them out there.
+    var module: String? { self == .shadows || self == .highlights ? "zones" : nil }
     /// Detail only sharpens; the others run both ways.
     var range: ClosedRange<Double> { self == .detail ? 0...100 : -100...100 }
 }
@@ -52,6 +54,13 @@ public struct SimpleLook: Identifiable, Sendable {
 
 extension DarkroomModel {
     static let simpleOperations = ["exposure", "colorbalancergb", "temperature", "sharpen"]
+    /// Modules a Simple slider drives when the engine has them (the zone exposure behind Shadows and Highlights).
+    static let simpleOptionalOperations = ["zones"]
+
+    /// The sliders this engine can drive.
+    public var simpleControls: [SimpleControl] {
+        SimpleControl.allCases.filter { c in c.module.map { module($0) != nil } ?? true }
+    }
 
     func module(_ operation: String) -> ModuleInfo? { modules.first { $0.operation == operation } }
 
@@ -63,7 +72,7 @@ extension DarkroomModel {
 
     /// Schemas arrive lazily; Simple needs a handful of them before its sliders mean anything.
     public func prepareSimple() async {
-        for op in Self.simpleOperations + Self.simpleGeometryOperations { if let m = module(op) { await loadSchema(for: m) } }
+        for op in Self.simpleOperations + Self.simpleOptionalOperations + Self.simpleGeometryOperations { if let m = module(op) { await loadSchema(for: m) } }
     }
 
     public var simpleReady: Bool {
@@ -89,6 +98,12 @@ extension DarkroomModel {
         switch c {
         case .light:
             v = (number("exposure", "exposure") ?? 0) / 2 * 100
+        case .shadows:
+            guard let z = module("zones"), isEnabled(z) else { return 0 }
+            v = (number("zones", "shadows") ?? 0) / 2 * 100
+        case .highlights:
+            guard let z = module("zones"), isEnabled(z) else { return 0 }
+            v = (number("zones", "highlights") ?? 0) / 2 * 100
         case .contrast:
             v = (number("colorbalancergb", "contrast") ?? 0) / 0.5 * 100
         case .color:
@@ -113,6 +128,13 @@ extension DarkroomModel {
         switch c {
         case .light:
             write("exposure", "exposure", v / 100 * 2)
+        case .shadows, .highlights:
+            guard let z = module("zones") else { return }
+            // 100 on the slider is two stops at the zones the control reaches; the module is on while either slider is off zero
+            write("zones", c == .shadows ? "shadows" : "highlights", v / 100 * 2)
+            let other = c == .shadows ? "highlights" : "shadows"
+            let on = v != 0 || (number("zones", other) ?? 0) != 0
+            if on != isEnabled(z) { setEnabled(z, on) }
         case .contrast:
             write("colorbalancergb", "contrast", v / 100 * 0.5)
         case .color:
@@ -147,6 +169,7 @@ extension DarkroomModel {
     public func simpleTouchedByPro(_ c: SimpleControl) -> Bool {
         let (op, owned): (String, Set<String>) = switch c {
         case .light: ("exposure", ["exposure"])
+        case .shadows, .highlights: ("zones", ["shadows", "highlights"])
         case .contrast, .color: ("colorbalancergb", ["contrast", "vibrance", "saturation_global"])
         case .warmth: ("temperature", ["red", "blue"])
         case .detail: ("sharpen", ["amount"])
@@ -158,7 +181,7 @@ extension DarkroomModel {
     /// Edited modules Simple has no slider for, so the panel can say what Pro changed.
     public var customEditCount: Int {
         moduleRows.filter {
-            $0.edited && !Self.simpleOperations.contains($0.module.operation) && !Self.simpleGeometryOperations.contains($0.module.operation)
+            $0.edited && !Self.simpleOperations.contains($0.module.operation) && !Self.simpleOptionalOperations.contains($0.module.operation) && !Self.simpleGeometryOperations.contains($0.module.operation)
         }.count
     }
 }
@@ -232,7 +255,7 @@ struct SimplePanel: View {
             }
             Divider().padding(.bottom, 4)
 
-            ForEach(SimpleControl.allCases) { c in
+            ForEach(model.simpleControls) { c in
                 VStack(spacing: 0) {
                     HStack {
                         Text(c.rawValue).font(.callout.weight(.medium))
