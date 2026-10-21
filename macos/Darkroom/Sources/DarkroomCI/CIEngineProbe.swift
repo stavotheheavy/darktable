@@ -181,6 +181,9 @@ public enum CIEngineProbe {
     /// The operations that run after the display transform when it is on.
     public static var displayReferredOperations: Set<String> { CIModule.displayReferredOperations }
 
+    /// The stack a session or export render actually runs (see CIModule.withDefaults).
+    public static func withDefaults(_ stack: [StackEntry]) -> [StackEntry] { CIModule.withDefaults(stack) }
+
     /// The operations whose modules fuse into one pass.
     public static var fusableOperations: Set<String> { CIModule.fusableOperations }
 

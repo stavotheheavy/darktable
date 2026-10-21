@@ -1103,6 +1103,27 @@ do {
 
 
 
+// E-DEF the stack a session render runs: the modules that are on by default join it, a module's own entry wins, and the starting values sit
+// under what the user edited. The model sends only edited modules, and without this the display transform never ran in the app.
+do {
+    let empty = CIEngineProbe.withDefaults([])
+    let ops = Set(empty.map(\.operation))
+    check("E-DEF an empty stack gains the modules that are on by default (white balance and the display transform), and no others",
+          ops == ["temperature", "display"], "\(ops.sorted())")
+    check("E-DEF the display transform starts with its +0.5 EV lift", empty.first { $0.operation == "display" }?.params["exposure"]?.double == 0.5)
+    check("E-DEF the empty stack wants the scene-linear decode, as the default is scene-referred", CIEngineProbe.wantsSceneLinear(empty))
+    let off = CIEngineProbe.withDefaults([StackEntry(operation: "display", enabled: false)])
+    check("E-DEF a stack that switches the display transform off keeps it off (no second entry) and keeps the decoder's own look",
+          off.filter { $0.operation == "display" }.count == 1 && off.first { $0.operation == "display" }?.enabled == false && !CIEngineProbe.wantsSceneLinear(off))
+    let edited = CIEngineProbe.withDefaults([StackEntry(operation: "display", params: ["contrast": .number(30)])])
+    let d = edited.first { $0.operation == "display" }
+    check("E-DEF editing only the contrast keeps the +0.5 EV lift under it", d?.params["contrast"]?.double == 30 && d?.params["exposure"]?.double == 0.5)
+    let own = CIEngineProbe.withDefaults([StackEntry(operation: "display", params: ["exposure": .number(-1)])])
+    check("E-DEF an edited exposure bias wins over the start value", own.first { $0.operation == "display" }?.params["exposure"]?.double == -1)
+    check("E-DEF other modules are untouched, and the probe's own path (CIEngine.process) still treats an empty stack as the identity",
+          CIEngineProbe.withDefaults([StackEntry(operation: "sharpen")]).filter { $0.operation == "sharpen" }.count == 1 && worst(run([]), scene) < 1e-6)
+}
+
 // T10 HDR: a ramp from deep shadow to 4 stops over white through the display transform; the SDR render, the HDR
 // render and the exported file (an SDR JPEG carrying a gain map) must agree with each other and with SceneTone
 do {

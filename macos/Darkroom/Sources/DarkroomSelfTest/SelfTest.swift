@@ -1669,6 +1669,8 @@ struct SelfTest {
                   "PP14 curve geometry: top is 1, bottom 0, height 1 draws at the top, 12% picks node 0 and 13% node 1, below the plot clamps (\(hTop), \(hBottom), \(yOne), \(n12), \(n13), \(clampLow))")
             // PP18 the clipping warning: J paints the clipped pixels on the screen render only, and off gives the same frame back
             do {
+                // the default tone stage keeps this frame's highlights below white, so give the warning something to find: two stops more light
+                model.setSimple(.light, to: 100)
                 await model.settle()
                 let clean = bytes(model.frame)
                 model.showClipping = true
@@ -1682,6 +1684,8 @@ struct SelfTest {
                 check(painted != nil && painted != clean, "PP18 the clipping warning paints the clipped pixels on screen")
                 check(!stackHasIt, "PP18 the export stack carries no clipping overlay")
                 check(bytes(model.frame) == clean, "PP18 turning it off gives back the same frame, byte for byte")
+                model.setSimple(.light, to: 0)
+                await model.settle()
             }
             // PP15 the header dropdowns: one open at a time, the search starts empty each time one opens, and the Modules
             // list narrows with the search (every module it keeps matches; none matching leaves nothing)
@@ -1905,6 +1909,22 @@ struct SelfTest {
             skip("pro panel", "the basics and their fields are the clean engine's")
         }
 
+        print("default stack on a real raw")
+        if let ci = engine as? CIEngine {
+            await reopened.settle()
+            let nothing = try await ci.sessionRender(stack: [], scale: 1)
+            let explicit = try await ci.sessionRender(stack: [StackEntry(operation: "display", params: ["exposure": .number(0.5)])], scale: 1)
+            let contrastOnly = try await ci.sessionRender(stack: [StackEntry(operation: "display", params: ["contrast": .number(0)])], scale: 1)
+            let decoderLook = try await ci.sessionRender(stack: [StackEntry(operation: "display", enabled: false)], scale: 1)
+            let gN = grid(nothing.image), gE = grid(explicit.image), gC = grid(contrastOnly.image), gD = grid(decoderLook.image)
+            func meanDiff(_ a: [Double], _ b: [Double]) -> Double { zip(a, b).map { abs($0 - $1) }.reduce(0, +) / Double(a.count) }
+            check(meanDiff(gN, gE) < 0.5 && meanDiff(gN, gC) < 0.5,
+                  "DF1 an EMPTY stack renders the display transform with its +0.5 EV start (same picture as asking for it; mean difference \(String(format: "%.2f", meanDiff(gN, gE))) codes)")
+            check(meanDiff(gN, gD) > 3, "DF1 and it is a different picture from the decoder's own look (display switched off): mean difference \(String(format: "%.1f", meanDiff(gN, gD))) codes")
+        } else {
+            skip("default stack", "the defaults are the clean engine's")
+        }
+
         print("viewport size")
         check(DarkroomModel.workingSize(forScreenLongSide: 1440) == 1600 && DarkroomModel.workingSize(forScreenLongSide: 3024) == 2419
               && DarkroomModel.workingSize(forScreenLongSide: 6016) == 3200 && DarkroomModel.workingSize(forScreenLongSide: .nan) == 1600
@@ -1995,6 +2015,43 @@ struct SelfTest {
                 reopened.zoom = .fit
                 await reopened.settle()
             }
+            // the HDR preview: only with headroom, and the frame then holds values above SDR white
+            func textureMax(_ f: PresentedFrame?) -> Double {
+                guard let f else { return 0 }
+                var half = [UInt16](repeating: 0, count: f.width * f.height * 4)
+                f.texture.getBytes(&half, bytesPerRow: f.width * 8, from: MTLRegionMake2D(0, 0, f.width, f.height), mipmapLevel: 0)
+                var m = 0.0
+                for i in stride(from: 0, to: half.count, by: 4) { for c in 0..<3 { let v = Double(Float16(bitPattern: half[i + c])); if v.isFinite { m = max(m, v) } } }
+                return m
+            }
+            let savedHDR = reopened.hdrPreview
+            // an HDR peak acts on the display transform: make sure it is on for these checks (an earlier step of this suite may have switched it off)
+            let displayModule = module(reopened, "display")
+            let displayWasOn = displayModule.map { reopened.isEnabled($0) } ?? false
+            if let d = displayModule, !displayWasOn { reopened.setEnabled(d, true) }
+            DarkroomModel.headroomOverride = 1
+            reopened.setHDRPreview(true)
+            await reopened.settle()
+            check(!reopened.hdrAvailable && reopened.previewPeak == 1 && reopened.frameTexture?.peak == 1,
+                  "HP1 with no headroom the HDR preview is unavailable and frames stay SDR, whatever the setting (peak \(reopened.frameTexture?.peak ?? 0))")
+            let sdrMax = textureMax(reopened.frameTexture)
+            DarkroomModel.headroomOverride = 4
+            reopened.requestRender()
+            await reopened.settle()
+            let hdrMax = textureMax(reopened.frameTexture)
+            check(reopened.hdrAvailable && reopened.previewPeak == 4 && reopened.frameTexture?.peak == 4,
+                  "HP2 with 4x headroom and the preview on, the frame is rendered for peak 4 (\(reopened.frameTexture?.peak ?? 0))")
+            check(sdrMax <= 1.0001 && hdrMax > 1.3, "HP3 the SDR frame tops out at 1 (\(String(format: "%.3f", sdrMax))) and the HDR frame holds brighter highlights (\(String(format: "%.2f", hdrMax)))")
+            let hdrGrid = grid(reopened.frame)
+            reopened.setHDRPreview(false)
+            await reopened.settle()
+            check(reopened.frameTexture?.peak == 1 && textureMax(reopened.frameTexture) <= 1.0001 && correlation(hdrGrid, grid(reopened.frame)) > 0.98,
+                  "HP4 switching it off returns an SDR frame of the same picture")
+            DarkroomModel.headroomOverride = nil
+            reopened.setHDRPreview(savedHDR)
+            if let d = displayModule, !displayWasOn { reopened.setEnabled(d, false) }
+            await reopened.settle()
+
             reopened.presentsTexture = false
             reopened.requestRender()
             await reopened.settle()
@@ -2003,6 +2060,7 @@ struct SelfTest {
         } else {
             skip("presented frames", "the texture canvas is the clean engine's")
         }
+
 
         print("simple mode")
         let simple = reopened

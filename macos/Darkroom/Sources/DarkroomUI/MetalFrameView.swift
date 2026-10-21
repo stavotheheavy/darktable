@@ -7,8 +7,8 @@ import SwiftUI
 /// The canvas picture as a Metal layer: the engine's 16-bit frame texture is copied into the layer's drawable and presented, with no
 /// read-back of the full frame and no 8-bit CGImage in between (Apple: CAMetalLayer, and WWDC21 10161 "Explore HDR rendering with EDR" for
 /// the extended-range pixel format). The layer is rgba16Float in extended linear Display P3 with the texture's own size as its drawable, so
-/// SwiftUI's layout and zoom scale it as it scales an image. Values stay in 0...1: the display transform already maps to the SDR range, and
-/// `wantsExtendedDynamicRangeContent` stays off.
+/// SwiftUI's layout and zoom scale it as it scales an image. Values stay in 0...1 (the display transform maps to the SDR range), and
+/// `wantsExtendedDynamicRangeContent` is on only for a frame rendered with HDR headroom (PresentedFrame.peak above 1).
 struct MetalFrameView: NSViewRepresentable {
     let frame: PresentedFrame
     let serial: Int
@@ -30,7 +30,7 @@ final class MetalFrameNSView: NSView {
         metal.pixelFormat = .rgba16Float
         metal.framebufferOnly = false   // the drawable is the target of a blit
         metal.colorspace = CGColorSpace(name: CGColorSpace.extendedLinearDisplayP3)
-        metal.wantsExtendedDynamicRangeContent = false
+        metal.wantsExtendedDynamicRangeContent = false   // switched on per frame (see present)
         metal.isOpaque = true
         metal.contentsGravity = .resize
         metal.magnificationFilter = .linear
@@ -51,6 +51,8 @@ final class MetalFrameNSView: NSView {
             metal.device = device
             queue = device.makeCommandQueue()
         }
+        // a frame rendered for headroom holds values above 1: the layer must ask for extended-range content for them to show brighter than SDR white
+        metal.wantsExtendedDynamicRangeContent = frame.peak > 1
         metal.drawableSize = CGSize(width: frame.width, height: frame.height)
         guard let queue, let drawable = metal.nextDrawable(), let cmd = queue.makeCommandBuffer(), let blit = cmd.makeBlitCommandEncoder(),
               drawable.texture.width == frame.texture.width, drawable.texture.height == frame.texture.height else { return }

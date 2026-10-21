@@ -1882,6 +1882,22 @@ do {
     check("TS6 the HDR curve never dips under the SDR curve", stride(from: -14.0, through: 8.0, by: 0.01).allSatisfy { hdr.curve($0) >= sdr.curve($0) - 1e-12 })
 }
 
+// TS5c an HDR render (peak 4) stays inside the target gamut's cube up to the peak, for both gamuts, and uses the headroom: some colour goes past 1
+for target in [OutputGamut.sRGB, .displayP3] {
+    let t = SceneTone(peak: 4, target: target)
+    var inside = true, past = 0, count = 0
+    let top = 0.18 * pow(2, 6.5)
+    for i in 0..<14 { for j in 0..<14 { for k in 0..<14 {
+        let rgb = SIMD3(Double(i), Double(j), Double(k)) * (top / 13)
+        guard SceneTone.luminance(rgb) > 1e-3 else { continue }
+        count += 1
+        let u = target.fromWorking.apply(t.displayLinear(rgb))
+        if min(u.x, u.y, u.z) < -1e-6 || max(u.x, u.y, u.z) > 4 + 1e-6 { inside = false }
+        if max(u.x, u.y, u.z) > 1.5 { past += 1 }
+    } } }
+    check("TS5c (\(target == .sRGB ? "sRGB" : "Display P3")) peak 4: every output is inside the cube 0...4, and \(past) of \(count) use the headroom (above 1.5)", inside && past > 100, "\(inside) \(past)")
+}
+
 // TS7 hostile input: black, negative channels, NaN, infinity and huge values give finite output inside the target's cube, for both gamuts
 do {
     let cases: [SIMD3<Double>] = [.zero, SIMD3(-0.1, 0.02, -0.3), SIMD3(-1, -1, -1), SIMD3(.nan, 1, 1), SIMD3(.infinity, 0, 0),

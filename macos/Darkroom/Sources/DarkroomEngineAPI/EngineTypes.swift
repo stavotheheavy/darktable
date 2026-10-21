@@ -53,9 +53,13 @@ public struct PresentedFrame: @unchecked Sendable {
     public let height: Int
     public let milliseconds: Double
     public let thumbnail: CGImage
+    /// The display-linear value the frame tops out at: 1 is SDR white, more is an HDR rendition for a screen with headroom (values above 1 are
+    /// only meant for a layer that asks for extended-range content).
+    public let peak: Double
 
-    public init(texture: MTLTexture, width: Int, height: Int, milliseconds: Double, thumbnail: CGImage) {
+    public init(texture: MTLTexture, width: Int, height: Int, milliseconds: Double, thumbnail: CGImage, peak: Double = 1) {
         self.texture = texture; self.width = width; self.height = height; self.milliseconds = milliseconds; self.thumbnail = thumbnail
+        self.peak = peak
     }
 }
 

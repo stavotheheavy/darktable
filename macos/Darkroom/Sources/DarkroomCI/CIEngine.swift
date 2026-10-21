@@ -47,6 +47,8 @@ public actor CIEngine: PhotoEngine {
     /// The textures `sessionRenderPresentable` renders into, three per size in turn: the app presents one while the next renders.
     private var presentPool: [String: [MTLTexture]] = [:]
     private var presentCount = 0
+    /// The display-linear peak of presented frames (1 = SDR); see PhotoEngine.setPreviewPeak.
+    private var previewPeak = 1.0
     /// Keeps the picture after each neighbourhood module (see SegmentCache), for the open session's renders only.
     private var segmentCache: SegmentCache?
     private var session: Session?
@@ -112,6 +114,7 @@ public actor CIEngine: PhotoEngine {
     }
 
     public func sessionRender(stack: [StackEntry], scale: Double) async throws -> RenderedFrame {
+        let stack = CIModule.withDefaults(stack)
         let s = try openedSession()
         cancelFlag.withLock { $0 = false }
         let started = ContinuousClock.now
@@ -123,6 +126,7 @@ public actor CIEngine: PhotoEngine {
 
     public func sessionRenderRegion(stack: [StackEntry], scale: Double, x: Int, y: Int,
                                     width: Int, height: Int) async throws -> RenderedFrame {
+        let stack = CIModule.withDefaults(stack)
         let s = try openedSession()
         cancelFlag.withLock { $0 = false }
         let started = ContinuousClock.now
@@ -139,21 +143,27 @@ public actor CIEngine: PhotoEngine {
         return try frame(image, crop: crop, since: started)
     }
 
+    public func setPreviewPeak(_ peak: Double) async {
+        previewPeak = peak.isFinite ? min(max(peak, 1), 8) : 1
+    }
+
     public func sessionRenderPresentable(stack: [StackEntry], scale: Double) async throws -> PresentedFrame? {
+        let stack = CIModule.withDefaults(stack)
         let s = try openedSession()
         cancelFlag.withLock { $0 = false }
         let started = ContinuousClock.now
-        var image = try edited(try ownedDecode(s, scale: scale, stack: stack), stack, camera: s.camera, scale: s.fit * scale, session: s, target: .displayP3)
+        var image = try edited(try ownedDecode(s, scale: scale, stack: stack), stack, camera: s.camera, scale: s.fit * scale, session: s, target: .displayP3, hdrPeak: previewPeak > 1 ? previewPeak : nil)
         if clippingOverlay { image = try CIBridge.clippingOverlay(image) }
         return try presented(image, crop: nil, since: started)
     }
 
     public func sessionRenderRegionPresentable(stack: [StackEntry], scale: Double, x: Int, y: Int,
                                                width: Int, height: Int) async throws -> PresentedFrame? {
+        let stack = CIModule.withDefaults(stack)
         let s = try openedSession()
         cancelFlag.withLock { $0 = false }
         let started = ContinuousClock.now
-        var image = try edited(try ownedDecode(s, scale: scale, stack: stack), stack, camera: s.camera, scale: s.fit * scale, session: s, target: .displayP3)
+        var image = try edited(try ownedDecode(s, scale: scale, stack: stack), stack, camera: s.camera, scale: s.fit * scale, session: s, target: .displayP3, hdrPeak: previewPeak > 1 ? previewPeak : nil)
         if clippingOverlay { image = try CIBridge.clippingOverlay(image) }
         let ext = image.extent.integral
         let wanted = CGRect(x: ext.minX + CGFloat(x), y: ext.maxY - CGFloat(y) - CGFloat(height), width: CGFloat(width), height: CGFloat(height))
@@ -207,7 +217,7 @@ public actor CIEngine: PhotoEngine {
                        enabled: m.defaultEnabled, defaultEnabled: m.defaultEnabled,
                        supportsBlending: blends, noMasks: !blends,
                        params: Dictionary(uniqueKeysWithValues: m.fields.map { f in
-                           (f.name, m.operation == "display" && f.name == "exposure" ? .number(CIModule.defaultExposureBias) : f.defaultValue)
+                           (f.name, CIModule.startParams[m.operation]?[f.name] ?? f.defaultValue)
                        }),
                        blend: blends ? BlendInfo() : nil)
         }
@@ -232,6 +242,7 @@ public actor CIEngine: PhotoEngine {
     /// The export as a JPEG with an HDR gain map, `headroom` times SDR white at the brightest. With the display
     /// transform on, the HDR version is that transform with a higher peak; without it, Apple's own RAW HDR rendition.
     public func exportHDRJPEG(path: String, maxSide: Int, stack: [StackEntry], headroom: Double) async throws -> Data? {
+        let stack = CIModule.withDefaults(stack)
         guard let context else { throw EngineError("engine not started") }
         let s = try Self.makeSession(path: path, maxSide: maxSide)
         cancelFlag.withLock { $0 = false }
@@ -250,6 +261,7 @@ public actor CIEngine: PhotoEngine {
     // MARK: one-shot
 
     public func render(path: String, maxSide: Int, stack: [StackEntry]) async throws -> RenderedFrame {
+        let stack = CIModule.withDefaults(stack)
         guard context != nil else { throw EngineError("engine not started") }
         let s = try Self.makeSession(path: path, maxSide: maxSide)
         cancelFlag.withLock { $0 = false }
@@ -305,14 +317,15 @@ public actor CIEngine: PhotoEngine {
     }
 
     private func edited(_ image: CIImage, _ stack: [StackEntry], camera: Orientation, scale: Double = 1, session: Session? = nil,
-                        target: OutputGamut = .sRGB) throws -> CIImage {
+                        target: OutputGamut = .sRGB, hdrPeak: Double? = nil) throws -> CIImage {
         // only the open session's renders keep segments: an export or a thumbnail has a session of its own that nothing returns to
         var segments: Segments?
         if let session, let segmentCache {
             // what the decoder hands over depends on the scene-referred switch and the working size, so both are in the key
             segments = Segments(cache: segmentCache, base: "\(session.id)|\(Self.wantsSceneLinear(stack))|\(maskRasterRevision)")
         }
-        return try Self.process(image, stack, camera: camera, scale: scale, rasters: maskRasters, segments: segments, fuse: Self.fusionEnabled, target: target)
+        return try Self.process(image, stack, camera: camera, hdrPeak: hdrPeak, scale: scale, rasters: maskRasters, segments: segments,
+                                fuse: Self.fusionEnabled, target: target)
     }
 
     /// The owned decode texture is on unless DARKROOM_NO_OWNED_DECODE is set (to compare against the decoder's own reduced-size decode).
@@ -597,7 +610,7 @@ public actor CIEngine: PhotoEngine {
         }
         let elapsed = started.duration(to: .now)
         let ms = Double(elapsed.components.seconds) * 1_000 + Double(elapsed.components.attoseconds) / 1_000_000_000_000_000
-        return PresentedFrame(texture: texture, width: w, height: h, milliseconds: ms, thumbnail: thumb)
+        return PresentedFrame(texture: texture, width: w, height: h, milliseconds: ms, thumbnail: thumb, peak: previewPeak)
     }
 
     private func frame(_ image: CIImage, crop: CGRect?, since started: ContinuousClock.Instant) throws -> RenderedFrame {

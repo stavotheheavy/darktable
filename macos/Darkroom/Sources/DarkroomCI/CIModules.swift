@@ -586,6 +586,30 @@ extension CIModule {
     /// The field's own default stays 0: a saved edit that has no value (older sidecars) means "no lift".
     static let defaultExposureBias = 0.5
 
+    /// Where a module starts when nothing has been edited, where that differs from the field's own default (an absent value in a saved edit
+    /// means the field default, so older sidecars keep their look). `sessionModules` reports these as the module's values, and a session
+    /// render puts them under whatever the stack sets (see `CIEngine.withDefaults`).
+    static let startParams: [String: [String: ParamValue]] = [
+        "display": ["exposure": .number(defaultExposureBias)],
+    ]
+
+    /// The stack a session or export render runs: the modules that are on by default (white balance, the display transform) join it unless
+    /// the stack already has an entry for them (an entry that says `enabled: false` switches one off), and a module's starting values sit under
+    /// its own. The model sends only what the user edited, and without this the display transform never ran by default. The static
+    /// `CIEngine.process` and the probe do NOT do this, so an empty stack there stays the identity the oracle checks rely on.
+    static func withDefaults(_ stack: [StackEntry]) -> [StackEntry] {
+        var out = stack.map { e -> StackEntry in
+            guard let start = startParams[e.operation] else { return e }
+            var merged = e
+            merged.params = start.merging(e.params) { _, edited in edited }
+            return merged
+        }
+        for m in all where m.defaultEnabled && !m.geometry && !out.contains(where: { $0.operation == m.operation }) {
+            out.append(StackEntry(operation: m.operation, params: startParams[m.operation] ?? [:]))
+        }
+        return out
+    }
+
     /// Flip, straighten and crop, with darktable's parameter names (read from its introspection) so one
     /// stack drives either engine. Their pixels come from `CIGeometry`; `apply` here is never called.
     static let geometryModules: [CIModule] = {

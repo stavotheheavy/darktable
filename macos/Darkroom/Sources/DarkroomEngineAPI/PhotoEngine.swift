@@ -22,6 +22,9 @@ public protocol PhotoEngine: Actor {
     /// `sessionRenderRegion`, the same way.
     func sessionRenderRegionPresentable(stack: [StackEntry], scale: Double, x: Int, y: Int,
                                         width: Int, height: Int) async throws -> PresentedFrame?
+    /// The display-linear peak of presented frames: 1 (the default) is SDR, a larger value renders the HDR version the display transform makes
+    /// for that much headroom. Engines that cannot present frames ignore it.
+    func setPreviewPeak(_ peak: Double) async
     func sessionInfo() async -> SessionInfo?
     /// The camera's embedded preview of the open image, at the working size. Shown first
     /// while the full render is still coming; nil when the engine has none to offer.
@@ -67,6 +70,7 @@ extension PhotoEngine {
 }
 
 public extension PhotoEngine {
+    func setPreviewPeak(_ peak: Double) async {}
     func sessionRenderPresentable(stack: [StackEntry], scale: Double) async throws -> PresentedFrame? { nil }
     func sessionRenderRegionPresentable(stack: [StackEntry], scale: Double, x: Int, y: Int,
                                         width: Int, height: Int) async throws -> PresentedFrame? { nil }

@@ -60,6 +60,28 @@ public final class DarkroomModel {
     /// The canvas presents the engine's frames as a Metal texture (16-bit, no read-back of the full frame) when this is on and the engine
     /// can; `frame` is then a small 8-bit copy for the scopes. The canvas switches it on; headless callers leave it off and get full CGImages.
     public var presentsTexture = false
+    /// Show the HDR rendition on a screen with headroom above SDR white (a photo's highlights go brighter than the page, as an HDR export
+    /// does). Off by default: it changes how every photo looks, so it is the photographer's call. Only has an effect while `hdrAvailable`.
+    public var hdrPreview = UserDefaults.standard.bool(forKey: "darkroom.hdrPreview")
+    /// The headroom the screens can reach, as a multiple of SDR white: the largest "potential" extended range of any screen (macOS raises the
+    /// current value once a layer asks for extended-range content). A test sets `headroomOverride` instead of having a display.
+    nonisolated(unsafe) public static var headroomOverride: Double?
+    public static var screenHeadroom: Double {
+        if let o = headroomOverride { return o }
+        if let s = ProcessInfo.processInfo.environment["DARKROOM_EDR_HEADROOM"], let v = Double(s), v >= 1 { return v }
+        return NSScreen.screens.map { max($0.maximumExtendedDynamicRangeColorComponentValue, $0.maximumPotentialExtendedDynamicRangeColorComponentValue) }.max() ?? 1
+    }
+    /// Whether the HDR preview can do anything here: the canvas presents textures and a screen has headroom.
+    public var hdrAvailable: Bool { presentsTexture && Self.screenHeadroom > 1.05 }
+    /// The display-linear peak the canvas frames are rendered with: 1 is SDR.
+    public var previewPeak: Double { hdrPreview && hdrAvailable ? min(Self.screenHeadroom, 4) : 1 }
+
+    public func setHDRPreview(_ on: Bool) {
+        hdrPreview = on
+        UserDefaults.standard.set(on, forKey: "darkroom.hdrPreview")
+        requestRender()
+    }
+
     /// The frame as a texture, when the last render was presented that way.
     public private(set) var frameTexture: PresentedFrame?
     /// Counts presented frames, so a view can tell a new one from the same texture reused.
@@ -807,6 +829,7 @@ public final class DarkroomModel {
                 let result: RenderedFrame
                 var presented: PresentedFrame?
                 if presentsTexture {
+                    await engine.setPreviewPeak(previewPeak)
                     if zoom == .fit || info == nil {
                         presented = try await engine.sessionRenderPresentable(stack: entries, scale: draft ? Self.draftScale : 1)
                     } else {

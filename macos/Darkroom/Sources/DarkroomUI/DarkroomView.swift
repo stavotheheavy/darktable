@@ -327,6 +327,19 @@ struct TopBar: View {
 
             BackdropMenu(model: model)
 
+            // HDR preview: only where a screen has headroom above SDR white
+            if model.hdrAvailable {
+                Button { model.setHDRPreview(!model.hdrPreview) } label: {
+                    Image(systemName: model.hdrPreview ? "sun.max.fill" : "sun.max")
+                        .frame(width: 40, height: 40)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .help("HDR preview: show highlights brighter than the page on this display")
+                .accessibilityLabel(model.hdrPreview ? "HDR preview on" : "HDR preview off")
+                .rig("hdr")
+            }
+
             if !compact {
             Divider().frame(height: 22).padding(.horizontal, 6)
 
