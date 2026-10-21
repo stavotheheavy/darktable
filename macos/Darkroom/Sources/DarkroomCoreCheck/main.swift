@@ -2906,5 +2906,86 @@ do {
     check("HLT5 the tint is finite with its largest channel 1 at every hue", tintsOK)
 }
 
+// CAR chromatic aberration, DST distortion, PSP perspective (Remap), TLS tilt-shift, DFR defringe
+do {
+    func gap(_ a: SIMD3<Double>, _ b: SIMD3<Double>) -> Double { max(abs(a.x - b.x), abs(a.y - b.y), abs(a.z - b.z)) }
+    func allGap(_ a: [SIMD3<Double>], _ b: [SIMD3<Double>]) -> Double { zip(a, b).map { gap($0, $1) }.max() ?? 0 }
+    func finiteAll(_ a: [SIMD3<Double>]) -> Bool { a.allSatisfy { $0.x.isFinite && $0.y.isFinite && $0.z.isFinite } }
+    let w = 41, h = 31
+    var textured = [SIMD3<Double>](repeating: .zero, count: w * h)
+    for y in 0..<h { for x in 0..<w { textured[y * w + x] = SIMD3(0.5 + 0.3 * sin(Double(x) * 0.7), 0.4 + 0.3 * cos(Double(y) * 0.9), 0.3 + 0.2 * sin(Double(x + y) * 0.5)) } }
+    let kinds: [Remap.Kind] = [.distortion(k1: 0, k2: 0), .chromaticAberration(red: 0, blue: 0), .perspective(horizontal: 0, vertical: 0)]
+    check("CAR1/DST1/PSP1 zero settings are the exact identity for all three maps", kinds.allSatisfy { Remap.apply(textured, width: w, height: h, kind: $0) == textured })
+
+    // CAR
+    let ca = Remap.apply(textured, width: w, height: h, kind: .chromaticAberration(red: 0.02, blue: -0.015))
+    check("CAR2 green is never changed by the aberration correction", zip(ca, textured).allSatisfy { $0.y == $1.y })
+    var dot = [SIMD3<Double>](repeating: .zero, count: w * h)
+    dot[15 * w + 35] = SIMD3(1, 1, 1)
+    let cdot = Remap.apply(dot, width: w, height: h, kind: .chromaticAberration(red: 0.1, blue: 0))
+    var redX = 0.0, redSum = 0.0
+    for x in 0..<w { redSum += cdot[15 * w + x].x; redX += Double(x) * cdot[15 * w + x].x }
+    check("CAR3 a red dot right of the centre moves toward the centre when red is scaled up (its red centroid is more than 1 pixel left of 35), green stays at 35",
+          redX / redSum < 35 - 1.0 && cdot[15 * w + 35].y == 1, "\(redX / redSum)")
+    check("CAR4 the sample of an integer position is the pixel itself and of a half position the mean of two",
+          Remap.sample(textured, width: w, height: h, at: SIMD2(7, 9), channel: 0) == textured[9 * w + 7].x
+          && abs(Remap.sample(textured, width: w, height: h, at: SIMD2(7.5, 9), channel: 0) - (textured[9 * w + 7].x + textured[9 * w + 8].x) / 2) < 1e-12)
+
+    // DST
+    let cxy = SIMD2(Double(w - 1) / 2, Double(h - 1) / 2)
+    let sCentre = Remap.source(.distortion(k1: 0.3, k2: 0.1), x: cxy.x, y: cxy.y, width: w, height: h, channel: 0)
+    check("DST2 the centre maps to itself whatever the coefficients", abs(sCentre.x - cxy.x) < 1e-12 && abs(sCentre.y - cxy.y) < 1e-12)
+    let sEdge = Remap.source(.distortion(k1: 0.3, k2: 0), x: Double(w - 1), y: cxy.y, width: w, height: h, channel: 0)
+    check("DST3 k1 above 0 reads farther out than the pixel (content pulled in: source x beyond the output x); k1 below 0 reads nearer",
+          sEdge.x > Double(w - 1) && Remap.source(.distortion(k1: -0.3, k2: 0), x: Double(w - 1), y: cxy.y, width: w, height: h, channel: 0).x < Double(w - 1))
+    let flatC = [SIMD3<Double>](repeating: SIMD3(0.3, 0.2, 0.1), count: w * h)
+    check("DST4 a flat picture stays flat under any map (within 1e-12) and the output is finite",
+          allGap(Remap.apply(flatC, width: w, height: h, kind: .distortion(k1: 0.4, k2: -0.2)), flatC) < 1e-12 && finiteAll(Remap.apply(textured, width: w, height: h, kind: .distortion(k1: 0.5, k2: 0.5))))
+    check("DST5 reach covers the displacement: for k1 0.3 it is at least the distance an edge pixel reads from",
+          Remap.reach(.distortion(k1: 0.3, k2: 0), width: w, height: h) >= Int(abs(sEdge.x - Double(w - 1)).rounded(.down)))
+
+    // PSP
+    let pR = Remap.source(.perspective(horizontal: 0.2, vertical: 0), x: Double(w - 1), y: cxy.y, width: w, height: h, channel: 0)
+    check("PSP2 the right edge at the middle row reads from cx + cx / (1 + kx) (within 1e-9)", abs(pR.x - (cxy.x + cxy.x / 1.2)) < 1e-9 && abs(pR.y - cxy.y) < 1e-9, "\(pR)")
+    let top = Remap.source(.perspective(horizontal: 0, vertical: 0.3), x: 30, y: 0, width: w, height: h, channel: 0)
+    let bottom = Remap.source(.perspective(horizontal: 0, vertical: 0.3), x: 30, y: Double(h - 1), width: w, height: h, channel: 0)
+    check("PSP3 a vertical keystone makes the top and bottom rows read different x for the same column (vertical lines converge)", abs(top.x - bottom.x) > 1, "\(top.x) \(bottom.x)")
+    check("PSP4 the centre pixel is fixed and a flat picture stays flat", abs(Remap.source(.perspective(horizontal: 0.3, vertical: -0.2), x: cxy.x, y: cxy.y, width: w, height: h, channel: 1).x - cxy.x) < 1e-12
+          && allGap(Remap.apply(flatC, width: w, height: h, kind: .perspective(horizontal: 0.3, vertical: -0.2)), flatC) < 1e-12)
+
+    // TLS
+    check("TLS1 amount 0 or radius 0 is the identity", TiltShift.apply(textured, width: w, height: h, radius: 2, position: 0.5, angleDegrees: 0, bandWidth: 0.2, transition: 0.2, amount: 0) == textured
+          && TiltShift.apply(textured, width: w, height: h, radius: 0, position: 0.5, angleDegrees: 0, bandWidth: 0.2, transition: 0.2, amount: 1) == textured)
+    let tl = TiltShift.apply(textured, width: w, height: h, radius: 2, position: 0.5, angleDegrees: 0, bandWidth: 0.3, transition: 0.1, amount: 1)
+    check("TLS2 the pixels in the band are untouched (centre row, within 1e-12)", (0..<w).allSatisfy { gap(tl[15 * w + $0], textured[15 * w + $0]) < 1e-12 })
+    let blurTL = Blur.apply(textured, width: w, height: h, radius: 2)
+    check("TLS3 far from the band the pixel is the full blur (top row, within 1e-12)", (0..<w).allSatisfy { gap(tl[0 * w + $0], blurTL[$0]) < 1e-12 })
+    check("TLS4 the weight is symmetric about the band centre", abs(TiltShift.weight(x: 5, y: 5, width: w, height: h, position: 0.5, angleDegrees: 0, bandWidth: 0.2, transition: 0.3, amount: 1)
+          - TiltShift.weight(x: 5, y: 25, width: w, height: h, position: 0.5, angleDegrees: 0, bandWidth: 0.2, transition: 0.3, amount: 1)) < 1e-12)
+    check("TLS5 at 90 degrees the band is vertical: the weight depends on x only",
+          abs(TiltShift.weight(x: 3, y: 2, width: w, height: h, position: 0.5, angleDegrees: 90, bandWidth: 0.1, transition: 0.2, amount: 1) - TiltShift.weight(x: 3, y: 28, width: w, height: h, position: 0.5, angleDegrees: 90, bandWidth: 0.1, transition: 0.2, amount: 1)) < 1e-9
+          && TiltShift.weight(x: 3, y: 15, width: w, height: h, position: 0.5, angleDegrees: 90, bandWidth: 0.1, transition: 0.2, amount: 1) > TiltShift.weight(x: 20, y: 15, width: w, height: h, position: 0.5, angleDegrees: 90, bandWidth: 0.1, transition: 0.2, amount: 1))
+
+    // DFR
+    func labC(_ l: Double, _ c: Double, _ hDeg: Double) -> SIMD3<Double> { OkLab.toWorking(SIMD3(l, c * cos(hDeg * .pi / 180), c * sin(hDeg * .pi / 180))) }
+    var edgeImg = [SIMD3<Double>](repeating: SIMD3(repeating: 0.05), count: w * h)
+    for y in 0..<h { for x in w / 2..<w { edgeImg[y * w + x] = SIMD3(repeating: 0.8) } }
+    var fringed = edgeImg
+    fringed[15 * w + 20] = labC(0.35, 0.12, 320)     // a purple pixel on the dark side of the edge
+    for y in 5...25 { for x in 0...16 { fringed[y * w + x] = labC(0.35, 0.12, 320) } }   // the same colour as a flat region
+    check("DFR1 strength 0 or radius 0 is the identity", Defringe.apply(fringed, width: w, height: h, radius: 3, strength: 0, hueDegrees: 320, widthDegrees: 40) == fringed
+          && Defringe.apply(fringed, width: w, height: h, radius: 0, strength: 1, hueDegrees: 320, widthDegrees: 40) == fringed)
+    let df = Defringe.apply(fringed, width: w, height: h, radius: 3, strength: 1, hueDegrees: 320, widthDegrees: 40)
+    func chromaOf(_ c: SIMD3<Double>) -> Double { let l = OkLab.fromWorking(c); return hypot(l.y, l.z) }
+    check("DFR2 a purple pixel at the edge loses most of its chroma; the same colour inside a flat region is untouched", chromaOf(df[15 * w + 20]) < 0.5 * chromaOf(fringed[15 * w + 20]) && gap(df[15 * w + 6], fringed[15 * w + 6]) < 1e-12,
+          "\(chromaOf(df[15 * w + 20])) vs \(chromaOf(fringed[15 * w + 20]))")
+    check("DFR3 lightness is kept (within 1e-9)", abs(OkLab.fromWorking(df[15 * w + 20]).x - OkLab.fromWorking(fringed[15 * w + 20]).x) < 1e-9)
+    var orange = edgeImg
+    orange[15 * w + 20] = labC(0.35, 0.12, 60)
+    check("DFR4 a colour outside the fringe hue window (orange) at the same edge is untouched (within 1e-12)", gap(Defringe.apply(orange, width: w, height: h, radius: 3, strength: 1, hueDegrees: 320, widthDegrees: 40)[15 * w + 20], orange[15 * w + 20]) < 1e-12)
+    check("DFR5 a grey edge picture and hostile values stay finite and unchanged for greys", allGap(Defringe.apply(edgeImg, width: w, height: h, radius: 3, strength: 1, hueDegrees: 320, widthDegrees: 40), edgeImg) < 1e-12
+          && finiteAll(Defringe.apply([SIMD3(0, 0, 0), SIMD3(5, 5, 5), SIMD3(0.2, 0.1, 0.9), SIMD3(0.9, 0.1, 0.8)], width: 2, height: 2, radius: 1, strength: 1, hueDegrees: 320, widthDegrees: 40)))
+}
+
 print(failures == 0 ? "\nall checks passed" : "\n\(failures) failed")
 exit(failures == 0 ? 0 : 1)

@@ -191,7 +191,7 @@ struct CIModule: Sendable {
     /// Modules that read a neighbourhood (a blur radius, a guided filter, wavelet levels): the expensive ones. The segment cache keeps
     /// the picture after each of them, so a slider moved further down the stack does not run them again.
     static let neighbourhoodOperations: Set<String> = [
-        "sharpen", "denoiseprofile", "bilat", "atrous", "hazeremoval", "zones", "clahe", "soften", "blurs", "lowpass", "censorize", "highpass", "hdrtone", "deconvsharp", "chromadenoise", "mediandenoise", "deband", "skinsmooth", "texturebands", "halation", "bloom", "highlights",
+        "sharpen", "denoiseprofile", "bilat", "atrous", "hazeremoval", "zones", "clahe", "soften", "blurs", "lowpass", "censorize", "highpass", "hdrtone", "deconvsharp", "chromadenoise", "mediandenoise", "deband", "skinsmooth", "texturebands", "halation", "caradial", "distortion", "perspective", "tiltshift", "defringe", "bloom", "highlights",
     ]
 
     /// The display-referred modules: they assume 0...1 values (a curve, levels, a contrast about 0.5, a lift of the shadows) and are
@@ -703,6 +703,43 @@ extension CIModule {
             apply: { image, v in
                 try CIBridge.halation(image, strength: v["strength"] ?? 0, radius: Blur.radius(px: (v["size"] ?? 30) * (v["_scale"] ?? 1)),
                                       tint: Halation.tint(hueDegrees: v["hue"] ?? 25))
+            }),
+
+        // Lateral chromatic aberration: the red and blue channels scaled about the centre (percent), green fixed, bilinear. Remap in DarkroomCore is the oracle (CAR1-CAR4, E-CAR).
+        CIModule(
+            operation: "caradial", name: "chromatic aberration (radial)", iopOrder: 2, defaultEnabled: false,
+            fields: [field("red", -2, 2, 0), field("blue", -2, 2, 0)],
+            apply: { image, v in try CIBridge.remap(image, kind: .chromaticAberration(red: (v["red"] ?? 0) / 100, blue: (v["blue"] ?? 0) / 100)) }),
+
+        // Lens distortion: Brown's radial polynomial, bilinear. Remap in DarkroomCore is the oracle (DST1-DST4, E-DST).
+        CIModule(
+            operation: "distortion", name: "lens distortion", iopOrder: 93, defaultEnabled: false,
+            fields: [field("k1", -0.5, 0.5, 0), field("k2", -0.5, 0.5, 0)],
+            apply: { image, v in try CIBridge.remap(image, kind: .distortion(k1: v["k1"] ?? 0, k2: v["k2"] ?? 0)) }),
+
+        // Perspective: a keystone as a plane projective map about the centre, bilinear. Remap in DarkroomCore is the oracle (PSP1-PSP4, E-PSP).
+        CIModule(
+            operation: "perspective", name: "perspective (keystone)", iopOrder: 94, defaultEnabled: false,
+            fields: [field("horizontal", -0.5, 0.5, 0), field("vertical", -0.5, 0.5, 0)],
+            apply: { image, v in try CIBridge.remap(image, kind: .perspective(horizontal: v["horizontal"] ?? 0, vertical: v["vertical"] ?? 0)) }),
+
+        // Tilt-shift: a sharp band across the frame, a wide blur beyond it. TiltShift in DarkroomCore is the oracle (TLS1-TLS5, E-TLS).
+        CIModule(
+            operation: "tiltshift", name: "tilt-shift", iopOrder: 73, defaultEnabled: false,
+            fields: [field("amount", 0, 1, 0), field("radius", 1, 60, 20), field("position", 0, 1, 0.5), field("angle", -90, 90, 0),
+                     field("width", 0, 1, 0.2), field("transition", 0.02, 1, 0.25)],
+            apply: { image, v in
+                try CIBridge.tiltShift(image, radius: Blur.radius(px: (v["radius"] ?? 20) * (v["_scale"] ?? 1)), position: v["position"] ?? 0.5,
+                                       angleDegrees: v["angle"] ?? 0, bandWidth: v["width"] ?? 0.2, transition: v["transition"] ?? 0.25, amount: v["amount"] ?? 0)
+            }),
+
+        // Defringe: colour taken out of strong edges where the colour is in the fringe hue. Defringe in DarkroomCore is the oracle (DFR1-DFR5, E-DFR).
+        CIModule(
+            operation: "defringe", name: "defringe", iopOrder: 12, defaultEnabled: false,
+            fields: [field("strength", 0, 1, 0), field("radius", 1, 30, 4), field("hue", 0, 360, 320), field("width", 10, 90, 40)],
+            apply: { image, v in
+                try CIBridge.defringe(image, radius: Blur.radius(px: (v["radius"] ?? 4) * (v["_scale"] ?? 1)), strength: v["strength"] ?? 0,
+                                      hueDegrees: v["hue"] ?? 320, widthDegrees: v["width"] ?? 40)
             }),
 
         // Split toning: a shadows tint and a highlights tint in OkLab, each with its own hue and saturation,

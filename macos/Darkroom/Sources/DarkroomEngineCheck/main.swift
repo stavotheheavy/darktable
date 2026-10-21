@@ -1869,5 +1869,28 @@ do {
             Halation.apply(detailImg, width: detailW, height: detailH, strength: 0.7, radius: Blur.radius(px: 24), tint: Halation.tint(hueDegrees: 25)), zero: zeroStack("halation"))
 }
 
+// E-CAR, E-DST, E-PSP (the remap family), E-TLS tilt-shift, E-DFR defringe: the GPU paths against their oracles, across tile seams
+do {
+    func p(_ d: [String: Double]) -> [String: ParamValue] { d.mapValues { .number($0) } }
+    func compare(_ tag: String, _ stack: [StackEntry], _ want: [SIMD3<Double>], linear: Double = 5e-4) {
+        let got = runDetail(stack)
+        check("\(tag) matches the oracle within 1/255 and unclamped within \(linear)", worst(got, want) < tol && worstLinear(got, want) < linear, "encoded \(worst(got, want)), linear \(worstLinear(got, want))")
+        check("\(tag) the oracle really changes the fixture", worstLinear(detailPx, want) > 0.003, "\(worstLinear(detailPx, want))")
+        let seams = detailSeams(stack, oracle: want)
+        check("\(tag)-seam renders the same in a region as in the full frame", seams.ok, "seam \(seams.seam), full vs oracle \(seams.fullVsOracle)")
+    }
+    func zero(_ tag: String, _ op: String) { check("\(tag)-zero its default settings return the input untouched", runDetail([StackEntry(operation: op, params: [:])]) == detailPx) }
+    compare("E-CAR chromatic aberration", [StackEntry(operation: "caradial", params: p(["red": 1.5, "blue": -1.2]))],
+            Remap.apply(detailImg, width: detailW, height: detailH, kind: .chromaticAberration(red: 0.015, blue: -0.012))); zero("E-CAR", "caradial")
+    compare("E-DST lens distortion", [StackEntry(operation: "distortion", params: p(["k1": 0.25, "k2": -0.1]))],
+            Remap.apply(detailImg, width: detailW, height: detailH, kind: .distortion(k1: 0.25, k2: -0.1))); zero("E-DST", "distortion")
+    compare("E-PSP perspective", [StackEntry(operation: "perspective", params: p(["horizontal": 0.2, "vertical": -0.25]))],
+            Remap.apply(detailImg, width: detailW, height: detailH, kind: .perspective(horizontal: 0.2, vertical: -0.25))); zero("E-PSP", "perspective")
+    compare("E-TLS tilt-shift", [StackEntry(operation: "tiltshift", params: p(["amount": 0.9, "radius": 12, "position": 0.4, "angle": 15, "width": 0.2, "transition": 0.25]))],
+            TiltShift.apply(detailImg, width: detailW, height: detailH, radius: Blur.radius(px: 12), position: 0.4, angleDegrees: 15, bandWidth: 0.2, transition: 0.25, amount: 0.9)); zero("E-TLS", "tiltshift")
+    compare("E-DFR defringe", [StackEntry(operation: "defringe", params: p(["strength": 1, "radius": 3, "hue": 140, "width": 70]))],
+            Defringe.apply(detailImg, width: detailW, height: detailH, radius: Blur.radius(px: 3), strength: 1, hueDegrees: 140, widthDegrees: 70)); zero("E-DFR", "defringe")
+}
+
 print(failures == 0 ? "\nall checks passed" : "\n\(failures) failed")
 exit(failures == 0 ? 0 : 1)

@@ -40,7 +40,7 @@ public enum ParityList {
     """.split(whereSeparator: { $0 == " " || $0 == "\n" }).map(String.init)
 
     /// Modules of ours that darktable does not have under that name.
-    public static let ownModules: [String] = ["display", "graduated", "radiallight", "zones", "solarize", "gradientmap", "crossprocess", "bleachbypass", "photofilter", "channelcurves", "chromalimit", "huerotate", "warmth", "highlightrolloff", "lumabands", "hdrtone", "fadelook", "lumacurve", "reinhard", "scurve", "deconvsharp", "chromadenoise", "mediandenoise", "deband", "skinsmooth", "texturebands", "halation"]
+    public static let ownModules: [String] = ["display", "graduated", "radiallight", "zones", "solarize", "gradientmap", "crossprocess", "bleachbypass", "photofilter", "channelcurves", "chromalimit", "huerotate", "warmth", "highlightrolloff", "lumabands", "hdrtone", "fadelook", "lumacurve", "reinhard", "scurve", "deconvsharp", "chromadenoise", "mediandenoise", "deband", "skinsmooth", "texturebands", "halation", "caradial", "distortion", "perspective", "tiltshift"]
 
     public static let entries: [ParityEntry] = {
         func e(_ op: String, _ s: ParityStatus, _ note: String = "") -> ParityEntry { ParityEntry(operation: op, status: s, note: note) }
@@ -79,9 +79,9 @@ public enum ParityList {
             e("highpass", .exact, "the encoded value minus its three-box blur, on mid-grey: the base of a high-pass sharpen"), e("diffuse", .planned("sharpen and denoise as diffusion; large")),
             e("retouch", .planned("healing needs PatchMatch")), e("liquify", .planned("warp mesh")),
             e("lens", .planned("lens correction needs our own calibration tool, not lensfun data")), e("colorchecker", .planned()),
-            e("cacorrectrgb", .planned("chromatic aberration")), e("colorreconstruct", .planned("highlight colour reconstruction")),
+            e("cacorrectrgb", .covered(by: "caradial"), "darktable detects the aberration; ours is a manual radial correction"), e("colorreconstruct", .planned("highlight colour reconstruction")),
             e("primaries", .planned("colour primaries rotation")), e("negadoctor", .exact, "a scanned negative to positive from its film-base colour: E = exposure x (Dmin / T)^gamma - black"),
-            e("defringe", .planned()),
+            e("defringe", .exact, "colour taken out of strong luminance edges where the colour is in the fringe hue (a purple window by default)"),
             // left out
             e("rawprepare", .dropped("Core Image's RAW decoder does this")), e("demosaic", .dropped("Core Image's RAW decoder")),
             e("hotpixels", .dropped("decoder")), e("rawdenoise", .dropped("decoder; denoiseprofile works after it")),
@@ -100,6 +100,10 @@ public enum ParityList {
             e("channelmixerrgb", .exact, "chromatic adaptation (Bradford) from a black-body illuminant to D65, then the mixer's 3x3"),
             e("colorharmonizer", .planned()), e("colorbalance", .exact, "shadows, midtones and highlights each with a tint and a brightness: the ASC CDL offset, power (about scene white) and slope on scene-linear values"),
             // ours
+            e("caradial", .exact, "not a darktable module: lateral chromatic aberration: red and blue scaled about the centre, bilinear; manual, where darktable's cacorrectrgb detects it"),
+            e("distortion", .exact, "not a darktable module: Brown's radial lens distortion polynomial, bilinear, manual coefficients"),
+            e("perspective", .exact, "not a darktable module: a keystone as a plane projective map, bilinear"),
+            e("tiltshift", .exact, "not a darktable module: a sharp band across the frame and a wide blur beyond it"),
             e("deconvsharp", .exact, "not a darktable module: Richardson-Lucy deconvolution with a three-box blur as the point spread function"),
             e("chromadenoise", .exact, "not a darktable module: the OkLab a and b planes smoothed by a luminance-guided filter; lightness untouched"),
             e("mediandenoise", .exact, "not a darktable module: each channel the median of its 3x3 or 5x5 neighbourhood: hot pixels and impulse noise"),

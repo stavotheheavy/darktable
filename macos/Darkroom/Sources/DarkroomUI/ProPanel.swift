@@ -26,9 +26,9 @@ extension DarkroomModel {
                    "invert", "negadoctor", "colorzones", "lut3d", "gradientmap", "crossprocess", "bleachbypass", "photofilter",
                    "channelcurves", "chromalimit", "huerotate", "warmth"]),
         ("Detail", ["sharpen", "denoiseprofile", "bilat", "clahe", "atrous", "highpass", "lowpass", "blurs", "diffuse",
-                    "nlmeans", "hotpixels", "rawdenoise", "deconvsharp", "chromadenoise", "mediandenoise", "deband", "skinsmooth", "texturebands"]),
-        ("Geometry", ["flip", "ashift", "crop", "lens", "liquify", "retouch", "spots"]),
-        ("Effects", ["vignette", "bloom", "grain", "soften", "dither", "censorize", "lowlight", "graduated", "hazeremoval", "radiallight", "solarize", "halation"]),
+                    "nlmeans", "hotpixels", "rawdenoise", "defringe", "deconvsharp", "chromadenoise", "mediandenoise", "deband", "skinsmooth", "texturebands"]),
+        ("Geometry", ["flip", "ashift", "crop", "lens", "liquify", "retouch", "spots", "caradial", "distortion", "perspective"]),
+        ("Effects", ["vignette", "bloom", "grain", "soften", "dither", "censorize", "lowlight", "graduated", "hazeremoval", "radiallight", "solarize", "halation", "tiltshift"]),
     ]
 
     /// The module behind an operation (the first instance).
