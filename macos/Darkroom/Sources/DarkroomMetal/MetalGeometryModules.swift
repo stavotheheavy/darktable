@@ -12,8 +12,10 @@ extension CIBridge {
 
     private static let remapSource = MetalColorCommon.source + #"""
 
-    static float2 rm_source(int mode, float x, float y, float W, float H, constant float *u, int ch) {
+    static float2 rm_source(int mode, float px, float py, float W, float H, constant float *u, int ch) {
         float cx = (W - 1.0f) / 2.0f, cy = (H - 1.0f) / 2.0f;
+        // the output position seen through a zoom about the centre (u[5]; 1 is none)
+        float x = cx + (px - cx) / u[5], y = cy + (py - cy) / u[5];
         if (mode == 0) {
             float norm = max(length(float2(cx, cy)), 1e-9f);
             float uu = (x - cx) / norm, vv = (y - cy) / norm;
@@ -62,18 +64,19 @@ extension CIBridge {
     """#
 
     /// DarkroomCore.Remap.apply on the GPU.
-    public static func remap(_ image: CIImage, kind: Remap.Kind) throws -> CIImage {
+    public static func remap(_ image: CIImage, kind: Remap.Kind, zoom: Double = 1) throws -> CIImage {
         let ext = image.extent
         let w = Int(ext.width.rounded()), h = Int(ext.height.rounded())
-        let u: [Float]
+        var u: [Float]
         switch kind {
-        case .distortion(let k1, let k2): u = [0, Float(k1), Float(k2)]
-        case .chromaticAberration(let red, let blue): u = [1, Float(red), Float(blue)]
-        case .perspective(let kx, let ky): u = [2, Float(kx), Float(ky)]
+        case .distortion(let k1, let k2): u = [0, Float(k1), Float(k2), 0, 0]
+        case .chromaticAberration(let red, let blue): u = [1, Float(red), Float(blue), 0, 0]
+        case .perspective(let kx, let ky): u = [2, Float(kx), Float(ky), 0, 0]
         case .warp(let cx, let cy, let radius, let strength): u = [3, Float(cx), Float(cy), Float(radius), Float(strength)]
         }
-        if case .warp(_, _, _, let strength) = kind { if strength == 0 { return image } } else if u[1] == 0 && u[2] == 0 { return image }
-        let reach = Remap.reach(kind, width: w, height: h)
+        u.append(Float(zoom))
+        if case .warp(_, _, _, let strength) = kind { if strength == 0 { return image } } else if u[1] == 0 && u[2] == 0 && zoom == 1 { return image }
+        let reach = Remap.reach(kind, width: w, height: h, zoom: zoom)
         let out = try PerPixelManyProcessor.apply(withExtent: ext, inputs: [image],
                                                   arguments: ["function": "remapTex", "uniforms": u, "source": remapSource, "reach": reach, "clampToFrame": true,
                                                               "extent": [Double(ext.minX), Double(ext.minY), Double(ext.width), Double(ext.height)]])

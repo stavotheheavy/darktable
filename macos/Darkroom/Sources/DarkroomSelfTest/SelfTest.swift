@@ -13,6 +13,7 @@ import DarkroomCI
 //   dtb-selftest <image> [--max 1400] [--out frame.png]      engine round trip + timings
 //   dtb-selftest <image> --ui                                the real model: sliders -> stack -> pixels
 //   dtb-selftest <image> --stack s.json --out f.png         one render of a stack file, on either engine
+//   dtb-selftest <image> --audit dir [--max 800]            every module of the clean engine at three strengths: PNGs and audit.csv
 //   dtb-selftest <raw> --crop-abuse                          raw crops past the frame must not crash a render
 //
 // What this cannot check is how the Liquid Glass views look: SwiftUI draws through the window
@@ -77,6 +78,7 @@ struct SelfTest {
         let cropAbuse = has("--crop-abuse")
         let fromModule = take("--from")
         let stackFile = take("--stack")
+        let auditDir = take("--audit")
         let schemaOp = take("--schema")
         let oneShot = take("--one-shot")
         let hdrJPEG = take("--hdr-jpeg")
@@ -128,6 +130,8 @@ struct SelfTest {
                 for f in try await engine.schema(for: schemaOp).fields {
                     print("\(f.name)\t\(f.kind)\tmin \(f.min)\tmax \(f.max)\tdefault \(f.defaultValue)\t\(f.options.map { "\($0)" }.joined(separator: ","))\t\(f.description)")
                 }
+            } else if let auditDir {
+                try await runAudit(engine: engine, path: path, maxSide: maxSide, out: auditDir)
             } else if let stackFile {
                 try await runStack(engine: engine, path: path, maxSide: maxSide, file: stackFile, out: out)
             } else if cropAbuse {
@@ -904,6 +908,84 @@ struct SelfTest {
         print("stack \(stack.map(\.operation).joined(separator: ", ")): \(frame.width)x\(frame.height) in "
               + "\(Int(frame.milliseconds)) ms, mean luma \(String(format: "%.1f", meanLuma(frame.image)))")
         if let out { try writePNG(frame.image, to: URL(fileURLWithPath: out)); print("wrote \(out)") }
+    }
+
+
+    // MARK: audit: every module of the clean engine at three strengths, with automatic metrics
+
+    /// Straight RGBA8 of an image.
+    static func rgba(_ image: CGImage) -> [UInt8] {
+        var buf = [UInt8](repeating: 0, count: image.width * image.height * 4)
+        buf.withUnsafeMutableBytes { raw in
+            if let ctx = CGContext(data: raw.baseAddress, width: image.width, height: image.height, bitsPerComponent: 8, bytesPerRow: image.width * 4,
+                                   space: CGColorSpace(name: CGColorSpace.sRGB)!, bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) {
+                ctx.draw(image, in: CGRect(x: 0, y: 0, width: image.width, height: image.height))
+            }
+        }
+        return buf
+    }
+
+    /// Each golden case of the catalogue rendered on `path` at a subtle (0.35 of the golden change), the golden and an extreme (2.2 of it, held to the field range)
+    /// setting. Writes <out>/<module>.<setting>.png and <out>/audit.csv: render time, mean luma and its change, clipped and crushed shares, how much the 14-pixel border ring
+    /// changed against the interior (a streak or black-edge detector) and flags for a blank, dark-edged or streaked frame.
+    static func runAudit(engine: any PhotoEngine, path: String, maxSide: Int, out: String) async throws {
+        try FileManager.default.createDirectory(atPath: out, withIntermediateDirectories: true)
+        try await engine.openSession(path: path, maxSide: maxSide)
+        let base = try await engine.sessionRender(stack: [], scale: 1)
+        let baseLuma = meanLuma(base.image), baseRGBA = rgba(base.image), w = base.width, h = base.height
+        try writePNG(base.image, to: URL(fileURLWithPath: "\(out)/base.png"))
+        var csv = "module,setting,ms,mean_luma,luma_change,clipped_pct,crushed_pct,ring_change,interior_change,flags\n"
+        let ring = 14
+        for c in CIEngineProbe.goldenCases() {
+            guard let entry = c.stack.first else { continue }
+            let schema = try? await engine.schema(for: entry.operation)
+            func field(_ name: String) -> FieldSchema? { schema?.fields.first { $0.name == name } }
+            for (label, factor) in [("subtle", 0.35), ("strong", 1.0), ("extreme", 2.2)] {
+                var params: [String: ParamValue] = [:]
+                // switches and choices keep their value; only magnitudes are scaled
+                let fixed: Set<String> = ["fill", "spin", "colour", "scheme", "mode", "iterations", "seed"]
+                for (k, v) in entry.params {
+                    guard let value = v.double, !fixed.contains(k) else { params[k] = v; continue }
+                    let f = field(k)
+                    let def = f?.defaultValue.double ?? 0
+                    var scaled = def + (value - def) * factor
+                    if let f { scaled = min(max(scaled, f.min), f.max) }
+                    params[k] = .number(scaled)
+                }
+                let stack = [StackEntry(operation: entry.operation, params: params)]
+                var flags: [String] = []
+                var line = ""
+                do {
+                    let frame = try await engine.sessionRender(stack: stack, scale: 1)
+                    let px = rgba(frame.image)
+                    let luma = meanLuma(frame.image)
+                    var clipped = 0, crushed = 0, ringSum = 0.0, ringN = 0.0, inSum = 0.0, inN = 0.0
+                    if px.count == baseRGBA.count {
+                        for y in 0..<h { for x in 0..<w {
+                            let o = (y * w + x) * 4
+                            if px[o] == 255 || px[o + 1] == 255 || px[o + 2] == 255 { clipped += 1 }
+                            if px[o] == 0 && px[o + 1] == 0 && px[o + 2] == 0 { crushed += 1 }
+                            let d = (abs(Double(px[o]) - Double(baseRGBA[o])) + abs(Double(px[o + 1]) - Double(baseRGBA[o + 1])) + abs(Double(px[o + 2]) - Double(baseRGBA[o + 2]))) / 3
+                            if x < ring || y < ring || x >= w - ring || y >= h - ring { ringSum += d; ringN += 1 } else { inSum += d; inN += 1 }
+                        } }
+                    } else { flags.append("size \(frame.width)x\(frame.height)") }
+                    let ringChange = ringN > 0 ? ringSum / ringN : 0, inChange = inN > 0 ? inSum / inN : 0
+                    if luma < 0.05 * baseLuma { flags.append("BLANK") }
+                    if ringChange > 8, ringChange > 3 * max(inChange, 1) { flags.append("EDGE") }
+                    if Double(clipped) / Double(w * h) > 0.35 { flags.append("CLIPPED") }
+                    if Double(crushed) / Double(w * h) > 0.35 { flags.append("CRUSHED") }
+                    try writePNG(frame.image, to: URL(fileURLWithPath: "\(out)/\(entry.operation).\(label).png"))
+                    line = String(format: "%@,%@,%.0f,%.1f,%.1f,%.2f,%.2f,%.1f,%.1f,%@\n", entry.operation, label, frame.milliseconds, luma, luma - baseLuma,
+                                  100 * Double(clipped) / Double(w * h), 100 * Double(crushed) / Double(w * h), ringChange, inChange, flags.joined(separator: " "))
+                } catch {
+                    line = "\(entry.operation),\(label),,,,,,,,RENDER-FAILED \(error)\n"
+                }
+                csv += line
+                print(line, terminator: "")
+            }
+        }
+        try csv.write(toFile: "\(out)/audit.csv", atomically: true, encoding: .utf8)
+        print("wrote \(out)/audit.csv")
     }
 
     static func runEngine(engine: any PhotoEngine, path: String, maxSide: Int, out: String?) async throws {

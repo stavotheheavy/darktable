@@ -22,8 +22,10 @@ public enum Remap {
     }
 
     /// Where output pixel (x, y) reads channel `channel` (0 red, 1 green, 2 blue) from.
-    public static func source(_ kind: Kind, x: Double, y: Double, width: Int, height: Int, channel: Int) -> SIMD2<Double> {
+    public static func source(_ kind: Kind, x px: Double, y py: Double, width: Int, height: Int, channel: Int, zoom: Double = 1) -> SIMD2<Double> {
         let cx = Double(width - 1) / 2, cy = Double(height - 1) / 2
+        // the output position seen through a zoom about the centre (zoom 1 is the position itself): magnifying the result by `zoom` reads from nearer the centre
+        let x = cx + (px - cx) / zoom, y = cy + (py - cy) / zoom
         switch kind {
         case .distortion(let k1, let k2):
             let norm = max(hypot(cx, cy), 1e-9)
@@ -60,13 +62,13 @@ public enum Remap {
         return (a * (1 - fx) + b * fx) * (1 - fy) + (c * (1 - fx) + d * fx) * fy
     }
 
-    public static func apply(_ rgb: [SIMD3<Double>], width: Int, height: Int, kind: Kind) -> [SIMD3<Double>] {
+    public static func apply(_ rgb: [SIMD3<Double>], width: Int, height: Int, kind: Kind, zoom: Double = 1) -> [SIMD3<Double>] {
         var out = rgb
         for y in 0..<height {
             for x in 0..<width {
                 var px = SIMD3<Double>(repeating: 0)
                 for c in 0..<3 {
-                    px[c] = sample(rgb, width: width, height: height, at: source(kind, x: Double(x), y: Double(y), width: width, height: height, channel: c), channel: c)
+                    px[c] = sample(rgb, width: width, height: height, at: source(kind, x: Double(x), y: Double(y), width: width, height: height, channel: c, zoom: zoom), channel: c)
                 }
                 out[y * width + x] = px
             }
@@ -75,19 +77,47 @@ public enum Remap {
     }
 
     /// How far (in whole pixels, rounded up, plus 2 for the bilinear taps) any output pixel reads from its own position: the region a GPU kernel must be given.
-    public static func reach(_ kind: Kind, width: Int, height: Int) -> Int {
+    public static func reach(_ kind: Kind, width: Int, height: Int, zoom: Double = 1) -> Int {
         var worst = 0.0
         let nx = 16, ny = 16
         for j in 0...ny {
             for i in 0...nx {
                 let x = Double(width - 1) * Double(i) / Double(nx), y = Double(height - 1) * Double(j) / Double(ny)
                 for c in 0..<3 {
-                    let p = source(kind, x: x, y: y, width: width, height: height, channel: c)
+                    let p = source(kind, x: x, y: y, width: width, height: height, channel: c, zoom: zoom)
                     let q = SIMD2(min(max(p.x.isFinite ? p.x : 0, 0), Double(width - 1)), min(max(p.y.isFinite ? p.y : 0, 0), Double(height - 1)))
                     worst = max(worst, abs(q.x - x), abs(q.y - y))
                 }
             }
         }
         return Int(worst.rounded(.up)) + 2
+    }
+
+    /// True when every output pixel on the frame's border reads (all three channels) from inside the frame, so no edge pixel is repeated.
+    public static func fillsFrame(_ kind: Kind, width: Int, height: Int, zoom: Double) -> Bool {
+        let n = 64
+        let w1 = Double(width - 1), h1 = Double(height - 1)
+        for i in 0...n {
+            let t = Double(i) / Double(n)
+            for (x, y) in [(t * w1, 0.0), (t * w1, h1), (0.0, t * h1), (w1, t * h1)] {
+                for c in 0..<3 {
+                    let p = source(kind, x: x, y: y, width: width, height: height, channel: c, zoom: zoom)
+                    if !(p.x >= -1e-6 && p.x <= w1 + 1e-6 && p.y >= -1e-6 && p.y <= h1 + 1e-6) { return false }
+                }
+            }
+        }
+        return true
+    }
+
+    /// The smallest zoom (1 to 4) that makes the warp read only from inside the frame: magnify just enough that no edge pixel is repeated. 1 when it already does.
+    public static func fillScale(_ kind: Kind, width: Int, height: Int) -> Double {
+        if fillsFrame(kind, width: width, height: height, zoom: 1) { return 1 }
+        var lo = 1.0, hi = 4.0
+        if !fillsFrame(kind, width: width, height: height, zoom: hi) { return hi }
+        for _ in 0..<40 {
+            let mid = (lo + hi) / 2
+            if fillsFrame(kind, width: width, height: height, zoom: mid) { hi = mid } else { lo = mid }
+        }
+        return hi
     }
 }

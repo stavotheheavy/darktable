@@ -194,6 +194,12 @@ struct CIModule: Sendable {
         }
     }
 
+    /// A remap module's picture: the warp, magnified by the smallest zoom that keeps every edge pixel inside the frame when `fill` is on.
+    static func applyRemap(_ image: CIImage, _ kind: Remap.Kind, fill: Double) throws -> CIImage {
+        let w = Int(image.extent.width.rounded()), h = Int(image.extent.height.rounded())
+        return try CIBridge.remap(image, kind: kind, zoom: fill >= 0.5 ? Remap.fillScale(kind, width: w, height: h) : 1)
+    }
+
     /// A fusable module on its own (masked, partly faded, or the only one in its run): the same op through the same kernel.
     static func applyFused(_ operation: String, _ image: CIImage, _ v: [String: Double]) throws -> CIImage {
         guard let op = fusedOp(operation, v) else { return image }
@@ -717,23 +723,26 @@ extension CIModule {
                                       tint: Halation.tint(hueDegrees: v["hue"] ?? 25))
             }),
 
-        // Lateral chromatic aberration: the red and blue channels scaled about the centre (percent), green fixed, bilinear. Remap in DarkroomCore is the oracle (CAR1-CAR4, E-CAR).
+        // Lateral chromatic aberration: the red and blue channels scaled about the centre (percent of the radius; real lenses are a few hundredths), green fixed, bilinear.
+        // `fill` (on by default) magnifies just enough that no edge pixel is repeated. Remap in DarkroomCore is the oracle (CAR1-CAR4, FIL1-FIL5, E-CAR).
         CIModule(
             operation: "caradial", name: "chromatic aberration (radial)", iopOrder: 2, defaultEnabled: false,
-            fields: [field("red", -2, 2, 0), field("blue", -2, 2, 0)],
-            apply: { image, v in try CIBridge.remap(image, kind: .chromaticAberration(red: (v["red"] ?? 0) / 100, blue: (v["blue"] ?? 0) / 100)) }),
+            fields: [field("red", -0.5, 0.5, 0), field("blue", -0.5, 0.5, 0), field("fill", 0, 1, 1)],
+            apply: { image, v in try CIModule.applyRemap(image, .chromaticAberration(red: (v["red"] ?? 0) / 100, blue: (v["blue"] ?? 0) / 100), fill: v["fill"] ?? 1) }),
 
-        // Lens distortion: Brown's radial polynomial, bilinear. Remap in DarkroomCore is the oracle (DST1-DST4, E-DST).
+        // Lens distortion: Brown's radial polynomial, bilinear; `fill` (on by default) magnifies just enough that no edge pixel is repeated. Remap in DarkroomCore is the oracle
+        // (DST1-DST4, FIL1-FIL5, E-DST).
         CIModule(
             operation: "distortion", name: "lens distortion", iopOrder: 93, defaultEnabled: false,
-            fields: [field("k1", -0.5, 0.5, 0), field("k2", -0.5, 0.5, 0)],
-            apply: { image, v in try CIBridge.remap(image, kind: .distortion(k1: v["k1"] ?? 0, k2: v["k2"] ?? 0)) }),
+            fields: [field("k1", -0.5, 0.5, 0), field("k2", -0.5, 0.5, 0), field("fill", 0, 1, 1)],
+            apply: { image, v in try CIModule.applyRemap(image, .distortion(k1: v["k1"] ?? 0, k2: v["k2"] ?? 0), fill: v["fill"] ?? 1) }),
 
-        // Perspective: a keystone as a plane projective map about the centre, bilinear. Remap in DarkroomCore is the oracle (PSP1-PSP4, E-PSP).
+        // Perspective: a keystone as a plane projective map about the centre, bilinear; `fill` (on by default) magnifies just enough that no edge pixel is repeated.
+        // Remap in DarkroomCore is the oracle (PSP1-PSP4, FIL1-FIL5, E-PSP).
         CIModule(
             operation: "perspective", name: "perspective (keystone)", iopOrder: 94, defaultEnabled: false,
-            fields: [field("horizontal", -0.5, 0.5, 0), field("vertical", -0.5, 0.5, 0)],
-            apply: { image, v in try CIBridge.remap(image, kind: .perspective(horizontal: v["horizontal"] ?? 0, vertical: v["vertical"] ?? 0)) }),
+            fields: [field("horizontal", -0.5, 0.5, 0), field("vertical", -0.5, 0.5, 0), field("fill", 0, 1, 1)],
+            apply: { image, v in try CIModule.applyRemap(image, .perspective(horizontal: v["horizontal"] ?? 0, vertical: v["vertical"] ?? 0), fill: v["fill"] ?? 1) }),
 
         // Tilt-shift: a sharp band across the frame, a wide blur beyond it. TiltShift in DarkroomCore is the oracle (TLS1-TLS5, E-TLS).
         CIModule(
@@ -1134,6 +1143,8 @@ extension CIModule {
         "bloom": 2,
         // same: rgbcurve was Core Image's CIToneCurve and is now the tone curve's monotone cubic on the encoded value
         "rgbcurve": 2,
+        // refine 1: the remap modules magnify to fill the frame (their edge pixels were repeated into streaks), and caradial's range is in real-lens units
+        "distortion": 2, "perspective": 2, "caradial": 2,
         // same: colorcontrast and colorcorrection were Core Image's colour controls and are now the OkLab saturation and the colisa maths
         "colorcontrast": 2, "colorcorrection": 2,
         // same: basecurve (CIGammaAdjust), dither (CIColorPosterize) and colorize (CIColorMonochrome) are now their own maths on the encoded value or in OkLab

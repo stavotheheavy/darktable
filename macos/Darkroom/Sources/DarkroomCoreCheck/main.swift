@@ -3224,5 +3224,28 @@ do {
     check("LQF4 the centre is fixed and a flat picture stays flat", abs(atC.x - pc.x) < 1e-12 && allGap(Remap.apply(flat, width: w, height: h, kind: bulge), flat) < 1e-12)
 }
 
+// FIL fill scale (auto scale-to-fill for the remap modules)
+do {
+    let w = 60, h = 40
+    check("FIL1 a map that already fills the frame needs no zoom (zero settings give exactly 1)", Remap.fillScale(.distortion(k1: 0, k2: 0), width: w, height: h) == 1 && Remap.fillScale(.perspective(horizontal: 0, vertical: 0), width: w, height: h) == 1)
+    let barrel = Remap.Kind.distortion(k1: 0.3, k2: 0)
+    let z = Remap.fillScale(barrel, width: w, height: h)
+    check("FIL2 k1 0.3 needs a zoom above 1 and no border pixel reads outside the frame at that zoom", z > 1 && Remap.fillsFrame(barrel, width: w, height: h, zoom: z), "\(z)")
+    check("FIL3 without the zoom the same warp does read outside the frame", !Remap.fillsFrame(barrel, width: w, height: h, zoom: 1))
+    check("FIL4 the zoom is the smallest that fills: 1% less does not fill", !Remap.fillsFrame(barrel, width: w, height: h, zoom: z * 0.99) || z == 1)
+    let pinch = Remap.Kind.distortion(k1: -0.3, k2: 0), zp = Remap.fillScale(pinch, width: w, height: h)
+    check("FIL5 a pincushion (k1 below 0) already fills the frame: zoom 1", zp == 1, "\(zp)")
+    let persp = Remap.Kind.perspective(horizontal: 0.2, vertical: -0.3), zq = Remap.fillScale(persp, width: w, height: h)
+    check("FIL6 a keystone gets a zoom above 1 that fills the frame (capped at 4)", zq > 1 && zq <= 4 && (zq == 4 || Remap.fillsFrame(persp, width: w, height: h, zoom: zq)), "\(zq)")
+    func outsideCount(_ zoom: Double) -> Int {
+        var n = 0
+        for y in 0..<h { for x in 0..<w { for c in 0..<3 {
+            let p = Remap.source(barrel, x: Double(x), y: Double(y), width: w, height: h, channel: c, zoom: zoom)
+            if p.x < -1e-6 || p.x > Double(w - 1) + 1e-6 || p.y < -1e-6 || p.y > Double(h - 1) + 1e-6 { n += 1 }
+        } } }
+        return n
+    }
+    check("FIL7 over the whole frame (not only the border): filled, no pixel reads outside; unfilled, some do", outsideCount(z) == 0 && outsideCount(1) > 0, "\(outsideCount(z)) \(outsideCount(1))")
+}
 print(failures == 0 ? "\nall checks passed" : "\n\(failures) failed")
 exit(failures == 0 ? 0 : 1)

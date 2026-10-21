@@ -1880,12 +1880,12 @@ do {
         check("\(tag)-seam renders the same in a region as in the full frame", seams.ok, "seam \(seams.seam), full vs oracle \(seams.fullVsOracle)")
     }
     func zero(_ tag: String, _ op: String) { check("\(tag)-zero its default settings return the input untouched", runDetail([StackEntry(operation: op, params: [:])]) == detailPx) }
-    compare("E-CAR chromatic aberration", [StackEntry(operation: "caradial", params: p(["red": 1.5, "blue": -1.2]))],
-            Remap.apply(detailImg, width: detailW, height: detailH, kind: .chromaticAberration(red: 0.015, blue: -0.012))); zero("E-CAR", "caradial")
-    compare("E-DST lens distortion", [StackEntry(operation: "distortion", params: p(["k1": 0.25, "k2": -0.1]))],
-            Remap.apply(detailImg, width: detailW, height: detailH, kind: .distortion(k1: 0.25, k2: -0.1))); zero("E-DST", "distortion")
-    compare("E-PSP perspective", [StackEntry(operation: "perspective", params: p(["horizontal": 0.2, "vertical": -0.25]))],
-            Remap.apply(detailImg, width: detailW, height: detailH, kind: .perspective(horizontal: 0.2, vertical: -0.25))); zero("E-PSP", "perspective")
+    func filled(_ kind: Remap.Kind) -> [SIMD3<Double>] { Remap.apply(detailImg, width: detailW, height: detailH, kind: kind, zoom: Remap.fillScale(kind, width: detailW, height: detailH)) }
+    compare("E-CAR chromatic aberration (filled)", [StackEntry(operation: "caradial", params: p(["red": 0.4, "blue": -0.3]))], filled(.chromaticAberration(red: 0.004, blue: -0.003))); zero("E-CAR", "caradial")
+    compare("E-DST lens distortion (filled)", [StackEntry(operation: "distortion", params: p(["k1": 0.25, "k2": -0.1]))], filled(.distortion(k1: 0.25, k2: -0.1))); zero("E-DST", "distortion")
+    compare("E-DST lens distortion (fill off)", [StackEntry(operation: "distortion", params: p(["k1": 0.25, "k2": -0.1, "fill": 0]))],
+            Remap.apply(detailImg, width: detailW, height: detailH, kind: .distortion(k1: 0.25, k2: -0.1)))
+    compare("E-PSP perspective (filled)", [StackEntry(operation: "perspective", params: p(["horizontal": 0.2, "vertical": -0.25]))], filled(.perspective(horizontal: 0.2, vertical: -0.25))); zero("E-PSP", "perspective")
     compare("E-TLS tilt-shift", [StackEntry(operation: "tiltshift", params: p(["amount": 0.9, "radius": 12, "position": 0.4, "angle": 15, "width": 0.2, "transition": 0.25]))],
             TiltShift.apply(detailImg, width: detailW, height: detailH, radius: Blur.radius(px: 12), position: 0.4, angleDegrees: 15, bandWidth: 0.2, transition: 0.25, amount: 0.9)); zero("E-TLS", "tiltshift")
     compare("E-DFR defringe", [StackEntry(operation: "defringe", params: p(["strength": 1, "radius": 3, "hue": 140, "width": 70]))],
@@ -2017,7 +2017,7 @@ do {
         ("diffuse", ["iterations": 6, "threshold": 0.1], Diffusion.apply(src, width: bw, height: bh, iterations: 6, threshold: 0.1)),
         ("radialblur", ["amount": 1, "spin": 0], RadialBlur.apply(src, width: bw, height: bh, spin: false, amount: 1, centreX: 0.5, centreY: 0.5)),
         ("retouch", ["amount": 1, "src_x": 0.1, "src_y": 0.1, "dst_x": 0.85, "dst_y": 0.8, "radius": 0.15, "feather": 0.4, "heal": 1], CloneSpot.apply(src, width: bw, height: bh, spot: spot)),
-        ("distortion", ["k1": 0.2], Remap.apply(src, width: bw, height: bh, kind: .distortion(k1: 0.2, k2: 0))),
+        ("distortion", ["k1": 0.2], Remap.apply(src, width: bw, height: bh, kind: .distortion(k1: 0.2, k2: 0), zoom: Remap.fillScale(.distortion(k1: 0.2, k2: 0), width: bw, height: bh))),
         ("halftone", ["amount": 1, "size": 9, "angle": 20], Halftone.apply(src, width: bw, height: bh, size: 9, angleDegrees: 20, colour: false, amount: 1)),
     ]
     var bad: [String] = []
