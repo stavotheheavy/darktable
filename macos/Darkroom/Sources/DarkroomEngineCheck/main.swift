@@ -773,6 +773,86 @@ do {
           && !CIEngineProbe.displayReferredOperations.contains("exposure") && !CIEngineProbe.displayReferredOperations.contains("bloom") && !CIEngineProbe.displayReferredOperations.contains("colorbalancergb"))
 }
 
+// E-FOLD gains fold into one multiply: white balance and exposure join the display kernel, or run as one pass before the next module
+do {
+    let wb = StackEntry(operation: "temperature", params: ["red": .number(coeff.x), "green": .number(coeff.y), "blue": .number(coeff.z)])
+    let ex = StackEntry(operation: "exposure", params: ["exposure": .number(0.9)])
+    let g = Exposure.gain(ev: 0.9)
+    // gains only: one pass, the product
+    let eGains = worst(run([ex, wb]), scene.map { $0 * coeff * g })
+    check("E-FOLD white balance and exposure together are the product of the two gains", eGains < tol, "\(eGains)")
+    // a gain run, then a module that is not a gain: the run applies as one pass before it, in pipeline order
+    let cb = StackEntry(operation: "colorbalancergb", params: ["contrast": .number(0.25), "saturation_global": .number(0.3)])
+    let cbOracle = scene.map { p -> SIMD3<Double> in
+        let lit = p * coeff * g
+        let (lc, sat) = (0.25, 0.3)
+        _ = (lc, sat)
+        return lit
+    }
+    let viaCB = run([cb, ex, wb]), withoutCB = run([cb])
+    _ = cbOracle
+    let expected = (try? CIEngineProbe.render(stack: [cb], pixels: scene.map { p in let q = p * coeff * g; return SIMD4(Float(q.x), Float(q.y), Float(q.z), 1) }, width: n, height: n)) ?? []
+    var eCB = viaCB.count == expected.count ? 0.0 : Double.infinity
+    for (a, b) in zip(viaCB, expected) { for k in 0..<3 { eCB = max(eCB, abs(Double(a[k]) - Double(b[k])) / max(1, Double(abs(b[k])))) } }
+    check("E-FOLD gains run before the next module (colour balance sees the gained picture, as in pipeline order)", eCB < 2e-4 && withoutCB != viaCB, "\(eCB)")
+    // a gain with an opacity under 100 is not folded: it is a module of its own, mixed back over its input
+    let half = StackEntry(operation: "exposure", params: ["exposure": .number(1)], blend: ["opacity": .number(50)])
+    let eHalf = worst(run([half, wb]), scene.map { ($0 * 0.5 + $0 * Exposure.gain(ev: 1) * 0.5) * coeff })
+    check("E-FOLD a gain at 50% opacity is not folded away (mixed over its input, then white balance)", eHalf < tol, "\(eHalf)")
+    // a disabled display transform leaves the run to be applied at the end
+    let off = StackEntry(operation: "display", params: [:], enabled: false)
+    check("E-FOLD with the display transform off the gains still apply", worst(run([wb, ex, off]), scene.map { $0 * coeff * g }) < tol)
+    // display's own lift joins the same multiply
+    let tone0 = SceneTone()
+    let eLift = worst(run([wb, ex, StackEntry(operation: "display", params: ["contrast": .number(0), "exposure": .number(0.5)])]),
+                      scene.map { tone0.displayLinear(working: $0, gain: coeff * g * Exposure.gain(ev: 0.5)) })
+    check("E-FOLD white balance, exposure and display's lift fold into one multiply and match the oracle", eLift < tol, "\(eLift)")
+}
+
+// E-SEG segment cache: a render through the cache is the render without it (the texture's orientation included), a slider moved after a
+// neighbourhood module reuses the cached picture, and anything that changes the pixels before it makes a new entry
+do {
+    if let probe = try? SegmentProbe() {
+        let wb = StackEntry(operation: "temperature", params: ["red": .number(1.3), "green": .number(1), "blue": .number(0.8)])
+        func stack(contrast: Double = 0, sharpen: Double = 0.5, ev: Double = 0.4) -> [StackEntry] {
+            [wb, StackEntry(operation: "exposure", params: ["exposure": .number(ev)]),
+             StackEntry(operation: "sharpen", params: ["amount": .number(sharpen)]),
+             StackEntry(operation: "atrous", params: ["detail_1": .number(0.5)]),
+             StackEntry(operation: "display", params: ["contrast": .number(contrast), "exposure": .number(0.5)])]
+        }
+        func gap(_ a: [SIMD4<Float>], _ b: [SIMD4<Float>]) -> Double {
+            guard a.count == b.count, !a.isEmpty else { return .infinity }
+            var w = 0.0
+            for (x, y) in zip(a, b) { for k in 0..<3 { w = max(w, abs(Double(x[k]) - Double(y[k])) / max(1, Double(abs(y[k])))) } }
+            return w
+        }
+        let r = { (s: [StackEntry], cached: Bool) in (try? probe.render(stack: s, pixels: detailPx, width: detailW, height: detailH, cached: cached)) ?? [] }
+        let first = r(stack(), true), plain = r(stack(), false)
+        check("E-SEG the first render through the cache (it stores two segments) equals the render without it", gap(first, plain) < 2e-3 && probe.entries == 2, "gap \(gap(first, plain)), entries \(probe.entries)")
+        let hits0 = probe.hits
+        let again = r(stack(), true)
+        check("E-SEG the same stack again is served from the cache and is identical", probe.hits == hits0 + 1 && again == first, "hits \(probe.hits - hits0)")
+        let moved = r(stack(contrast: 35), true)
+        check("E-SEG a slider moved after the neighbourhood modules reuses the cache (no new entry) and matches an uncached render",
+              probe.hits == hits0 + 2 && probe.entries == 2 && gap(moved, r(stack(contrast: 35), false)) < 2e-3 && gap(moved, first) > 0.01,
+              "hits \(probe.hits - hits0), entries \(probe.entries), gap \(gap(moved, r(stack(contrast: 35), false)))")
+        let sharper = r(stack(sharpen: 1.2), true)
+        check("E-SEG changing a module inside the segment makes a new entry; the picture is the new one, never the old (no stale hit)",
+              probe.entries > 2 && gap(sharper, r(stack(sharpen: 1.2), false)) < 2e-3 && gap(sharper, first) > 1e-3, "entries \(probe.entries), vs old \(gap(sharper, first))")
+        let earlier = r(stack(ev: -0.8), true)
+        check("E-SEG changing a gain before the segments invalidates them (exposure -0.8: not the old picture, matches uncached)",
+              gap(earlier, r(stack(ev: -0.8), false)) < 2e-3 && gap(earlier, first) > 0.01, "\(gap(earlier, first))")
+        // a render that draws a mask over the picture skips the cache
+        let entriesBefore = probe.entries
+        var shown = stack()
+        shown[2] = StackEntry(operation: "sharpen", params: ["amount": .number(0.5)], blend: ["mask_mode": .number(2), "mask_kind": .number(0), "mask_show": .number(1)])
+        _ = r(shown, true)
+        check("E-SEG a render that shows a mask over the picture does not touch the cache", probe.entries == entriesBefore)
+    } else {
+        check("E-SEG the segment probe could not start", false)
+    }
+}
+
 // T10 HDR: a ramp from deep shadow to 4 stops over white through the display transform; the SDR render, the HDR
 // render and the exported file (an SDR JPEG carrying a gain map) must agree with each other and with SceneTone
 do {

@@ -512,7 +512,7 @@ do {
     check("split toning kernel ran", false, "\(error)")
 }
 
-// SceneTone: the display module's Metal kernel (scenetoneBuf) against the oracle, SDR and HDR, on neutrals and saturated colours
+// SceneTone: the display module's Metal kernel (scenetoneBuf, working-space input with a folded gain) against the oracle, SDR and HDR, on neutrals and saturated colours
 do {
     for (label, tone) in [("SDR", SceneTone(contrast: 20)), ("HDR peak 4", SceneTone(peak: 4)), ("purity 0", SceneTone(purity: 0))] {
         var pixels: [SIMD4<Float>] = []
@@ -522,10 +522,11 @@ do {
             pixels.append(SIMD4(Float(i) * 0.3, Float(j) * 0.3, Float(k) * 0.3, 1))
         } } }
         pixels.append(SIMD4(-0.2, 0.5, 1.5, 1)); pixels.append(SIMD4(-1, -1, -1, 1)); pixels.append(SIMD4(0, 0, 0, 1))
-        let out = try MetalPerPixel.run(source: MetalSceneTone.source, function: "scenetoneBuf", pixels: pixels, uniforms: tone.uniforms())
+        let gainFold = SIMD3(1.4, 0.9, 1.1) * 0.8   // white balance and exposure folded in
+        let out = try MetalPerPixel.run(source: MetalSceneTone.source, function: "scenetoneBuf", pixels: pixels, uniforms: tone.uniforms(gain: gainFold))
         var worst = 0.0
         for (i, px) in pixels.enumerated() where i < out.count {
-            let want = tone.displayLinear(SIMD3(Double(px.x), Double(px.y), Double(px.z)))
+            let want = tone.displayLinear(working: SIMD3(Double(px.x), Double(px.y), Double(px.z)), gain: gainFold)
             let got = SIMD3(Double(out[i].x), Double(out[i].y), Double(out[i].z))
             guard got.x.isFinite, got.y.isFinite, got.z.isFinite else { worst = .infinity; break }
             let d = want - got

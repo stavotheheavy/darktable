@@ -133,13 +133,21 @@ public struct SceneTone: Sendable {
         return t * t * (3 - 2 * t)
     }
 
+    /// The whole stage from the working space (linear sRGB primaries): a per-channel gain (white balance, exposure and the display
+    /// module's own lift folded into one multiply), the move to Rec.2020, then `displayLinear`.
+    public func displayLinear(working rgb: SIMD3<Double>, gain: SIMD3<Double> = SIMD3(repeating: 1)) -> SIMD3<Double> {
+        displayLinear(ColorSpaces.srgbToRec2020.apply(rgb * gain))
+    }
+
     /// What the Metal kernel reads (see MetalSceneTone): grey, slope, kneeEV, kneeValue, kneeSlope, shoulderEV, peak, purity,
-    /// ymin, a spare, then the nine entries of the Rec.2020 to sRGB matrix, row by row.
-    public func uniforms() -> [Float] {
-        let m = ColorSpaces.rec2020ToSRGB.m
+    /// ymin, a spare, the nine entries of the Rec.2020 to sRGB matrix row by row, the three gains, then the nine entries of the
+    /// working-space (linear sRGB) to Rec.2020 matrix.
+    public func uniforms(gain: SIMD3<Double> = SIMD3(repeating: 1)) -> [Float] {
         var u: [Float] = [Float(Self.grey), Float(slope), Float(kneeEV), Float(kneeValue), Float(kneeSlope)]
         u += [Float(shoulderEV), Float(peak), Float(purity), Float(Self.ymin), 0]
-        for r in 0..<3 { for c in 0..<3 { u.append(Float(m[r][c])) } }
+        for r in 0..<3 { for c in 0..<3 { u.append(Float(ColorSpaces.rec2020ToSRGB.m[r][c])) } }
+        u += [Float(gain.x), Float(gain.y), Float(gain.z)]
+        for r in 0..<3 { for c in 0..<3 { u.append(Float(ColorSpaces.srgbToRec2020.m[r][c])) } }
         return u
     }
 }

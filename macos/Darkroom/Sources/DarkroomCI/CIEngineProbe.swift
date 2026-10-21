@@ -181,3 +181,39 @@ public enum CIEngineProbe {
         CIEngine.wantsSceneLinear(stack)
     }
 }
+
+/// A segment cache on pixels the caller supplies, for darkroom-engine-check: the same `CIEngine.applyStack` the app runs, with the
+/// same kind of context (Core Image's default working format and space), so the check sees what a session render sees.
+public final class SegmentProbe {
+    private let context: CIContext
+    private let space: CGColorSpace
+    private let cache: SegmentCache
+    private let device: MTLDevice
+
+    public init() throws {
+        guard let device = MTLCreateSystemDefaultDevice() else { throw EngineError("probe: no device") }
+        let made = CIContext(mtlDevice: device, options: [.cacheIntermediates: true])
+        guard let space = made.workingColorSpace else { throw EngineError("probe: no working space") }
+        self.device = device; self.context = made; self.space = space
+        self.cache = SegmentCache(context: made, device: device, space: space)
+    }
+
+    public var hits: Int { cache.hits }
+    public var misses: Int { cache.misses }
+    public var entries: Int { cache.count }
+
+    /// Renders `stack` over `pixels`, through the cache unless `cached` is false.
+    public func render(stack: [StackEntry], pixels: [SIMD4<Float>], width: Int, height: Int, cached: Bool = true) throws -> [SIMD4<Float>] {
+        guard pixels.count == width * height else { throw EngineError("probe: size mismatch") }
+        let input = CIImage(bitmapData: pixels.withUnsafeBytes { Data($0) }, bytesPerRow: width * 16,
+                            size: CGSize(width: width, height: height), format: .RGBAf, colorSpace: space)
+        let output = try CIEngine.process(input, stack, camera: .none, scale: 1,
+                                          segments: cached ? CIEngine.Segments(cache: cache, base: "probe|\(width)x\(height)") : nil)
+        var out = [SIMD4<Float>](repeating: .zero, count: width * height)
+        out.withUnsafeMutableBytes { buf in
+            context.render(output, toBitmap: buf.baseAddress!, rowBytes: width * 16, bounds: CGRect(x: 0, y: 0, width: width, height: height),
+                           format: .RGBAf, colorSpace: space)
+        }
+        return out
+    }
+}

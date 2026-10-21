@@ -16,6 +16,22 @@ struct CIModule: Sendable {
     let apply: @Sendable (CIImage, [String: Double]) throws -> CIImage
     /// Wants the decoder's scene-linear output (no boost tone curve) when enabled.
     var sceneReferred = false
+    /// The per-channel multiply a pure-gain module (white balance, exposure) stands for, or nil for any other module. The engine
+    /// folds a run of these into one multiply instead of one pass each. The module's own `apply` is the same multiply.
+    static func foldableGain(_ operation: String, _ v: [String: Double]) -> SIMD3<Double>? {
+        switch operation {
+        case "temperature": return SIMD3(v["red"] ?? 1, v["green"] ?? 1, v["blue"] ?? 1)
+        case "exposure": let g = Exposure.gain(ev: v["exposure"] ?? 0); return SIMD3(g, g, g)
+        default: return nil
+        }
+    }
+
+    /// Modules that read a neighbourhood (a blur radius, a guided filter, wavelet levels): the expensive ones. The segment cache keeps
+    /// the picture after each of them, so a slider moved further down the stack does not run them again.
+    static let neighbourhoodOperations: Set<String> = [
+        "sharpen", "denoiseprofile", "bilat", "atrous", "hazeremoval", "zones", "clahe", "soften", "blurs", "lowpass", "bloom",
+    ]
+
     /// The display-referred modules: they assume 0...1 values (a curve, levels, a contrast about 0.5, a lift of the shadows) and are
     /// only meaningful on display light, so with a scene-referred module on they run after it. Every other module is scene-referred
     /// (a gain, a colour balance, white balance, neighbourhood filters, vignette, masks) and runs before the display transform.
@@ -540,11 +556,13 @@ extension CIModule {
                             min: 0, max: 1, defaultValue: .number(SceneTone.defaultPurity), options: []),
             ],
             apply: { image, v in
-                let g = Exposure.gain(ev: v["exposure"] ?? 0)
-                let lifted = try CIBridge.gain(image, scale: SIMD3(g, g, g))
+                // white balance and exposure ahead of this module arrive folded in `_gain_*` (see CIEngine.applyStack); the
+                // module's own lift joins them, so the whole run of gains is one multiply inside the tone kernel
+                let lift = Exposure.gain(ev: v["exposure"] ?? 0)
+                let gain = SIMD3(v["_gain_r"] ?? 1, v["_gain_g"] ?? 1, v["_gain_b"] ?? 1) * lift
                 let tone = SceneTone(contrast: v["contrast"] ?? 0, whiteEV: v["white"] ?? SceneTone.defaultWhiteEV,
                                      purity: v["purity"] ?? SceneTone.defaultPurity, peak: v["peak"] ?? 1)
-                return try CIBridge.sceneTone(lifted, tone: tone)
+                return try CIBridge.sceneTone(image, tone: tone, gain: gain)
             })
         m.algorithmVersion = 2
         m.sceneReferred = true

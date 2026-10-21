@@ -20,6 +20,7 @@ import UniformTypeIdentifiers
 /// pixels, with the origin at the top left.
 public actor CIEngine: PhotoEngine {
     private struct Session {
+        let id = UUID()
         let url: URL
         let raw: CIRAWFilter
         let native: CGSize
@@ -41,9 +42,13 @@ public actor CIEngine: PhotoEngine {
     }
 
     private var context: CIContext?
+    /// Keeps the picture after each neighbourhood module (see SegmentCache), for the open session's renders only.
+    private var segmentCache: SegmentCache?
     private var session: Session?
     private var clippingOverlay = false
     private var maskRasters: [String: MaskRaster] = [:]
+    /// Bumped whenever the mask pictures are replaced: a raster mask's pixels are not in the stack entry.
+    private var maskRasterRevision = 0
 
     /// Set from any thread by `cancelRender()`; checked between decode and render.
     private let cancelFlag = Mutex(false)
@@ -56,11 +61,15 @@ public actor CIEngine: PhotoEngine {
         guard let device = MTLCreateSystemDefaultDevice() else {
             throw EngineError("no Metal device for Core Image")
         }
-        context = CIContext(mtlDevice: device, options: [.cacheIntermediates: true])
+        let made = CIContext(mtlDevice: device, options: [.cacheIntermediates: true])
+        context = made
+        if let space = made.workingColorSpace { segmentCache = SegmentCache(context: made, device: device, space: space) }
     }
 
     public func shutdown() async {
         session = nil
+        segmentCache?.clear()
+        segmentCache = nil
         context = nil
     }
 
@@ -69,11 +78,13 @@ public actor CIEngine: PhotoEngine {
     public func openSession(path: String, maxSide: Int) async throws {
         guard context != nil else { throw EngineError("engine not started") }
         session = nil
+        segmentCache?.clear()
         session = try Self.makeSession(path: path, maxSide: maxSide)
     }
 
     public func closeSession() async {
         session = nil
+        segmentCache?.clear()
     }
 
     public nonisolated func cancelRender() {
@@ -84,7 +95,7 @@ public actor CIEngine: PhotoEngine {
         let s = try openedSession()
         cancelFlag.withLock { $0 = false }
         let started = ContinuousClock.now
-        var image = try edited(try decode(s, scale: s.fit * scale, stack: stack), stack, camera: s.camera, scale: s.fit * scale)
+        var image = try edited(try decode(s, scale: s.fit * scale, stack: stack), stack, camera: s.camera, scale: s.fit * scale, session: s)
         if clippingOverlay { image = try CIBridge.clippingOverlay(image) }
         return try frame(image, crop: nil, since: started)
     }
@@ -94,7 +105,7 @@ public actor CIEngine: PhotoEngine {
         let s = try openedSession()
         cancelFlag.withLock { $0 = false }
         let started = ContinuousClock.now
-        var image = try edited(try decode(s, scale: s.fit * scale, stack: stack), stack, camera: s.camera, scale: s.fit * scale)
+        var image = try edited(try decode(s, scale: s.fit * scale, stack: stack), stack, camera: s.camera, scale: s.fit * scale, session: s)
         if clippingOverlay { image = try CIBridge.clippingOverlay(image) }
         let ext = image.extent.integral
         // Core Image's origin is bottom left; the region is given top left.
@@ -161,6 +172,7 @@ public actor CIEngine: PhotoEngine {
     public func setClippingOverlay(_ on: Bool) async { clippingOverlay = on }
 
     public func setMaskRasters(_ rasters: [MaskPicture]) async {
+        maskRasterRevision += 1
         maskRasters = Dictionary(rasters.filter { $0.width > 0 && $0.height > 0 && $0.pixels.count == $0.width * $0.height }
             .map { ($0.id, MaskRaster(id: $0.id, width: $0.width, height: $0.height, pixels: $0.pixels)) }) { $1 }
     }
@@ -248,8 +260,14 @@ public actor CIEngine: PhotoEngine {
         return data
     }
 
-    private func edited(_ image: CIImage, _ stack: [StackEntry], camera: Orientation, scale: Double = 1) throws -> CIImage {
-        try Self.process(image, stack, camera: camera, scale: scale, rasters: maskRasters)
+    private func edited(_ image: CIImage, _ stack: [StackEntry], camera: Orientation, scale: Double = 1, session: Session? = nil) throws -> CIImage {
+        // only the open session's renders keep segments: an export or a thumbnail has a session of its own that nothing returns to
+        var segments: Segments?
+        if let session, let segmentCache {
+            // what the decoder hands over depends on the scene-referred switch and the working size, so both are in the key
+            segments = Segments(cache: segmentCache, base: "\(session.id)|\(Self.wantsSceneLinear(stack))|\(maskRasterRevision)")
+        }
+        return try Self.process(image, stack, camera: camera, scale: scale, rasters: maskRasters, segments: segments)
     }
 
     /// The whole edit on a sensor-orientation image: the per-pixel stack, then geometry. Static so
@@ -260,15 +278,28 @@ public actor CIEngine: PhotoEngine {
     /// pixels (sharpen, local contrast, haze removal, mask refinement) take their radius as full-resolution pixels and
     /// shrink it by `scale`, so a preview looks like the export (roadmap T9).
     static func process(_ image: CIImage, _ stack: [StackEntry], camera: Orientation, hdrPeak: Double? = nil,
-                        scale: Double = 1, rasters: [String: MaskRaster] = [:]) throws -> CIImage {
+                        scale: Double = 1, rasters: [String: MaskRaster] = [:], segments: Segments? = nil) throws -> CIImage {
         CIGeometry.apply(try CIGeometry.spec(stack, camera: camera),
-                         to: try applyStack(image, stack, hdrPeak: hdrPeak, scale: scale, camera: camera, rasters: rasters))
+                         to: try applyStack(image, stack, hdrPeak: hdrPeak, scale: scale, camera: camera, rasters: rasters, segments: segments))
+    }
+
+    /// A segment cache and the text that identifies the decoded picture the stack starts from (photo, decode scale and settings).
+    struct Segments {
+        let cache: SegmentCache
+        let base: String
+    }
+
+    /// The text of one stack entry that decides its pixels.
+    static func fingerprint(_ e: StackEntry) -> String {
+        let params = e.params.sorted { $0.key < $1.key }.map { "\($0.key)=\($0.value)" }.joined(separator: ",")
+        let blend = e.blend.sorted { $0.key < $1.key }.map { "\($0.key)=\($0.value)" }.joined(separator: ",")
+        return "\(e.operation)|\(e.enabled)|\(params)|\(blend)"
     }
 
     /// Applies the enabled stack entries in pipeline order. An operation the clean engine
     /// does not have is an error, never a silent skip. Static so `CIEngineProbe` runs this exact code.
     static func applyStack(_ image: CIImage, _ stack: [StackEntry], hdrPeak: Double? = nil, scale: Double = 1,
-                           camera: Orientation = .none, rasters: [String: MaskRaster] = [:]) throws -> CIImage {
+                           camera: Orientation = .none, rasters: [String: MaskRaster] = [:], segments: Segments? = nil) throws -> CIImage {
         let sceneReferred = wantsSceneLinear(stack)
         let ordered = try stack.filter { $0.enabled && !CIGeometry.operations.contains($0.operation) }.map { entry -> (CIModule, StackEntry) in
             guard let m = CIModule.named(entry.operation) else {
@@ -281,10 +312,46 @@ public actor CIEngine: PhotoEngine {
         var out = image
         // a module's mask drawn over the picture while it is edited (render-only: the model never puts this in an export)
         var showMatte: CIImage?
-        for (m, entry) in ordered {
+
+        // Segment cache: after each neighbourhood module the result is kept in a texture under a key made of the picture and every
+        // entry so far; a render starts from the deepest boundary whose key is still there. A render that draws a mask over the
+        // picture skips the cache (the matte is made inside the loop).
+        var boundaryKeys: [Int: String] = [:]
+        var start = 0
+        if let segments, !ordered.contains(where: { ($0.1.blend["mask_show"]?.double ?? 0) != 0 }) {
+            var prefix = "\(segments.base)|\(hdrPeak.map { "\($0)" } ?? "sdr")|\(scale)|\(camera.rawValue)"
+            for (i, (m, entry)) in ordered.enumerated() {
+                prefix += "\n" + fingerprint(entry)
+                if CIModule.neighbourhoodOperations.contains(m.operation) { boundaryKeys[i] = prefix }
+            }
+            for i in boundaryKeys.keys.sorted(by: >) {
+                if let cached = segments.cache.lookup(boundaryKeys[i]!) { out = cached; start = i + 1; break }
+            }
+        }
+        func keep(_ index: Int) {
+            guard let segments, let key = boundaryKeys[index] else { return }
+            out = segments.cache.store(out, key: key)
+        }
+        // Pure gains (white balance, exposure) multiply on their own, so a run of them is one multiply: it is carried along and
+        // either joins the display transform's kernel or is applied as one pass just before the next module that is not a gain.
+        var pendingGain: SIMD3<Double>?
+        for (index, (m, entry)) in ordered.enumerated() {
+            if index < start { continue }
             let maskMode = entry.blend["mask_mode"]?.double ?? 0
-            let before = out
             var values = m.values(from: entry.params)
+            if maskMode == 0, (entry.blend["opacity"]?.double ?? 100) >= 100, let g = CIModule.foldableGain(m.operation, values) {
+                if g != SIMD3(1, 1, 1) { pendingGain = (pendingGain ?? SIMD3(1, 1, 1)) * g }
+                continue
+            }
+            if let gain = pendingGain {
+                if m.operation == "display" {
+                    values["_gain_r"] = gain.x; values["_gain_g"] = gain.y; values["_gain_b"] = gain.z
+                } else {
+                    out = try CIBridge.gain(out, scale: gain)
+                }
+                pendingGain = nil
+            }
+            let before = out
             if let hdrPeak, m.operation == "display" { values["peak"] = hdrPeak }
             values["_scale"] = scale.isFinite ? min(max(scale, 1e-3), 1) : 1
             values["_camera"] = Double(camera.rawValue)   // modules that draw their own matte need the upright picture
@@ -304,6 +371,7 @@ public actor CIEngine: PhotoEngine {
                 let matte = try CIBridge.localMask(before, spec: spec)
                 out = try CIBridge.blendMasked(before: before, after: out, mask: matte, opacity: spec.opacity)
                 if (blend["mask_show"] ?? 0) != 0 { showMatte = matte }
+                keep(index)
                 continue
             }
             guard maskMode == 0 || maskMode == 1 else {
@@ -317,7 +385,9 @@ public actor CIEngine: PhotoEngine {
                 ])
                 out = faded.composited(over: before)
             }
+            keep(index)
         }
+        if let gain = pendingGain { out = try CIBridge.gain(out, scale: gain) }
         if let showMatte {
             // red over the masked part: alpha 0.5 where the matte is 1 (a hair stronger so thin masks read)
             let tint = showMatte.applyingFilter("CIColorMatrix", parameters: [

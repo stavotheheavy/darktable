@@ -6,7 +6,8 @@
 // Checked against the oracle by darkroom-metal-check and, through Core Image, by darkroom-engine-check (E3, E4).
 //
 // Uniforms: u[0] grey, u[1] slope, u[2] kneeEV, u[3] kneeValue, u[4] kneeSlope, u[5] shoulderEV, u[6] peak, u[7] purity,
-// u[8] ymin, u[10...18] the Rec.2020 to sRGB matrix, row by row.
+// u[8] ymin, u[10...18] the Rec.2020 to sRGB matrix, row by row, u[19...21] the gain on the input, u[22...30] the working-space
+// (linear sRGB) to Rec.2020 matrix. The input is the working space: the gain applies there, then the move to Rec.2020.
 
 import DarkroomCore
 
@@ -24,7 +25,11 @@ public enum MetalSceneTone {
         return h00 * u[3] + h10 * h * u[4] + h01 * u[6];
     }
 
-    static float3 st_apply(float3 rgb, constant float *u) {
+    static float3 st_apply(float3 work, constant float *u) {
+        work *= float3(u[19], u[20], u[21]);
+        float3 rgb = float3(u[22] * work.x + u[23] * work.y + u[24] * work.z,
+                            u[25] * work.x + u[26] * work.y + u[27] * work.z,
+                            u[28] * work.x + u[29] * work.y + u[30] * work.z);
         if (!(isfinite(rgb.x) && isfinite(rgb.y) && isfinite(rgb.z))) { return float3(0.0f); }
         float n = 0.2627f * rgb.x + 0.6780f * rgb.y + 0.0593f * rgb.z;
         float ne = max(n, u[8]);

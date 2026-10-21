@@ -39,7 +39,21 @@ public struct ModuleRow: Identifiable, Equatable {
 @MainActor
 @Observable
 public final class DarkroomModel {
-    public static let workingSize = 1600
+    /// The long side, in pixels, the viewport renders at: about four fifths of the largest screen's long edge in backing pixels (the
+    /// canvas is never wider than the screen minus its panels), held to 1600...3200. A fixed 1600 was upscaled on every Retina canvas,
+    /// which reads as soft; the segment cache (CIEngine) is what makes the larger frame as quick to edit. `DARKROOM_WORKING_SIZE`
+    /// overrides it, which the self-test uses so its pixels do not depend on the machine's screen.
+    public static var workingSize: Int {
+        if let s = ProcessInfo.processInfo.environment["DARKROOM_WORKING_SIZE"], let v = Int(s), v >= 200 { return v }
+        let longest = NSScreen.screens.map { max($0.frame.width, $0.frame.height) * $0.backingScaleFactor }.max() ?? 0
+        return workingSize(forScreenLongSide: Double(longest))
+    }
+
+    /// `workingSize` for a screen whose long edge is `pixels` backing pixels.
+    public static func workingSize(forScreenLongSide pixels: Double) -> Int {
+        guard pixels.isFinite, pixels > 0 else { return 1600 }
+        return min(max(Int((pixels * 0.8).rounded()), 1600), 3200)
+    }
 
     // image
     public private(set) var frame: CGImage?

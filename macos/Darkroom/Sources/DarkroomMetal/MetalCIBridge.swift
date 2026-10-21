@@ -263,12 +263,11 @@ public enum CIBridge {
         return try ToneDisplayProcessor.apply(withExtent: image.extent, inputs: [scene], arguments: ["contrast": contrast, "peak": peak])
     }
 
-    /// The scene tone stage (DarkroomCore.SceneTone): scene-linear working-space image in, display-linear sRGB (0...peak)
-    /// out, hue kept by the luminance norm, highlights rolled off to white at `whiteEV`. Core Image applies the sRGB encode
-    /// on output. `peak` above 1 is an HDR rendition, identical to the SDR one below the knee.
-    public static func sceneTone(_ image: CIImage, tone: SceneTone) throws -> CIImage {
-        guard let rec2020 = CGColorSpace(name: CGColorSpace.extendedLinearITUR_2020) else { throw CIBridgeError.badArguments }
-        let scene = image.matchedFromWorkingSpace(to: rec2020) ?? image
-        return try perPixel(scene, source: MetalSceneTone.source, function: "scenetoneTex", uniforms: tone.uniforms())
+    /// The scene tone stage (DarkroomCore.SceneTone) on a working-space image: an optional per-channel `gain` (white balance,
+    /// exposure and the display module's lift, folded into this one pass), the move to Rec.2020, the luminance-driven curve, the
+    /// gamut step. Display-linear sRGB (0...peak) out, hue kept, highlights rolled off to white at the tone's white point. Core
+    /// Image applies the sRGB encode on output. `peak` above 1 is an HDR rendition, identical to the SDR one below the knee.
+    public static func sceneTone(_ image: CIImage, tone: SceneTone, gain: SIMD3<Double> = SIMD3(repeating: 1)) throws -> CIImage {
+        try perPixel(image, source: MetalSceneTone.source, function: "scenetoneTex", uniforms: tone.uniforms(gain: gain))
     }
 }

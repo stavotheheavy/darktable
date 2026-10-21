@@ -64,6 +64,8 @@ struct SelfTest {
             args.remove(at: i)
             return true
         }
+        // the viewport's working size follows the screen; the checks must not depend on the machine they run on
+        setenv("DARKROOM_WORKING_SIZE", "1600", 0)
         let maxSide = Int(take("--max") ?? "") ?? 1400
         let out = take("--out")
         let ui = has("--ui")
@@ -1747,6 +1749,13 @@ struct SelfTest {
         } else {
             skip("pro panel", "the basics and their fields are the clean engine's")
         }
+
+        print("viewport size")
+        check(DarkroomModel.workingSize(forScreenLongSide: 1440) == 1600 && DarkroomModel.workingSize(forScreenLongSide: 3024) == 2419
+              && DarkroomModel.workingSize(forScreenLongSide: 6016) == 3200 && DarkroomModel.workingSize(forScreenLongSide: .nan) == 1600
+              && DarkroomModel.workingSize(forScreenLongSide: 0) == 1600 && DarkroomModel.workingSize(forScreenLongSide: -5) == 1600,
+              "VS1 the working size is 0.8 of the screen's long edge, held to 1600...3200, and 1600 for a hostile value")
+        check(DarkroomModel.workingSize == 1600, "VS1 the self-test pins the working size (DARKROOM_WORKING_SIZE) so its pixels do not depend on the screen")
 
         print("simple mode")
         let simple = reopened
