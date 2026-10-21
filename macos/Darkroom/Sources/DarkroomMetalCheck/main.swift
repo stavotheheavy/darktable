@@ -643,5 +643,29 @@ do {
     check("CZ-M colour zones kernel ran", false, "\(error)")
 }
 
+// saturation by lightness on Metal against SatCurve.apply (unclamped)
+do {
+    let count = 4096
+    let u: [Double] = [0.8, -0.6, 0.5]
+    let pixels = (0..<count).map { i -> SIMD4<Float> in
+        let t = Double(i) / Double(count - 1), h = t * 37 * 2 * .pi, v = 0.002 + 2.5 * t
+        return SIMD4(Float(v * (0.6 + 0.4 * cos(h))), Float(v * (0.6 + 0.4 * cos(h - 2.1))), Float(v * (0.6 + 0.4 * cos(h + 2.1))), 1)
+    }
+    let out = try MetalPerPixel.run(source: MetalSatCurve.source, function: "satcurveBuf", pixels: pixels, uniforms: u.map { Float($0) })
+    var worstRel = 0.0, allFinite = out.count == count
+    for (i, px) in pixels.enumerated() where i < out.count {
+        let cpu = SatCurve.apply(SIMD3(Double(px.x), Double(px.y), Double(px.z)), u: u.map { Double(Float($0)) })
+        let gpu = SIMD3(Double(out[i].x), Double(out[i].y), Double(out[i].z))
+        for c in 0..<3 {
+            if !gpu[c].isFinite { allFinite = false }
+            worstRel = Swift.max(worstRel, Swift.abs(gpu[c] - cpu[c]) / Swift.max(1, Swift.abs(cpu[c])))
+        }
+    }
+    check("SCV-M saturation by lightness on Metal is finite and within 1e-4 of SatCurve.apply (unclamped)", allFinite && worstRel < 1e-4,
+          "finite \(allFinite), worst relative error \(worstRel)")
+} catch {
+    check("SCV-M saturation by lightness kernel ran", false, "\(error)")
+}
+
 print(failures == 0 ? "\nall Metal checks passed" : "\n\(failures) failed")
 exit(failures == 0 ? 0 : 1)

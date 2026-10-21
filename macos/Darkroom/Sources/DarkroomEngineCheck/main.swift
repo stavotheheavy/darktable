@@ -1633,5 +1633,16 @@ do {
     check("E-CZ zero sliders change nothing (within float rounding)", worstLinear(run([StackEntry(operation: "colorzones", params: [:])]), scene) < 1e-4)
 }
 
+// E-SCV saturation by lightness: the fused per-pixel kernel through the engine against SatCurve in DarkroomCore
+do {
+    let scvU: [Double] = [0.8, -0.6, 0.5]
+    let scvEngine = run([StackEntry(operation: "satcurvergb", params: ["shadows": .number(0.8), "mids": .number(-0.6), "highlights": .number(0.5)])])
+    let scvOracle = scene.map { SatCurve.apply($0, u: scvU) }
+    let eSCV = worst(scvEngine, scvOracle)
+    check("E-SCV saturation by lightness matches the oracle within 1/255 and unclamped within 1e-4", eSCV < tol && worstLinear(scvEngine, scvOracle) < 1e-4,
+          "encoded \(eSCV), linear \(worstLinear(scvEngine, scvOracle))")
+    check("E-SCV zero sliders change nothing (within float rounding)", worstLinear(run([StackEntry(operation: "satcurvergb", params: [:])]), scene) < 1e-4)
+}
+
 print(failures == 0 ? "\nall checks passed" : "\n\(failures) failed")
 exit(failures == 0 ? 0 : 1)

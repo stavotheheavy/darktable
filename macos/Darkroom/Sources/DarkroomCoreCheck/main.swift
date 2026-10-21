@@ -2248,5 +2248,49 @@ do {
     check("CZ8 the blue hue slider does not turn a red (hue stays within 0.01 degrees)", abs(wrong.z * 180 / .pi - ColorZones.centresDegrees[0]) < 0.01, "\(wrong.z * 180 / .pi)")
 }
 
+// SCV saturation by lightness (SatCurve)
+do {
+    func lab(_ L: Double, chroma: Double = 0.1, hue: Double = 1.0) -> SIMD3<Double> {
+        OkLab.toWorking(SIMD3(L, chroma * cos(hue), chroma * sin(hue)))
+    }
+    func lch(_ c: SIMD3<Double>) -> SIMD3<Double> { OkLab.lch(OkLab.fromWorking(c)) }
+    // SCV1 zero sliders are the identity on 4096 colours
+    var worstId = 0.0, finite = true
+    for i in 0..<4096 {
+        let t = Double(i) / 4095, c = lab(0.02 + 0.96 * t, chroma: 0.002 + 0.2 * t, hue: t * 37 * 2 * .pi)
+        let out = SatCurve.apply(c, u: [0, 0, 0])
+        for k in 0..<3 {
+            if !out[k].isFinite { finite = false }
+            worstId = max(worstId, abs(out[k] - c[k]) / max(abs(c[k]), 1e-6))
+        }
+    }
+    check("SCV1 zero sliders are the identity within 1e-9 relative, finite", worstId < 1e-9 && finite, "worst \(worstId), finite \(finite)")
+    // SCV2 greys stay grey
+    var greyWorst = 0.0
+    for L in stride(from: 0.05, through: 0.95, by: 0.1) {
+        let g = OkLab.toWorking(SIMD3(L, 0, 0)), out = SatCurve.apply(g, u: [1, 1, 1])
+        greyWorst = max(greyWorst, abs(out.x - g.x), abs(out.y - g.y), abs(out.z - g.z))
+    }
+    check("SCV2 greys are left alone (within 1e-9)", greyWorst < 1e-9, "\(greyWorst)")
+    // SCV3 at each knot its own slider acts alone: mids -1 at L 0.55 removes the chroma; shadows +0.5 at L 0.1 is 1.5x; highlights -0.5 at L 0.95 is 0.5x
+    check("SCV3 mids -1 at the mids knot removes the chroma (under 1e-9)", lch(SatCurve.apply(lab(0.55), u: [0, -1, 0])).y < 1e-9)
+    check("SCV3 shadows +0.5 in the shadows is 1.5x the chroma (within 1e-9)", abs(lch(SatCurve.apply(lab(0.1), u: [0.5, 0, 0])).y - 0.15) < 1e-9)
+    check("SCV3 highlights -0.5 in the highlights is 0.5x the chroma (within 1e-9)", abs(lch(SatCurve.apply(lab(0.95), u: [0, 0, -0.5])).y - 0.05) < 1e-9)
+    // SCV4 hue and lightness never move
+    let moved = lch(SatCurve.apply(lab(0.4, chroma: 0.12, hue: 2.2), u: [0.7, -0.4, 0.3]))
+    check("SCV4 hue and lightness are kept (within 1e-9)", abs(moved.x - 0.4) < 1e-9 && abs(ColorCommon.hueDifference(moved.z, 2.2)) < 1e-9, "\(moved)")
+    // SCV5 the gain is continuous over lightness
+    var gainJump = 0.0
+    var prev = SatCurve.gain(L: 0, u: [0.9, -0.8, 0.7])
+    for step in 1...2000 {
+        let g = SatCurve.gain(L: Double(step) / 2000, u: [0.9, -0.8, 0.7])
+        gainJump = max(gainJump, abs(g - prev)); prev = g
+    }
+    check("SCV5 the chroma gain moves by under 0.01 per 1/2000 of lightness (smooth)", gainJump < 0.01, "\(gainJump)")
+    // SCV6 a mutation that must fail: the shadows slider leaves a highlight alone
+    let hi = lab(0.95), out6 = SatCurve.apply(hi, u: [1, 0, 0])
+    check("SCV6 the shadows slider does not touch a highlight (within 1e-9)", max(abs(out6.x - hi.x), abs(out6.y - hi.y), abs(out6.z - hi.z)) < 1e-9)
+}
+
 print(failures == 0 ? "\nall checks passed" : "\n\(failures) failed")
 exit(failures == 0 ? 0 : 1)

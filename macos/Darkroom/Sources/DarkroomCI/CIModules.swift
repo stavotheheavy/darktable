@@ -19,7 +19,7 @@ struct CIModule: Sendable {
     /// The modules whose work is one pixel in, one pixel out, on our own Metal functions: a run of them is one pass over the frame
     /// (see MetalFused). The engine fuses them when they are unmasked and at full opacity.
     static let fusableOperations: Set<String> = [
-        "temperature", "exposure", "colorbalancergb", "channelmixer", "tonecurve", "monochrome", "rgblevels", "splittoning", "display", "invert", "colisa", "velvia", "colorzones",
+        "temperature", "exposure", "colorbalancergb", "channelmixer", "tonecurve", "monochrome", "rgblevels", "splittoning", "display", "invert", "colisa", "velvia", "colorzones", "satcurvergb",
     ]
 
     /// The fused op a fusable module stands for with these values, or nil when the module does nothing at them. This is the one place the
@@ -68,6 +68,9 @@ struct CIModule: Sendable {
         case "colorzones":
             let u: [Float] = ["hue", "sat", "light"].flatMap { kind in ColorZones.bandNames.map { Float(v["\($0)_\(kind)"] ?? 0) } }
             return u.allSatisfy { $0 == 0 } ? nil : FusedOp(.colorZones, u)
+        case "satcurvergb":
+            let u = [Float(v["shadows"] ?? 0), Float(v["mids"] ?? 0), Float(v["highlights"] ?? 0)]
+            return u.allSatisfy { $0 == 0 } ? nil : FusedOp(.satCurve, u)
         case "rgblevels":
             let black = v["black"] ?? 0
             let white = max(v["white"] ?? 1, black + 0.01)
@@ -422,6 +425,15 @@ extension CIModule {
             defaultEnabled: false,
             fields: ["hue", "sat", "light"].flatMap { kind in ColorZones.bandNames.map { field("\($0)_\(kind)", -1, 1, 0) } },
             apply: { image, v in try CIModule.applyFused("colorzones", image, v) }),
+
+        // Saturation by lightness: a saturation change for the shadows, the mids and the highlights, blended smoothly over OkLab
+        // lightness. SatCurve in DarkroomCore is the oracle (SCV1-SCV6 in darkroom-core-check, satcurveBuf in darkroom-metal-check,
+        // E-SCV in darkroom-engine-check).
+        CIModule(
+            operation: "satcurvergb", name: "saturation by lightness", iopOrder: 23,
+            defaultEnabled: false,
+            fields: [field("shadows", -1, 1, 0), field("mids", -1, 1, 0), field("highlights", -1, 1, 0)],
+            apply: { image, v in try CIModule.applyFused("satcurvergb", image, v) }),
 
         // Split toning: a shadows tint and a highlights tint in OkLab, each with its own hue and saturation,
         // split at a balance pivot. Checked by ST1-ST7 (darkroom-core-check), splitBuf (darkroom-metal-check)
