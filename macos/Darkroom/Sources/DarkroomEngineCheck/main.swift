@@ -791,7 +791,7 @@ do {
         if gap(engineOrder, after) > 1e-4 { wrong.append("\(c.operation) \(gap(engineOrder, after))") }
         if gap(engineOrder, before) < 4.0 / 255 { commute.append(c.operation) }
     }
-    check("E-DOM all \(order.count) display-referred modules run after the display transform", wrong.isEmpty && order.count == 21, "\(wrong)")
+    check("E-DOM all \(order.count) display-referred modules run after the display transform", wrong.isEmpty && order.count == 24, "\(wrong)")
     check("E-DOM for each of them the other order gives a visibly different picture (those that do not: \(commute))", commute.isEmpty, "\(commute)")
     check("E-DOM zones and the scene modules are not in the display set", !CIEngineProbe.displayReferredOperations.contains("zones")
           && !CIEngineProbe.displayReferredOperations.contains("exposure") && !CIEngineProbe.displayReferredOperations.contains("bloom") && !CIEngineProbe.displayReferredOperations.contains("colorbalancergb"))
@@ -1810,6 +1810,35 @@ do {
     compare("E-WRM warmth", [StackEntry(operation: "warmth", params: p(["warmth": 0.6, "tint": -0.4]))], { Warmth.apply($0, warmth: 0.6, tint: -0.4) })
     let zeros = ["gradientmap", "crossprocess", "bleachbypass", "photofilter", "channelcurves", "chromalimit", "huerotate", "warmth"].map { StackEntry(operation: $0, params: [:]) }
     check("E-GMP..E-WRM every one at its default settings changes nothing (within float rounding)", worstLinear(run(zeros), scene) < 1e-4)
+}
+
+// E-HRO, E-LMB, E-FDL, E-LMC, E-RHD, E-SCC: the per-pixel tone modules through the engine; E-HDT the HDR tone compression with seams
+do {
+    func p(_ d: [String: Double]) -> [String: ParamValue] { d.mapValues { .number($0) } }
+    func compare(_ tag: String, _ stack: [StackEntry], _ oracle: (SIMD3<Double>) -> SIMD3<Double>, linear: Bool = true) {
+        let got = run(stack), want = scene.map(oracle)
+        let ok = worst(got, want) < tol && (!linear || worstLinear(got, want) < 1e-3)
+        check("\(tag) matches the oracle within 1/255\(linear ? " and unclamped within 1e-3" : "")", ok, "encoded \(worst(got, want)), linear \(worstLinear(got, want))")
+    }
+    compare("E-HRO highlight roll-off", [StackEntry(operation: "highlightrolloff", params: p(["white": 0.6, "knee": 0.5, "amount": 0.9]))], { HighlightRolloff.apply($0, white: 0.6, knee: 0.5, amount: 0.9) })
+    let lmb: [Double] = [0.8, -0.6, 0.4, -0.9, 0.5]
+    compare("E-LMB luminosity bands", [StackEntry(operation: "lumabands", params: p(Dictionary(uniqueKeysWithValues: zip(LumaBands.names, lmb))))], { LumaBands.apply($0, evs: lmb) })
+    compare("E-FDL fade", [StackEntry(operation: "fadelook", params: p(["black": 0.08, "white": 0.12]))], { FadeLook.apply($0, black: 0.08, white: 0.12) }, linear: false)
+    let lmcY: [Double] = [0.02, 0.18, 0.6, 0.78, 0.97]
+    compare("E-LMC luminosity curve", [StackEntry(operation: "lumacurve", params: p(["y0": lmcY[0], "y1": lmcY[1], "y2": lmcY[2], "y3": lmcY[3], "y4": lmcY[4]]))], { LumaCurve.apply($0, ys: lmcY) }, linear: false)
+    compare("E-RHD Reinhard", [StackEntry(operation: "reinhard", params: p(["white": 3, "amount": 0.8]))], { Reinhard.apply($0, white: 3, amount: 0.8) })
+    compare("E-SCC S-curve", [StackEntry(operation: "scurve", params: p(["contrast": 0.6, "pivot": 0.45]))], { SCurve.apply($0, contrast: 0.6, pivot: 0.45) }, linear: false)
+    let zeros = ["highlightrolloff", "lumabands", "fadelook", "lumacurve", "reinhard", "scurve", "hdrtone"].map { StackEntry(operation: $0, params: [:]) }
+    check("E-HRO..E-SCC every one at its default settings changes nothing (within float rounding)", worstLinear(run(zeros), scene) < 1e-4)
+
+    let hdStack = [StackEntry(operation: "hdrtone", params: p(["amount": 0.6, "scale": 0.1]))]
+    let hdWant = HdrTone.apply(detailImg, width: detailW, height: detailH, amount: 0.6, scale: 0.1)
+    let hdGot = runDetail(hdStack)
+    check("E-HDT HDR tone matches the oracle within 1/255 and unclamped within 2e-3", worst(hdGot, hdWant) < tol && worstLinear(hdGot, hdWant) < 2e-3,
+          "encoded \(worst(hdGot, hdWant)), linear \(worstLinear(hdGot, hdWant))")
+    check("E-HDT the oracle really changes the fixture", worstLinear(detailPx, hdWant) > 0.01, "\(worstLinear(detailPx, hdWant))")
+    let hdSeams = detailSeams(hdStack, oracle: hdWant)
+    check("E-HDT-seam HDR tone renders the same in a region as in the full frame", hdSeams.ok, "seam \(hdSeams.seam), full vs oracle \(hdSeams.fullVsOracle)")
 }
 
 print(failures == 0 ? "\nall checks passed" : "\n\(failures) failed")

@@ -772,5 +772,24 @@ do {
                        oracle: { Warmth.apply($0, warmth: Double(Float(0.6)), tint: Double(Float(-0.4))) })
 }
 
+// the six per-pixel tone modules on Metal against their oracles
+do {
+    metalPerPixelCheck("HRO-M highlight roll-off", source: MetalHighlightRolloff.source, function: "highlightrolloffBuf", uniforms: [0.6, 0.5, 0.9], tolerance: 1e-4,
+                       oracle: { HighlightRolloff.apply($0, white: Double(Float(0.6)), knee: Double(Float(0.5)), amount: Double(Float(0.9))) })
+    let lmbEV: [Double] = [0.8, -0.6, 0.4, -0.9, 0.5]
+    metalPerPixelCheck("LMB-M luminosity bands", source: MetalLumaBands.source, function: "lumabandsBuf", uniforms: lmbEV.map { Float($0) }, tolerance: 1e-4,
+                       oracle: { LumaBands.apply($0, evs: lmbEV.map { Double(Float($0)) }) })
+    metalPerPixelCheck("FDL-M fade", source: MetalFadeLook.source, function: "fadelookBuf", uniforms: [0.08, 0.12], tolerance: 1e-4,
+                       oracle: { FadeLook.apply($0, black: Double(Float(0.08)), white: Double(Float(0.12))) })
+    let lmcY: [Double] = [0.02, 0.18, 0.6, 0.78, 0.97]
+    let lmcP = ToneCurve.sanitized(xs: ToneCurve.legacyXs, ys: lmcY)
+    metalPerPixelCheck("LMC-M luminosity curve", source: MetalLumaCurve.source, function: "lumacurveBuf", uniforms: ToneCurve.uniforms(xs: lmcP.xs, ys: lmcP.ys), tolerance: 1e-4,
+                       oracle: { LumaCurve.apply($0, ys: lmcY) })
+    metalPerPixelCheck("RHD-M Reinhard", source: MetalReinhard.source, function: "reinhardBuf", uniforms: [3, 0.8], tolerance: 1e-4,
+                       oracle: { Reinhard.apply($0, white: 3, amount: Double(Float(0.8))) })
+    metalPerPixelCheck("SCC-M S-curve", source: MetalSCurve.source, function: "scurveBuf", uniforms: [Float(SCurve.exponent(contrast: 0.6)), 0.45], tolerance: 1e-4,
+                       oracle: { SCurve.apply($0, contrast: 0.6, pivot: Double(Float(0.45))) })
+}
+
 print(failures == 0 ? "\nall Metal checks passed" : "\n\(failures) failed")
 exit(failures == 0 ? 0 : 1)

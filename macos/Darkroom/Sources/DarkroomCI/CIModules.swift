@@ -21,6 +21,7 @@ struct CIModule: Sendable {
     static let fusableOperations: Set<String> = [
         "temperature", "exposure", "colorbalancergb", "channelmixer", "tonecurve", "monochrome", "rgblevels", "splittoning", "display", "invert", "colisa", "velvia", "colorzones", "satcurvergb", "colorbalance", "rgbcurve", "colorcontrast", "colorcorrection", "basecurve", "dither", "colorize", "solarize", "negadoctor", "lowlight", "channelmixerrgb",
         "gradientmap", "crossprocess", "bleachbypass", "photofilter", "channelcurves", "chromalimit", "huerotate", "warmth",
+        "highlightrolloff", "lumabands", "fadelook", "lumacurve", "reinhard", "scurve",
     ]
 
     /// The fused op a fusable module stands for with these values, or nil when the module does nothing at them. This is the one place the
@@ -139,6 +140,26 @@ struct CIModule: Sendable {
         case "warmth":
             let u = [Float(v["warmth"] ?? 0), Float(v["tint"] ?? 0)]
             return u.allSatisfy { $0 == 0 } ? nil : FusedOp(.warmth, u)
+        case "highlightrolloff":
+            let amount = v["amount"] ?? 0
+            return amount == 0 ? nil : FusedOp(.highlightRolloff, [Float(v["white"] ?? 1), Float(v["knee"] ?? 0.7), Float(amount)])
+        case "lumabands":
+            let u = LumaBands.names.map { Float(v[$0] ?? 0) }
+            return u.allSatisfy { $0 == 0 } ? nil : FusedOp(.lumaBands, u)
+        case "fadelook":
+            let black = v["black"] ?? 0, white = v["white"] ?? 0
+            return black == 0 && white == 0 ? nil : FusedOp(.fadeLook, [Float(black), Float(white)])
+        case "lumacurve":
+            let ys: [Double] = [v["y0"] ?? 0, v["y1"] ?? 0.25, v["y2"] ?? 0.5, v["y3"] ?? 0.75, v["y4"] ?? 1]
+            if ys == [0, 0.25, 0.5, 0.75, 1] { return nil }
+            let p = ToneCurve.sanitized(xs: ToneCurve.legacyXs, ys: ys)
+            return FusedOp(.lumaCurve, ToneCurve.uniforms(xs: p.xs, ys: p.ys))
+        case "reinhard":
+            let amount = v["amount"] ?? 0
+            return amount == 0 ? nil : FusedOp(.reinhard, [Float(v["white"] ?? 4), Float(amount)])
+        case "scurve":
+            let contrast = v["contrast"] ?? 0
+            return contrast == 0 ? nil : FusedOp(.sCurve, [Float(SCurve.exponent(contrast: contrast)), Float(v["pivot"] ?? 0.5)])
         case "rgblevels":
             let black = v["black"] ?? 0
             let white = max(v["white"] ?? 1, black + 0.01)
@@ -170,7 +191,7 @@ struct CIModule: Sendable {
     /// Modules that read a neighbourhood (a blur radius, a guided filter, wavelet levels): the expensive ones. The segment cache keeps
     /// the picture after each of them, so a slider moved further down the stack does not run them again.
     static let neighbourhoodOperations: Set<String> = [
-        "sharpen", "denoiseprofile", "bilat", "atrous", "hazeremoval", "zones", "clahe", "soften", "blurs", "lowpass", "censorize", "highpass", "bloom", "highlights",
+        "sharpen", "denoiseprofile", "bilat", "atrous", "hazeremoval", "zones", "clahe", "soften", "blurs", "lowpass", "censorize", "highpass", "hdrtone", "bloom", "highlights",
     ]
 
     /// The display-referred modules: they assume 0...1 values (a curve, levels, a contrast about 0.5, a lift of the shadows) and are
@@ -179,7 +200,7 @@ struct CIModule: Sendable {
     /// `invert` is raw-level negative inversion and stays early; `bloom` is glow from over-bright light, a scene-light effect. Checked, module by module, by darkroom-engine-check E-DOM.
     static let displayReferredOperations: Set<String> = [
         "tonecurve", "rgblevels", "rgbcurve", "basecurve", "colisa", "colorcorrection", "colorcontrast", "velvia", "shadhi",
-        "relight", "dither", "colorize", "clahe", "splittoning", "solarize", "grain", "highpass", "crossprocess", "bleachbypass", "channelcurves",
+        "relight", "dither", "colorize", "clahe", "splittoning", "solarize", "grain", "highpass", "crossprocess", "bleachbypass", "channelcurves", "fadelook", "lumacurve", "scurve",
         // a negative is of what is on screen: complemented before the tone map, the dark scene values come out bright and the picture washes out
         "invert",
     ]
@@ -580,6 +601,53 @@ extension CIModule {
             operation: "warmth", name: "warmth and tint", iopOrder: 16, defaultEnabled: false,
             fields: [field("warmth", -1, 1, 0), field("tint", -1, 1, 0)],
             apply: { image, v in try CIModule.applyFused("warmth", image, v) }),
+
+        // Highlight roll-off: a tanh shoulder on scene luminance above a knee, colour ratios kept. HighlightRolloff in DarkroomCore is the oracle (HRO1-HRO5, E-HRO).
+        CIModule(
+            operation: "highlightrolloff", name: "highlight roll-off", iopOrder: 27, defaultEnabled: false,
+            fields: [field("white", 0.5, 8, 1), field("knee", 0.3, 0.95, 0.7), field("amount", 0, 1, 0)],
+            apply: { image, v in try CIModule.applyFused("highlightrolloff", image, v) }),
+
+        // Luminosity bands: an exposure change by the pixel's own luminance in five bands. LumaBands in DarkroomCore is the oracle (LMB1-LMB5, E-LMB).
+        CIModule(
+            operation: "lumabands", name: "luminosity bands", iopOrder: 39, defaultEnabled: false,
+            fields: LumaBands.names.map { field($0, -3, 3, 0) },
+            apply: { image, v in try CIModule.applyFused("lumabands", image, v) }),
+
+        // HDR tone: base and detail compression, the base (guided filter of the log luminance) pulled toward middle grey. HdrTone in DarkroomCore is the
+        // oracle (HDT1-HDT5, E-HDT in darkroom-engine-check).
+        CIModule(
+            operation: "hdrtone", name: "HDR tone compression", iopOrder: 41, defaultEnabled: false,
+            fields: [field("amount", 0, 1, 0), field("scale", 0.005, 0.2, ZoneExposure.defaultScale)],
+            apply: { image, v in
+                let e = image.extent
+                let r = ZoneExposure.radius(scale: v["scale"] ?? ZoneExposure.defaultScale, longSide: Int(max(e.width, e.height)))
+                return try CIBridge.hdrTone(image, amount: v["amount"] ?? 0, radius: r)
+            }),
+
+        // Fade look: black lifted and white pulled down on the encoded value, the matte print look. FadeLook in DarkroomCore is the oracle (FDL1-FDL4, E-FDL).
+        CIModule(
+            operation: "fadelook", name: "fade", iopOrder: 67, defaultEnabled: false,
+            fields: [field("black", 0, 0.3, 0), field("white", 0, 0.3, 0)],
+            apply: { image, v in try CIModule.applyFused("fadelook", image, v) }),
+
+        // Luminosity curve: a monotone cubic on OkLab lightness, chroma kept. LumaCurve in DarkroomCore is the oracle (LMC1-LMC5, E-LMC).
+        CIModule(
+            operation: "lumacurve", name: "luminosity curve", iopOrder: 68, defaultEnabled: false,
+            fields: [field("y0", 0, 1, 0), field("y1", 0, 1, 0.25), field("y2", 0, 1, 0.5), field("y3", 0, 1, 0.75), field("y4", 0, 1, 1)],
+            apply: { image, v in try CIModule.applyFused("lumacurve", image, v) }),
+
+        // Reinhard: the extended Reinhard operator on scene luminance. Reinhard in DarkroomCore is the oracle (RHD1-RHD5, E-RHD).
+        CIModule(
+            operation: "reinhard", name: "Reinhard tone", iopOrder: 14, defaultEnabled: false,
+            fields: [field("white", 1, 16, 4), field("amount", 0, 1, 0)],
+            apply: { image, v in try CIModule.applyFused("reinhard", image, v) }),
+
+        // S-curve: a bias-and-gain contrast curve about a pivot on the encoded value. SCurve in DarkroomCore is the oracle (SCC1-SCC5, E-SCC).
+        CIModule(
+            operation: "scurve", name: "S-curve contrast", iopOrder: 69, defaultEnabled: false,
+            fields: [field("contrast", -1, 1, 0), field("pivot", 0.2, 0.8, 0.5)],
+            apply: { image, v in try CIModule.applyFused("scurve", image, v) }),
 
         // Split toning: a shadows tint and a highlights tint in OkLab, each with its own hue and saturation,
         // split at a balance pivot. Checked by ST1-ST7 (darkroom-core-check), splitBuf (darkroom-metal-check)

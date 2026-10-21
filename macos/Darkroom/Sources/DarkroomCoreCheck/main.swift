@@ -2666,5 +2666,113 @@ do {
     check("WRM4 tint +1 adds +0.03 to a and nothing to b (within 1e-9)", abs(tl.y - 0.03) < 1e-9 && abs(tl.z) < 1e-9, "\(tl)")
 }
 
+// HRO highlight roll-off, LMB luminosity bands, HDT HDR tone, FDL fade look, LMC luminosity curve, RHD Reinhard, SCC S-curve
+do {
+    func sw(_ i: Int) -> SIMD3<Double> {
+        let t = Double(i) / 4095, h = t * 37 * 2 * .pi, v = 0.002 + 0.95 * t
+        return SIMD3(v * (0.6 + 0.4 * cos(h)), v * (0.6 + 0.4 * cos(h - 2.1)), v * (0.6 + 0.4 * cos(h + 2.1)))
+    }
+    func gap(_ a: SIMD3<Double>, _ b: SIMD3<Double>) -> Double { max(abs(a.x - b.x), abs(a.y - b.y), abs(a.z - b.z)) }
+    func enc(_ v: Double) -> Double { Transfer.linearToSRGB(v) }
+    func lin(_ e: Double) -> Double { Transfer.srgbToLinear(e) }
+    func finite(_ c: SIMD3<Double>) -> Bool { c.x.isFinite && c.y.isFinite && c.z.isFinite }
+
+    // HRO
+    var idH = 0.0
+    for i in 0..<4096 { let c = sw(i); idH = max(idH, gap(HighlightRolloff.apply(c, white: 1, knee: 0.7, amount: 0), c) / max(c.x, 1e-6)) }
+    check("HRO1 amount 0 is the identity (within 1e-9 relative)", idH < 1e-9, "\(idH)")
+    let dim = SIMD3(0.2, 0.15, 0.1)
+    check("HRO2 luminance below the knee is untouched", HighlightRolloff.apply(dim, white: 1, knee: 0.7, amount: 1) == dim)
+    let hot = SIMD3(1.8, 1.2, 0.9), rolled = HighlightRolloff.apply(hot, white: 1, knee: 0.7, amount: 1)
+    let yRolled = ColorCommon.luminance(rolled)
+    check("HRO3 luminance above the knee lands between the knee and the white, colour ratios kept (within 1e-9)",
+          yRolled > 0.7 && yRolled < 1 && abs(rolled.x / rolled.y - hot.x / hot.y) < 1e-9 && abs(rolled.y / rolled.z - hot.y / hot.z) < 1e-9, "\(yRolled)")
+    check("HRO4 continuous at the knee and increasing", abs(HighlightRolloff.compress(0.7 + 1e-12, white: 1, knee: 0.7) - 0.7) < 1e-9
+          && HighlightRolloff.compress(2, white: 1, knee: 0.7) > HighlightRolloff.compress(1, white: 1, knee: 0.7))
+    check("HRO5 a huge luminance is finite and at the white; zero and negative are left alone",
+          abs(HighlightRolloff.compress(1e9, white: 1, knee: 0.7) - 1) < 1e-9 && HighlightRolloff.apply(.zero, white: 1, knee: 0.7, amount: 1) == .zero
+          && HighlightRolloff.apply(SIMD3(-1, 0.1, 0.1), white: 1, knee: 0.7, amount: 1) == SIMD3(-1, 0.1, 0.1))
+
+    // LMB
+    var idB = 0.0
+    for i in 0..<4096 { let c = sw(i); idB = max(idB, gap(LumaBands.apply(c, evs: [0, 0, 0, 0, 0]), c) / max(c.x, 1e-6)) }
+    check("LMB1 zero bands are the identity (within 1e-9 relative)", idB < 1e-9, "\(idB)")
+    var globalGap = 0.0
+    for i in 0..<512 { let c = sw(i * 8); globalGap = max(globalGap, gap(LumaBands.apply(c, evs: [1, 1, 1, 1, 1]), c * 2) / max(c.x, 1e-6)) }
+    check("LMB2 the same change on every band is exactly a global exposure (+1 EV doubles, within 1e-9)", globalGap < 1e-9, "\(globalGap)")
+    let shadowPx = SIMD3(repeating: 0.18 * 0.25)
+    check("LMB3 a pixel at the shadows centre (-2 EV) takes the shadows change alone: +1 EV doubles it",
+          gap(LumaBands.apply(shadowPx, evs: [0, 1, 0, 0, 0]), shadowPx * 2) < 1e-9)
+    var jump = 0.0, prev = LumaBands.gain(logLuminance: -7, evs: [1.5, -1, 2, -2, 1])
+    var b = -7.0
+    while b < 5 { b += 0.001; let g = LumaBands.gain(logLuminance: b, evs: [1.5, -1, 2, -2, 1]); jump = max(jump, abs(g - prev)); prev = g }
+    check("LMB4 the gain is continuous over luminance (no step over 0.01 per 1/1000 EV)", jump < 0.01, "\(jump)")
+    let px = SIMD3(0.3, 0.2, 0.1), out = LumaBands.apply(px, evs: [0.5, -0.5, 1, -1, 0.5])
+    check("LMB5 colour ratios are kept; black stays finite", abs(out.x / out.y - px.x / px.y) < 1e-9 && finite(LumaBands.apply(.zero, evs: [1, 1, 1, 1, 1])))
+
+    // HDT
+    let w = 48, h = 32
+    var half = [SIMD3<Double>](repeating: SIMD3(repeating: 0.02), count: w * h)
+    for y in 0..<h { for x in w / 2..<w { half[y * w + x] = SIMD3(repeating: 1.0) } }
+    check("HDT1 amount 0 is the identity", HdrTone.apply(half, width: w, height: h, amount: 0, scale: 0.1) == half)
+    let comp = HdrTone.apply(half, width: w, height: h, amount: 0.5, scale: 0.1)
+    let ratioBefore = half[10 * w + 40].x / half[10 * w + 5].x, ratioAfter = comp[10 * w + 40].x / comp[10 * w + 5].x
+    check("HDT2 amount 0.5 pulls the bright and dark halves toward each other: their ratio shrinks", ratioAfter < ratioBefore * 0.7, "\(ratioBefore) -> \(ratioAfter)")
+    var textured = [SIMD3<Double>](repeating: SIMD3(repeating: 0.5), count: w * h)
+    for y in 0..<h { for x in 0..<w { textured[y * w + x] = SIMD3(repeating: 0.5 * ((x + y) % 2 == 0 ? 1.04 : 0.96)) } }
+    let tc = HdrTone.apply(textured, width: w, height: h, amount: 0.8, scale: 0.2)
+    let detailBefore = textured[16 * w + 24].x / textured[16 * w + 25].x, detailAfter = tc[16 * w + 24].x / tc[16 * w + 25].x
+    check("HDT3 the detail stays: neighbouring pixels keep their ratio within 2% while the whole region is moved", abs(detailAfter / detailBefore - 1) < 0.02 && tc[16 * w + 24].x != textured[16 * w + 24].x, "\(detailBefore) -> \(detailAfter)")
+    check("HDT4 the gain is held to the base range: a base of +10 EV gets the +3 EV gain, -20 gets -7", abs(HdrTone.gainEV(base: 10, amount: 1) + 3) < 1e-12 && abs(HdrTone.gainEV(base: -20, amount: 1) - 7) < 1e-12)
+    check("HDT5 a NaN base is no gain and a hostile picture stays finite", HdrTone.gainEV(base: .nan, amount: 1) == 0 && HdrTone.apply([SIMD3(0, 0, 0), SIMD3(5, 5, 5), SIMD3(-1, 0, 0), SIMD3(0.1, 0.1, 0.1)], width: 2, height: 2, amount: 1, scale: 0.1).allSatisfy(finite))
+
+    // FDL
+    var idF = 0.0
+    for i in 0..<4096 { let c = sw(i); idF = max(idF, gap(FadeLook.apply(c, black: 0, white: 0), c) / max(c.x, 1e-6)) }
+    check("FDL1 zero fade is the identity (within 1e-9 relative)", idF < 1e-9, "\(idF)")
+    let fb = FadeLook.apply(SIMD3(0, 1, lin(0.5)), black: 0.1, white: 0.1)
+    check("FDL2 black 0.1 lifts encoded black to 0.1, white 0.1 pulls white to 0.9, mid grey stays 0.5 (within 1e-9)",
+          abs(enc(fb.x) - 0.1) < 1e-9 && abs(enc(fb.y) - 0.9) < 1e-9 && abs(enc(fb.z) - 0.5) < 1e-9, "\(enc(fb.x)) \(enc(fb.y)) \(enc(fb.z))")
+    check("FDL3 the fade stays monotone", (1..<100).allSatisfy { FadeLook.apply(SIMD3(repeating: Double($0) / 100), black: 0.15, white: 0.2).x >= FadeLook.apply(SIMD3(repeating: Double($0 - 1) / 100), black: 0.15, white: 0.2).x })
+    check("FDL4 below black, above white and NaN stay finite", finite(FadeLook.apply(SIMD3(-1, 9, .nan), black: 0.1, white: 0.1)))
+
+    // LMC
+    func labC(_ l: Double, _ c: Double, _ hDeg: Double) -> SIMD3<Double> { OkLab.toWorking(SIMD3(l, c * cos(hDeg * .pi / 180), c * sin(hDeg * .pi / 180))) }
+    var idL = 0.0
+    for i in 0..<2048 { let c = labC(0.05 + 0.9 * Double(i) / 2047, 0.08, Double(i) * 3); idL = max(idL, gap(LumaCurve.apply(c, ys: [0, 0.25, 0.5, 0.75, 1]), c) / max(c.x, 1e-6)) }
+    check("LMC1 the default nodes are the identity (within 1e-9 relative)", idL < 1e-9, "\(idL)")
+    let ys = [0.0, 0.1, 0.4, 0.8, 1.0], c0 = labC(0.5, 0.1, 40), c1 = OkLab.fromWorking(LumaCurve.apply(c0, ys: ys)), l0 = OkLab.fromWorking(c0)
+    check("LMC2 chroma (a, b) is unchanged (within 1e-9)", abs(c1.y - l0.y) < 1e-9 && abs(c1.z - l0.z) < 1e-9, "\(c1) \(l0)")
+    let pts = ToneCurve.sanitized(xs: ToneCurve.legacyXs, ys: ys)
+    check("LMC3 the new lightness is the tone curve through the nodes at the old lightness (within 1e-9)",
+          abs(c1.x - ToneCurve.curve(0.5, xs: pts.xs, ys: pts.ys, tangents: ToneCurve.tangents(xs: pts.xs, ys: pts.ys))) < 1e-9, "\(c1.x)")
+    check("LMC4 raising the middle node brightens mid lightness", OkLab.fromWorking(LumaCurve.apply(labC(0.5, 0.05, 10), ys: [0, 0.25, 0.7, 0.75, 1])).x > 0.55)
+    check("LMC5 NaN and out-of-range pixels stay finite", finite(LumaCurve.apply(SIMD3(-1, 7, 0.2), ys: ys)))
+
+    // RHD
+    var idR = 0.0
+    for i in 0..<4096 { let c = sw(i); idR = max(idR, gap(Reinhard.apply(c, white: 4, amount: 0), c) / max(c.x, 1e-6)) }
+    check("RHD1 amount 0 is the identity (within 1e-9 relative)", idR < 1e-9, "\(idR)")
+    let atW = Reinhard.apply(SIMD3(repeating: 4), white: 4, amount: 1)
+    check("RHD2 the white point maps to exactly 1 (luminance 4 with W = 4, within 1e-9)", abs(ColorCommon.luminance(atW) - 1) < 1e-9, "\(ColorCommon.luminance(atW))")
+    let rc = Reinhard.apply(SIMD3(0.6, 0.3, 0.1), white: 4, amount: 1)
+    check("RHD3 colour ratios are kept (within 1e-9)", abs(rc.x / rc.y - 2) < 1e-9 && abs(rc.y / rc.z - 3) < 1e-9)
+    let rh = Reinhard.apply(SIMD3(0.5, 0.5, 0.5), white: 4, amount: 0.5), rf = Reinhard.apply(SIMD3(0.5, 0.5, 0.5), white: 4, amount: 1)
+    check("RHD4 amount 0.5 is halfway between the picture and the full operator (within 1e-9)", abs(rh.x - (0.5 + rf.x) / 2) < 1e-9)
+    check("RHD5 zero and negative luminance are left alone", Reinhard.apply(.zero, white: 4, amount: 1) == .zero && Reinhard.apply(SIMD3(-1, 0.1, 0.1), white: 4, amount: 1) == SIMD3(-1, 0.1, 0.1))
+
+    // SCC
+    var idS = 0.0
+    for i in 0..<4096 { let c = sw(i); idS = max(idS, gap(SCurve.apply(c, contrast: 0, pivot: 0.5), c) / max(c.x, 1e-6)) }
+    check("SCC1 contrast 0 is the identity (within 1e-9 relative)", idS < 1e-9, "\(idS)")
+    let fixed = SCurve.apply(SIMD3(0, lin(0.4), 1), contrast: 0.8, pivot: 0.4)
+    check("SCC2 black, white and the pivot stay where they are (within 1e-9)", abs(fixed.x) < 1e-9 && abs(enc(fixed.y) - 0.4) < 1e-9 && abs(enc(fixed.z) - 1) < 1e-9)
+    let up = SCurve.apply(SIMD3(lin(0.25), lin(0.75), lin(0.5)), contrast: 0.8, pivot: 0.5), dn = SCurve.apply(SIMD3(lin(0.25), lin(0.75), lin(0.5)), contrast: -0.8, pivot: 0.5)
+    check("SCC3 contrast up darkens below the pivot and lightens above; contrast down does the opposite", enc(up.x) < 0.25 && enc(up.y) > 0.75 && enc(dn.x) > 0.25 && enc(dn.y) < 0.75)
+    check("SCC4 the exponent is 2^(1.5 contrast): 1 at 0, 2 at 2/3", abs(SCurve.exponent(contrast: 0) - 1) < 1e-12 && abs(SCurve.exponent(contrast: 2.0 / 3) - 2) < 1e-12)
+    let wild = SCurve.apply(SIMD3(-1, 9, .nan), contrast: 1, pivot: 0.5)
+    check("SCC5 below black, above white and NaN stay finite and in 0...1", [wild.x, wild.y, wild.z].allSatisfy { $0.isFinite && $0 >= 0 && $0 <= 1 }, "\(wild)")
+}
+
 print(failures == 0 ? "\nall checks passed" : "\n\(failures) failed")
 exit(failures == 0 ? 0 : 1)

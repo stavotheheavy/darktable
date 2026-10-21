@@ -40,7 +40,7 @@ public enum ParityList {
     """.split(whereSeparator: { $0 == " " || $0 == "\n" }).map(String.init)
 
     /// Modules of ours that darktable does not have under that name.
-    public static let ownModules: [String] = ["display", "graduated", "radiallight", "zones", "solarize", "gradientmap", "crossprocess", "bleachbypass", "photofilter", "channelcurves", "chromalimit", "huerotate", "warmth"]
+    public static let ownModules: [String] = ["display", "graduated", "radiallight", "zones", "solarize", "gradientmap", "crossprocess", "bleachbypass", "photofilter", "channelcurves", "chromalimit", "huerotate", "warmth", "highlightrolloff", "lumabands", "hdrtone", "fadelook", "lumacurve", "reinhard", "scurve"]
 
     public static let entries: [ParityEntry] = {
         func e(_ op: String, _ s: ParityStatus, _ note: String = "") -> ParityEntry { ParityEntry(operation: op, status: s, note: note) }
@@ -100,6 +100,13 @@ public enum ParityList {
             e("channelmixerrgb", .exact, "chromatic adaptation (Bradford) from a black-body illuminant to D65, then the mixer's 3x3"),
             e("colorharmonizer", .planned()), e("colorbalance", .exact, "shadows, midtones and highlights each with a tint and a brightness: the ASC CDL offset, power (about scene white) and slope on scene-linear values"),
             // ours
+            e("highlightrolloff", .exact, "not a darktable module: a tanh shoulder on scene luminance above a knee, colour ratios kept"),
+            e("lumabands", .exact, "not a darktable module: an exposure change by the pixel's own luminance in five bands (the cheap cousin of zones)"),
+            e("hdrtone", .exact, "not a darktable module: base and detail dynamic range compression with the guided filter base, as in Durand and Dorsey"),
+            e("fadelook", .exact, "not a darktable module: black lifted and white pulled down on the encoded value: the matte print look"),
+            e("lumacurve", .exact, "not a darktable module: a monotone cubic on OkLab lightness with chroma kept"),
+            e("reinhard", .exact, "not a darktable module: the extended Reinhard operator on scene luminance"),
+            e("scurve", .exact, "not a darktable module: a bias-and-gain contrast curve about a pivot on the encoded value"),
             e("gradientmap", .exact, "not a darktable module: three OkLab gradient stops picked by lightness; a duotone or tritone print"),
             e("crossprocess", .exact, "not a darktable module: the cross-processing look: contrasty channel curves with lifted blue"),
             e("bleachbypass", .exact, "not a darktable module: partial desaturation plus an overlay of the luminosity"),

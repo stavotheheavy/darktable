@@ -19,7 +19,8 @@ extension DarkroomModel {
     /// The menu's groups, by operation; anything not listed (darktable has many more) goes under Other.
     static let proGroups: [(name: String, operations: Set<String>)] = [
         ("Tone", ["temperature", "exposure", "tonecurve", "rgbcurve", "rgblevels", "basecurve", "shadhi", "relight",
-                  "zonesystem", "basicadj", "display", "toneequal", "filmicrgb", "sigmoid", "agx", "highlights"]),
+                  "zonesystem", "basicadj", "display", "toneequal", "filmicrgb", "sigmoid", "agx", "highlights",
+                  "highlightrolloff", "lumabands", "hdrtone", "fadelook", "lumacurve", "reinhard", "scurve"]),
         ("Color", ["colorbalancergb", "channelmixer", "channelmixerrgb", "velvia", "vibrance", "colorize", "colorcontrast",
                    "colorcorrection", "splittoning", "monochrome", "primaries", "satcurvergb", "colorequal", "colisa",
                    "invert", "negadoctor", "colorzones", "lut3d", "gradientmap", "crossprocess", "bleachbypass", "photofilter",
