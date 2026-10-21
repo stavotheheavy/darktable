@@ -2553,5 +2553,118 @@ do {
           nMax <= 1 + 1e-12 && slope <= 0.5 + 1e-9, "max \(nMax), neighbour step \(slope)")
 }
 
+// GMP gradient map, CRP cross process, BLB bleach bypass, PFT photo filter, CHC channel curves, CHL chroma limit, HRT hue rotate, WRM warmth
+do {
+    func sw(_ i: Int) -> SIMD3<Double> {
+        let t = Double(i) / 4095, h = t * 37 * 2 * .pi, v = 0.002 + 0.95 * t
+        return SIMD3(v * (0.6 + 0.4 * cos(h)), v * (0.6 + 0.4 * cos(h - 2.1)), v * (0.6 + 0.4 * cos(h + 2.1)))
+    }
+    func labC(_ l: Double, _ c: Double, _ hDeg: Double) -> SIMD3<Double> { OkLab.toWorking(SIMD3(l, c * cos(hDeg * .pi / 180), c * sin(hDeg * .pi / 180))) }
+    func lch(_ c: SIMD3<Double>) -> SIMD3<Double> { OkLab.lch(OkLab.fromWorking(c)) }
+    func gap(_ a: SIMD3<Double>, _ b: SIMD3<Double>) -> Double { max(abs(a.x - b.x), abs(a.y - b.y), abs(a.z - b.z)) }
+    func enc(_ v: Double) -> Double { Transfer.linearToSRGB(v) }
+    func lin(_ e: Double) -> Double { Transfer.srgbToLinear(e) }
+
+    // GMP
+    let stops = [GradientMap.stop(hueDegrees: 230, saturation: 0.7), GradientMap.stop(hueDegrees: 0, saturation: 0), GradientMap.stop(hueDegrees: 60, saturation: 0.6)]
+    var idG = 0.0
+    for i in 0..<4096 { let c = sw(i); idG = max(idG, gap(GradientMap.apply(c, strength: 0, stops: stops), c) / max(abs(c.x), 1e-6)) }
+    check("GMP1 strength 0 is the identity (within 1e-9 relative)", idG < 1e-9, "\(idG)")
+    let mid = lch(GradientMap.apply(labC(0.5, 0.1, 40), strength: 1, stops: stops))
+    check("GMP2 at lightness 0.5 the midtone stop (grey) takes all the chroma away, lightness kept (within 1e-9)", mid.y < 1e-9 && abs(mid.x - 0.5) < 1e-9, "\(mid)")
+    let hi = OkLab.fromWorking(GradientMap.apply(labC(1.0, 0.05, 200), strength: 1, stops: stops))
+    check("GMP3 at lightness 1 the highlight stop's (a, b) is taken exactly (within 1e-9)", abs(hi.y - stops[2].x) < 1e-9 && abs(hi.z - stops[2].y) < 1e-9, "\(hi) vs \(stops[2])")
+    let q = OkLab.fromWorking(GradientMap.apply(labC(0.25, 0.05, 200), strength: 1, stops: stops))
+    let want = stops[0] + (stops[1] - stops[0]) * ColorCommon.smoothstep(0, 0.5, 0.25)
+    check("GMP4 at lightness 0.25 the stop is the smoothstep blend of shadows and midtones (within 1e-9)", abs(q.y - want.x) < 1e-9 && abs(q.z - want.y) < 1e-9)
+    let wildG = GradientMap.apply(SIMD3(-1, 5, .nan), strength: 1, stops: stops)
+    check("GMP5 hostile pixels stay finite or are the input (no crash)", wildG.x.isFinite || wildG.x.isNaN)
+
+    // CRP
+    var idC = 0.0
+    for i in 0..<4096 { let c = sw(i); idC = max(idC, gap(CrossProcess.apply(c, amount: 0), c) / max(abs(c.x), 1e-6)) }
+    check("CRP1 amount 0 is the identity (within 1e-9 relative)", idC < 1e-9, "\(idC)")
+    let cm = CrossProcess.apply(SIMD3(repeating: lin(0.5)), amount: 1)
+    check("CRP2 encoded 0.5 stays 0.5 in red and green and blue is lifted to 0.525 (within 1e-9)",
+          abs(enc(cm.x) - 0.5) < 1e-9 && abs(enc(cm.y) - 0.5) < 1e-9 && abs(enc(cm.z) - 0.525) < 1e-9, "\(enc(cm.x)) \(enc(cm.y)) \(enc(cm.z))")
+    let cr = CrossProcess.apply(SIMD3(repeating: lin(0.25)), amount: 1)
+    check("CRP3 red at encoded 0.25 follows the full S-curve: smoothstep(0.25) = 0.15625 (within 1e-9)", abs(enc(cr.x) - 0.15625) < 1e-9, "\(enc(cr.x))")
+    let ends = CrossProcess.apply(SIMD3(0, 1, 1), amount: 1)
+    check("CRP4 black gets only the blue lift (0, 0, 0.05) and white stays white", abs(ends.x) < 1e-9 && abs(enc(ends.y) - 1) < 1e-9 && abs(enc(ends.z) - 1) < 1e-9)
+
+    // BLB
+    var idB = 0.0
+    for i in 0..<4096 { let c = sw(i); idB = max(idB, gap(BleachBypass.apply(c, strength: 0), c) / max(abs(c.x), 1e-6)) }
+    check("BLB1 strength 0 is the identity (within 1e-9 relative)", idB < 1e-9, "\(idB)")
+    let b25 = BleachBypass.apply(SIMD3(repeating: lin(0.25)), strength: 1), b75 = BleachBypass.apply(SIMD3(repeating: lin(0.75)), strength: 1)
+    check("BLB2 a neutral gets the overlay contrast: 0.25 -> 0.125, 0.75 -> 0.875, 0.5 stays (within 1e-9)",
+          abs(enc(b25.x) - 0.125) < 1e-9 && abs(enc(b75.x) - 0.875) < 1e-9 && abs(enc(BleachBypass.apply(SIMD3(repeating: lin(0.5)), strength: 1).x) - 0.5) < 1e-9)
+    let col = labC(0.6, 0.15, 30)
+    check("BLB3 a saturated colour loses chroma", lch(BleachBypass.apply(col, strength: 1)).y < lch(col).y * 0.8, "\(lch(BleachBypass.apply(col, strength: 1)).y) vs \(lch(col).y)")
+    let wildB = BleachBypass.apply(SIMD3(-1, 9, .nan), strength: 1)
+    check("BLB4 below black, above white and NaN stay finite and in 0...1", [wildB.x, wildB.y, wildB.z].allSatisfy { $0.isFinite && $0 >= 0 && $0 <= 1 }, "\(wildB)")
+
+    // PFT
+    var idP = 0.0
+    for i in 0..<4096 { let c = sw(i); idP = max(idP, gap(PhotoFilter.apply(c, hueDegrees: 45, density: 0, preserve: 1), c) / max(abs(c.x), 1e-6)) }
+    check("PFT1 density 0 is the identity (within 1e-9 relative)", idP < 1e-9, "\(idP)")
+    var lumGap = 0.0
+    for i in 0..<512 { let c = sw(i * 8), o = PhotoFilter.apply(c, hueDegrees: Double(i) * 0.7, density: 0.8, preserve: 1); lumGap = max(lumGap, abs(ColorCommon.luminance(o) - ColorCommon.luminance(c)) / max(ColorCommon.luminance(c), 1e-6)) }
+    check("PFT2 preserve 1 keeps the luminance (within 1e-9 relative)", lumGap < 1e-9, "\(lumGap)")
+    let grey = SIMD3(repeating: 0.3)
+    check("PFT3 preserve 0 lets the filter change the luminance", abs(ColorCommon.luminance(PhotoFilter.apply(grey, hueDegrees: 230, density: 1, preserve: 0)) - 0.3) > 1e-3)
+    let warm = PhotoFilter.apply(grey, hueDegrees: 45, density: 1, preserve: 1)
+    check("PFT4 a 45 degree filter makes a grey redder than blue", warm.x > warm.z, "\(warm)")
+    check("PFT5 black stays black", PhotoFilter.apply(.zero, hueDegrees: 45, density: 1, preserve: 1) == .zero)
+
+    // CHC
+    let idH: [Double] = [0.25, 0.5, 0.75, 0.25, 0.5, 0.75, 0.25, 0.5, 0.75]
+    var idCh = 0.0
+    for i in 0..<4096 { let c = sw(i); idCh = max(idCh, gap(ChannelCurves.apply(c, heights: idH), c) / max(abs(c.x), 1e-6)) }
+    check("CHC1 the default nodes are the identity (within 1e-9 relative)", idCh < 1e-9, "\(idCh)")
+    var h2 = idH; h2[4] = 0.7
+    let g2 = ChannelCurves.apply(SIMD3(repeating: lin(0.5)), heights: h2)
+    check("CHC2 raising the green middle node moves green only (red and blue stay at encoded 0.5)", abs(enc(g2.x) - 0.5) < 1e-9 && enc(g2.y) > 0.6 && abs(enc(g2.z) - 0.5) < 1e-9, "\(enc(g2.x)) \(enc(g2.y)) \(enc(g2.z))")
+    let direct = ToneCurve.apply(lin(0.4), xs: ChannelCurves.xs, ys: [0, 0.25, 0.7, 0.75, 1])
+    check("CHC3 a channel is the tone curve's own curve through its nodes (within 1e-12)", abs(ChannelCurves.apply(SIMD3(repeating: lin(0.4)), heights: h2).y - direct) < 1e-12)
+    check("CHC4 the kernel's uniforms are three blocks of 25", ChannelCurves.uniforms(heights: h2).count == 75)
+    let hostileH = ChannelCurves.apply(SIMD3(0.3, 0.3, 0.3), heights: [0.9, 0.1, 5, .nan, -2, 0.5, 0.5, 0.5, 0.5])
+    check("CHC5 hostile node heights (unsorted, out of range, NaN) are made safe: finite output", hostileH.x.isFinite && hostileH.y.isFinite && hostileH.z.isFinite, "\(hostileH)")
+
+    // CHL
+    var idL = 0.0
+    for i in 0..<4096 { let c = sw(i); idL = max(idL, gap(ChromaLimit.apply(c, limit: 0.4), c) / max(abs(c.x), 1e-6)) }
+    check("CHL1 a limit of 0.4 or more is no limit (within 1e-9 relative)", idL < 1e-9, "\(idL)")
+    let low = labC(0.6, 0.1, 40)
+    check("CHL2 chroma below the knee (0.8 of the limit) is untouched (within 1e-9)", gap(ChromaLimit.apply(low, limit: 0.2), low) < 1e-9)
+    let vivid = labC(0.6, 0.35, 40), lim = lch(ChromaLimit.apply(vivid, limit: 0.2))
+    check("CHL3 chroma above the knee comes out below the limit and above the knee", lim.y < 0.2 && lim.y > 0.16, "\(lim.y)")
+    check("CHL4 hue and lightness are kept (within 1e-9)", abs(lim.x - 0.6) < 1e-9 && abs(ColorCommon.hueDifference(lim.z, 40 * .pi / 180)) < 1e-9, "\(lim)")
+    check("CHL5b an extreme chroma (50) against a tiny limit (0.05) is finite and at the limit", abs(ChromaLimit.compress(50, limit: 0.05) - 0.05) < 1e-9)
+    check("CHL5 the compression is continuous at the knee and increasing", abs(ChromaLimit.compress(0.16 + 1e-12, limit: 0.2) - 0.16) < 1e-9 && ChromaLimit.compress(0.3, limit: 0.2) > ChromaLimit.compress(0.25, limit: 0.2))
+
+    // HRT
+    var idR = 0.0
+    for i in 0..<4096 { let c = sw(i); idR = max(idR, gap(HueRotate.apply(c, degrees: 0), c) / max(abs(c.x), 1e-6), gap(HueRotate.apply(c, degrees: 360), c) / max(abs(c.x), 1e-6)) }
+    check("HRT1 0 and 360 degrees are the identity (within 1e-9 relative)", idR < 1e-9, "\(idR)")
+    let rot = lch(HueRotate.apply(labC(0.6, 0.1, 40), degrees: 90))
+    check("HRT2 90 degrees turns the hue by 90 and keeps lightness and chroma (within 1e-9)",
+          abs(ColorCommon.hueDifference(rot.z, 130 * .pi / 180)) < 1e-9 && abs(rot.x - 0.6) < 1e-9 && abs(rot.y - 0.1) < 1e-9, "\(rot)")
+    let g3 = SIMD3(repeating: 0.3)
+    check("HRT3 a grey stays grey", gap(HueRotate.apply(g3, degrees: 77), g3) < 1e-9)
+    let there = HueRotate.apply(labC(0.5, 0.12, 200), degrees: 30), back = HueRotate.apply(there, degrees: -30)
+    check("HRT4 +30 then -30 degrees is the identity (within 1e-9)", gap(back, labC(0.5, 0.12, 200)) < 1e-9)
+
+    // WRM
+    var idW = 0.0
+    for i in 0..<4096 { let c = sw(i); idW = max(idW, gap(Warmth.apply(c, warmth: 0, tint: 0), c) / max(abs(c.x), 1e-6)) }
+    check("WRM1 zero warmth and tint are the identity (within 1e-9 relative)", idW < 1e-9, "\(idW)")
+    let wl = OkLab.fromWorking(Warmth.apply(labC(0.6, 0.0, 0), warmth: 1, tint: 0))
+    check("WRM2 warmth +1 at lightness 0.6 adds +0.04 to b and +0.01 to a, lightness kept (within 1e-9)", abs(wl.z - 0.04) < 1e-9 && abs(wl.y - 0.01) < 1e-9 && abs(wl.x - 0.6) < 1e-9, "\(wl)")
+    check("WRM3 black takes no cast (within 1e-12)", gap(Warmth.apply(.zero, warmth: 1, tint: 1), .zero) < 1e-12)
+    let tl = OkLab.fromWorking(Warmth.apply(labC(0.6, 0.0, 0), warmth: 0, tint: 1))
+    check("WRM4 tint +1 adds +0.03 to a and nothing to b (within 1e-9)", abs(tl.y - 0.03) < 1e-9 && abs(tl.z) < 1e-9, "\(tl)")
+}
+
 print(failures == 0 ? "\nall checks passed" : "\n\(failures) failed")
 exit(failures == 0 ? 0 : 1)

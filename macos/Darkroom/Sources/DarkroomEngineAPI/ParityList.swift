@@ -40,7 +40,7 @@ public enum ParityList {
     """.split(whereSeparator: { $0 == " " || $0 == "\n" }).map(String.init)
 
     /// Modules of ours that darktable does not have under that name.
-    public static let ownModules: [String] = ["display", "graduated", "radiallight", "zones", "solarize"]
+    public static let ownModules: [String] = ["display", "graduated", "radiallight", "zones", "solarize", "gradientmap", "crossprocess", "bleachbypass", "photofilter", "channelcurves", "chromalimit", "huerotate", "warmth"]
 
     public static let entries: [ParityEntry] = {
         func e(_ op: String, _ s: ParityStatus, _ note: String = "") -> ParityEntry { ParityEntry(operation: op, status: s, note: note) }
@@ -100,6 +100,14 @@ public enum ParityList {
             e("channelmixerrgb", .exact, "chromatic adaptation (Bradford) from a black-body illuminant to D65, then the mixer's 3x3"),
             e("colorharmonizer", .planned()), e("colorbalance", .exact, "shadows, midtones and highlights each with a tint and a brightness: the ASC CDL offset, power (about scene white) and slope on scene-linear values"),
             // ours
+            e("gradientmap", .exact, "not a darktable module: three OkLab gradient stops picked by lightness; a duotone or tritone print"),
+            e("crossprocess", .exact, "not a darktable module: the cross-processing look: contrasty channel curves with lifted blue"),
+            e("bleachbypass", .exact, "not a darktable module: partial desaturation plus an overlay of the luminosity"),
+            e("photofilter", .exact, "not a darktable module: a coloured filter on the scene light with luminosity preserved"),
+            e("channelcurves", .exact, "not a darktable module: a monotone cubic of its own on each of red, green and blue"),
+            e("chromalimit", .exact, "not a darktable module: a soft tanh limit on OkLab chroma"),
+            e("huerotate", .exact, "not a darktable module: every hue turned about the grey axis in OkLab"),
+            e("warmth", .exact, "not a darktable module: a warm / cool and magenta / green look in OkLab, after white balance"),
             e("solarize", .exact, "not a darktable module: tones above a threshold mirrored about it on the encoded value, the Sabattier effect"),
             e("display", .exact, "not a darktable module: the scene-referred display transform, with an HDR peak"),
             e("graduated", .exact, "not a darktable module: an exposure change through a soft linear gradient, for a sky or a foreground"),

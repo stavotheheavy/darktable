@@ -20,6 +20,7 @@ struct CIModule: Sendable {
     /// (see MetalFused). The engine fuses them when they are unmasked and at full opacity.
     static let fusableOperations: Set<String> = [
         "temperature", "exposure", "colorbalancergb", "channelmixer", "tonecurve", "monochrome", "rgblevels", "splittoning", "display", "invert", "colisa", "velvia", "colorzones", "satcurvergb", "colorbalance", "rgbcurve", "colorcontrast", "colorcorrection", "basecurve", "dither", "colorize", "solarize", "negadoctor", "lowlight", "channelmixerrgb",
+        "gradientmap", "crossprocess", "bleachbypass", "photofilter", "channelcurves", "chromalimit", "huerotate", "warmth",
     ]
 
     /// The fused op a fusable module stands for with these values, or nil when the module does nothing at them. This is the one place the
@@ -106,6 +107,38 @@ struct CIModule: Sendable {
             let m = ChannelMixerRGB.matrix(kelvin: v["temperature"] ?? 6500, strength: v["strength"] ?? 0, rows: rows)
             let u = m.flatMap { $0 }.map { Float($0) }
             return u == identity.map { Float($0) } ? nil : FusedOp(.channelMixer, u)
+        case "gradientmap":
+            let strength = v["strength"] ?? 0
+            guard strength != 0 else { return nil }
+            let stops = [GradientMap.stop(hueDegrees: v["shadows_hue"] ?? 230, saturation: v["shadows_sat"] ?? 0.7),
+                         GradientMap.stop(hueDegrees: v["mids_hue"] ?? 0, saturation: v["mids_sat"] ?? 0),
+                         GradientMap.stop(hueDegrees: v["highlights_hue"] ?? 60, saturation: v["highlights_sat"] ?? 0.6)]
+            return FusedOp(.gradientMap, [Float(strength)] + stops.flatMap { [Float($0.x), Float($0.y)] })
+        case "crossprocess":
+            let amount = v["amount"] ?? 0
+            return amount == 0 ? nil : FusedOp(.crossProcess, [Float(amount)])
+        case "bleachbypass":
+            let strength = v["strength"] ?? 0
+            return strength == 0 ? nil : FusedOp(.bleachBypass, [Float(strength)])
+        case "photofilter":
+            let density = v["density"] ?? 0
+            guard density != 0 else { return nil }
+            let gain = LiftGammaGain.tint(hueDegrees: v["hue"] ?? 45, strength: 1)
+            return FusedOp(.photoFilter, [Float(gain.x), Float(gain.y), Float(gain.z), Float(density), Float(v["preserve"] ?? 1)])
+        case "channelcurves":
+            let identity: [Double] = [0.25, 0.5, 0.75, 0.25, 0.5, 0.75, 0.25, 0.5, 0.75]
+            let heights = ChannelCurves.channels.flatMap { c in (1...3).map { v["\(c)_y\($0)"] ?? identity[$0 - 1] } }
+            return heights == identity ? nil : FusedOp(.channelCurves, ChannelCurves.uniforms(heights: heights))
+        case "chromalimit":
+            let limit = v["limit"] ?? ChromaLimit.off
+            return limit >= ChromaLimit.off ? nil : FusedOp(.chromaLimit, [Float(limit)])
+        case "huerotate":
+            let degrees = v["degrees"] ?? 0
+            let t = degrees * .pi / 180
+            return degrees == 0 ? nil : FusedOp(.hueRotate, [Float(cos(t)), Float(sin(t))])
+        case "warmth":
+            let u = [Float(v["warmth"] ?? 0), Float(v["tint"] ?? 0)]
+            return u.allSatisfy { $0 == 0 } ? nil : FusedOp(.warmth, u)
         case "rgblevels":
             let black = v["black"] ?? 0
             let white = max(v["white"] ?? 1, black + 0.01)
@@ -146,7 +179,7 @@ struct CIModule: Sendable {
     /// `invert` is raw-level negative inversion and stays early; `bloom` is glow from over-bright light, a scene-light effect. Checked, module by module, by darkroom-engine-check E-DOM.
     static let displayReferredOperations: Set<String> = [
         "tonecurve", "rgblevels", "rgbcurve", "basecurve", "colisa", "colorcorrection", "colorcontrast", "velvia", "shadhi",
-        "relight", "dither", "colorize", "clahe", "splittoning", "solarize", "grain", "highpass",
+        "relight", "dither", "colorize", "clahe", "splittoning", "solarize", "grain", "highpass", "crossprocess", "bleachbypass", "channelcurves",
         // a negative is of what is on screen: complemented before the tone map, the dark scene values come out bright and the picture washes out
         "invert",
     ]
@@ -496,6 +529,57 @@ extension CIModule {
             apply: { image, v in
                 try CIBridge.highpass(image, strength: v["strength"] ?? 1, radius: Blur.radius(px: (v["radius"] ?? 8) * (v["_scale"] ?? 1)))
             }),
+
+        // Gradient map: the picture's lightness picks a colour from a three-stop gradient (shadows, midtones, highlights) and the pixel's OkLab
+        // chroma is mixed toward it; lightness is kept. GradientMap in DarkroomCore is the oracle (GMP1-GMP5, E-GMP).
+        CIModule(
+            operation: "gradientmap", name: "gradient map", iopOrder: 56, defaultEnabled: false,
+            fields: [field("strength", 0, 1, 0), field("shadows_hue", 0, 360, 230), field("shadows_sat", 0, 1, 0.7), field("mids_hue", 0, 360, 0),
+                     field("mids_sat", 0, 1, 0), field("highlights_hue", 0, 360, 60), field("highlights_sat", 0, 1, 0.6)],
+            apply: { image, v in try CIModule.applyFused("gradientmap", image, v) }),
+
+        // Cross process: the cross-processing look as three channel curves on the encoded value. CrossProcess in DarkroomCore is the oracle (CRP1-CRP4, E-CRP).
+        CIModule(
+            operation: "crossprocess", name: "cross process", iopOrder: 57, defaultEnabled: false,
+            fields: [field("amount", 0, 1, 0)],
+            apply: { image, v in try CIModule.applyFused("crossprocess", image, v) }),
+
+        // Bleach bypass: partial desaturation plus an overlay of the luminance, on the encoded value. BleachBypass in DarkroomCore is the oracle (BLB1-BLB4, E-BLB).
+        CIModule(
+            operation: "bleachbypass", name: "bleach bypass", iopOrder: 58, defaultEnabled: false,
+            fields: [field("strength", 0, 1, 0)],
+            apply: { image, v in try CIModule.applyFused("bleachbypass", image, v) }),
+
+        // Photo filter: a coloured filter on the scene light with the luminosity kept. PhotoFilter in DarkroomCore is the oracle (PFT1-PFT5, E-PFT).
+        CIModule(
+            operation: "photofilter", name: "photo filter", iopOrder: 18, defaultEnabled: false,
+            fields: [field("hue", 0, 360, 45), field("density", 0, 1, 0), field("preserve", 0, 1, 1)],
+            apply: { image, v in try CIModule.applyFused("photofilter", image, v) }),
+
+        // Channel curves: a monotone curve of its own on each of red, green and blue (three movable nodes each). ChannelCurves in DarkroomCore is the
+        // oracle (CHC1-CHC5, E-CHC).
+        CIModule(
+            operation: "channelcurves", name: "channel curves", iopOrder: 37, defaultEnabled: false,
+            fields: ChannelCurves.channels.flatMap { c in [field("\(c)_y1", 0, 1, 0.25), field("\(c)_y2", 0, 1, 0.5), field("\(c)_y3", 0, 1, 0.75)] },
+            apply: { image, v in try CIModule.applyFused("channelcurves", image, v) }),
+
+        // Chroma limit: a soft tanh limit on OkLab chroma so very saturated colours stop short of clipping. ChromaLimit in DarkroomCore is the oracle (CHL1-CHL5, E-CHL).
+        CIModule(
+            operation: "chromalimit", name: "chroma limit", iopOrder: 38, defaultEnabled: false,
+            fields: [field("limit", 0.05, 0.4, 0.4)],
+            apply: { image, v in try CIModule.applyFused("chromalimit", image, v) }),
+
+        // Hue rotate: every colour's hue turned about the grey axis in OkLab. HueRotate in DarkroomCore is the oracle (HRT1-HRT4, E-HRT).
+        CIModule(
+            operation: "huerotate", name: "hue rotate", iopOrder: 17, defaultEnabled: false,
+            fields: [field("degrees", -180, 180, 0)],
+            apply: { image, v in try CIModule.applyFused("huerotate", image, v) }),
+
+        // Warmth: a warm / cool and a magenta / green look slider in OkLab, after white balance. Warmth in DarkroomCore is the oracle (WRM1-WRM4, E-WRM).
+        CIModule(
+            operation: "warmth", name: "warmth and tint", iopOrder: 16, defaultEnabled: false,
+            fields: [field("warmth", -1, 1, 0), field("tint", -1, 1, 0)],
+            apply: { image, v in try CIModule.applyFused("warmth", image, v) }),
 
         // Split toning: a shadows tint and a highlights tint in OkLab, each with its own hue and saturation,
         // split at a balance pivot. Checked by ST1-ST7 (darkroom-core-check), splitBuf (darkroom-metal-check)

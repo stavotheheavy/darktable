@@ -791,7 +791,7 @@ do {
         if gap(engineOrder, after) > 1e-4 { wrong.append("\(c.operation) \(gap(engineOrder, after))") }
         if gap(engineOrder, before) < 4.0 / 255 { commute.append(c.operation) }
     }
-    check("E-DOM all \(order.count) display-referred modules run after the display transform", wrong.isEmpty && order.count == 18, "\(wrong)")
+    check("E-DOM all \(order.count) display-referred modules run after the display transform", wrong.isEmpty && order.count == 21, "\(wrong)")
     check("E-DOM for each of them the other order gives a visibly different picture (those that do not: \(commute))", commute.isEmpty, "\(commute)")
     check("E-DOM zones and the scene modules are not in the display set", !CIEngineProbe.displayReferredOperations.contains("zones")
           && !CIEngineProbe.displayReferredOperations.contains("exposure") && !CIEngineProbe.displayReferredOperations.contains("bloom") && !CIEngineProbe.displayReferredOperations.contains("colorbalancergb"))
@@ -1032,7 +1032,7 @@ do {
     let pool = CIEngineProbe.goldenCases().filter { CIEngineProbe.fusableOperations.contains($0.operation) }.map { $0.stack[0] }
     var seed: UInt64 = 0x9E3779B97F4A7C15
     func next() -> Int { seed = seed &* 6364136223846793005 &+ 1442695040888963407; return Int(seed >> 33) }
-    var worstEnc = 0.0, worstLin = 0.0, cases = 0, moved = 0
+    var worstEnc = 0.0, worstLin = 0.0, cases = 0, moved = 0, failedStack = ""
     for _ in 0..<50 {
         var chosen = pool
         for i in stride(from: chosen.count - 1, to: 0, by: -1) { chosen.swapAt(i, next() % (i + 1)) }
@@ -1044,14 +1044,22 @@ do {
         }
         let fusedOut = (try? CIEngineProbe.renderSized(stack: chosen, pixels: detailPx, width: detailW, height: detailH, fuse: true).pixels) ?? []
         let plainOut = (try? CIEngineProbe.renderSized(stack: chosen, pixels: detailPx, width: detailW, height: detailH, fuse: false).pixels) ?? []
-        guard fusedOut.count == plainOut.count, !fusedOut.isEmpty else { worstEnc = .infinity; continue }
+        guard fusedOut.count == plainOut.count, !fusedOut.isEmpty else {
+            worstEnc = .infinity
+            if failedStack.isEmpty { failedStack = "\(chosen.map(\.operation)) fused \(fusedOut.count) plain \(plainOut.count)" }
+            continue
+        }
         cases += 1
         let want = plainOut.map { SIMD3(Double($0.x), Double($0.y), Double($0.z)) }
-        worstEnc = max(worstEnc, worst(fusedOut, want))
-        worstLin = max(worstLin, worstLinear(fusedOut, want))
+        let encGap = worst(fusedOut, want), linGap = worstLinear(fusedOut, want)
+        if !(encGap.isFinite && linGap.isFinite) || encGap >= tol || linGap >= 2e-4, failedStack.isEmpty {
+            failedStack = "first off: \(chosen.map { "\($0.operation)\($0.blend.isEmpty ? "" : "@60")" }) enc \(encGap) lin \(linGap)"
+        }
+        worstEnc = max(worstEnc, encGap)
+        worstLin = max(worstLin, linGap)
         if worstLinear(plainOut, detailPx.map { SIMD3(Double($0.x), Double($0.y), Double($0.z)) }) > 0.02 { moved += 1 }
     }
-    check("E-FU \(cases) random stacks of per-pixel modules: fused equals unfused within 1/255 encoded and 2e-4 linear", cases == 50 && worstEnc < tol && worstLin < 2e-4, "encoded \(worstEnc), linear \(worstLin)")
+    check("E-FU \(cases) random stacks of per-pixel modules: fused equals unfused within 1/255 encoded and 2e-4 linear", cases == 50 && worstEnc < tol && worstLin < 2e-4, "encoded \(worstEnc), linear \(worstLin) \(failedStack)")
     check("E-FU the random stacks change the picture (a pass-through would fail): \(moved) of 50", moved >= 40, "\(moved)")
     check("E-FU a run is one op list: white balance, exposure, colour balance, tone curve and display make five ops, one pass",
           CIEngineProbe.fusedRunLengths([StackEntry(operation: "display", params: [:]), StackEntry(operation: "tonecurve", params: [:]),
@@ -1775,6 +1783,33 @@ do {
     check("E-HPF the oracle really changes the fixture", worstLinear(detailPx, hpWant) > 0.01, "\(worstLinear(detailPx, hpWant))")
     let hpSeams = detailSeams(hpStack, oracle: hpWant)
     check("E-HPF-seam high pass renders the same in a region as in the full frame", hpSeams.ok, "seam \(hpSeams.seam), full vs oracle \(hpSeams.fullVsOracle)")
+}
+
+// E-GMP ... E-WRM: the eight colour looks through the engine against their oracles
+do {
+    func p(_ d: [String: Double]) -> [String: ParamValue] { d.mapValues { .number($0) } }
+    func compare(_ tag: String, _ stack: [StackEntry], _ oracle: (SIMD3<Double>) -> SIMD3<Double>, linear: Bool = true) {
+        let got = run(stack), want = scene.map(oracle)
+        let ok = worst(got, want) < tol && (!linear || worstLinear(got, want) < 1e-3)
+        check("\(tag) matches the oracle within 1/255\(linear ? " and unclamped within 1e-3" : "")", ok, "encoded \(worst(got, want)), linear \(worstLinear(got, want))")
+    }
+    let gm = GradientMap.self
+    let gmStops = [gm.stop(hueDegrees: 230, saturation: 0.7), gm.stop(hueDegrees: 20, saturation: 0.3), gm.stop(hueDegrees: 60, saturation: 0.6)]
+    compare("E-GMP gradient map", [StackEntry(operation: "gradientmap", params: p(["strength": 0.8, "shadows_hue": 230, "shadows_sat": 0.7, "mids_hue": 20, "mids_sat": 0.3, "highlights_hue": 60, "highlights_sat": 0.6]))],
+            { GradientMap.apply($0, strength: 0.8, stops: gmStops) })
+    compare("E-CRP cross process", [StackEntry(operation: "crossprocess", params: p(["amount": 0.7]))], { CrossProcess.apply($0, amount: 0.7) }, linear: false)
+    compare("E-BLB bleach bypass", [StackEntry(operation: "bleachbypass", params: p(["strength": 0.8]))], { BleachBypass.apply($0, strength: 0.8) }, linear: false)
+    compare("E-PFT photo filter", [StackEntry(operation: "photofilter", params: p(["hue": 200, "density": 0.6, "preserve": 0.9]))],
+            { PhotoFilter.apply($0, hueDegrees: 200, density: 0.6, preserve: 0.9) })
+    let chH: [Double] = [0.2, 0.55, 0.8, 0.3, 0.45, 0.7, 0.25, 0.5, 0.78]
+    var chP: [String: Double] = [:]
+    for (c, name) in ChannelCurves.channels.enumerated() { for k in 0..<3 { chP["\(name)_y\(k + 1)"] = chH[c * 3 + k] } }
+    compare("E-CHC channel curves", [StackEntry(operation: "channelcurves", params: p(chP))], { ChannelCurves.apply($0, heights: chH) }, linear: false)
+    compare("E-CHL chroma limit", [StackEntry(operation: "chromalimit", params: p(["limit": 0.12]))], { ChromaLimit.apply($0, limit: 0.12) })
+    compare("E-HRT hue rotate", [StackEntry(operation: "huerotate", params: p(["degrees": 50]))], { HueRotate.apply($0, degrees: 50) })
+    compare("E-WRM warmth", [StackEntry(operation: "warmth", params: p(["warmth": 0.6, "tint": -0.4]))], { Warmth.apply($0, warmth: 0.6, tint: -0.4) })
+    let zeros = ["gradientmap", "crossprocess", "bleachbypass", "photofilter", "channelcurves", "chromalimit", "huerotate", "warmth"].map { StackEntry(operation: $0, params: [:]) }
+    check("E-GMP..E-WRM every one at its default settings changes nothing (within float rounding)", worstLinear(run(zeros), scene) < 1e-4)
 }
 
 print(failures == 0 ? "\nall checks passed" : "\n\(failures) failed")

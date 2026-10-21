@@ -739,5 +739,38 @@ metalPerPixelCheck("NEG-M negadoctor", source: MetalNegativeFilm.source, functio
 metalPerPixelCheck("LLT-M low light", source: MetalLowLight.source, function: "lowlightBuf", uniforms: [0.8], tolerance: 1e-4,
                    oracle: { LowLight.apply($0, strength: Double(Float(0.8))) })
 
+// the eight colour looks on Metal against their oracles
+do {
+    let gmStops = [GradientMap.stop(hueDegrees: 230, saturation: 0.7), GradientMap.stop(hueDegrees: 20, saturation: 0.3), GradientMap.stop(hueDegrees: 60, saturation: 0.6)]
+    let gmU: [Float] = [0.8] + gmStops.flatMap { [Float($0.x), Float($0.y)] }
+    // the oracle sees the stops as the kernel does, rounded to Float
+    let gmStopsF = stride(from: 1, to: 7, by: 2).map { SIMD2(Double(gmU[$0]), Double(gmU[$0 + 1])) }
+    metalPerPixelCheck("GMP-M gradient map", source: MetalGradientMap.source, function: "gradientmapBuf", uniforms: gmU, tolerance: 1e-4,
+                       oracle: { GradientMap.apply($0, strength: Double(Float(0.8)), stops: gmStopsF) })
+    metalPerPixelCheck("CRP-M cross process", source: MetalCrossProcess.source, function: "crossprocessBuf", uniforms: [0.7], tolerance: 1e-4,
+                       oracle: { CrossProcess.apply($0, amount: Double(Float(0.7))) })
+    metalPerPixelCheck("BLB-M bleach bypass", source: MetalBleachBypass.source, function: "bleachbypassBuf", uniforms: [0.8], tolerance: 1e-4,
+                       oracle: { BleachBypass.apply($0, strength: Double(Float(0.8))) })
+    let gain = LiftGammaGain.tint(hueDegrees: 200, strength: 1)
+    metalPerPixelCheck("PFT-M photo filter", source: MetalPhotoFilter.source, function: "photofilterBuf",
+                       uniforms: [Float(gain.x), Float(gain.y), Float(gain.z), 0.6, 0.9], tolerance: 1e-4,
+                       oracle: { rgb in
+                           let g = SIMD3(Double(Float(gain.x)), Double(Float(gain.y)), Double(Float(gain.z)))
+                           let mixed = SIMD3(repeating: 1) + (g - SIMD3(repeating: 1)) * Double(Float(0.6))
+                           let f = rgb * mixed, b = ColorCommon.luminance(rgb), a = ColorCommon.luminance(f)
+                           return (a > 0 && b > 0) ? f * (1 + Double(Float(0.9)) * (b / a - 1)) : f
+                       })
+    let chH: [Double] = [0.2, 0.55, 0.8, 0.3, 0.45, 0.7, 0.25, 0.5, 0.78]
+    metalPerPixelCheck("CHC-M channel curves", source: MetalChannelCurves.source, function: "channelcurvesBuf", uniforms: ChannelCurves.uniforms(heights: chH), tolerance: 1e-4,
+                       oracle: { ChannelCurves.apply($0, heights: chH) })
+    metalPerPixelCheck("CHL-M chroma limit", source: MetalChromaLimit.source, function: "chromalimitBuf", uniforms: [0.12], tolerance: 1e-4,
+                       oracle: { ChromaLimit.apply($0, limit: Double(Float(0.12))) })
+    let hrT = 50.0 * Double.pi / 180
+    metalPerPixelCheck("HRT-M hue rotate", source: MetalHueRotate.source, function: "huerotateBuf", uniforms: [Float(cos(hrT)), Float(sin(hrT))], tolerance: 1e-4,
+                       oracle: { HueRotate.apply($0, degrees: 50) })
+    metalPerPixelCheck("WRM-M warmth", source: MetalWarmth.source, function: "warmthBuf", uniforms: [0.6, -0.4], tolerance: 1e-4,
+                       oracle: { Warmth.apply($0, warmth: Double(Float(0.6)), tint: Double(Float(-0.4))) })
+}
+
 print(failures == 0 ? "\nall Metal checks passed" : "\n\(failures) failed")
 exit(failures == 0 ? 0 : 1)

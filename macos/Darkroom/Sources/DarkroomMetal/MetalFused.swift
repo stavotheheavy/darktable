@@ -4,7 +4,7 @@
 // instead of a full float frame written and read back between every pair.
 //
 // The functions are the cards' own (`colorbalance_apply`, `mixer_apply`, `tonecurve_apply`, `monochrome_apply`, `levels_apply`, `split_apply`,
-// `st_apply`, `invert_apply`, `colisa_apply`, `colorzones_apply`, `satcurve_apply`, `lgg_apply`, `basecurve_apply`, `posterize_apply`, `colorize_apply`, `solarize_apply`, `negadoctor_apply`, `lowlight_apply`), compiled into one library with a driver kernel that walks an op list. Every thread takes the same branches, so the switch costs
+// `st_apply`, `invert_apply`, `colisa_apply`, `colorzones_apply`, `satcurve_apply`, `lgg_apply`, `basecurve_apply`, `posterize_apply`, `colorize_apply`, `solarize_apply`, `negadoctor_apply`, `lowlight_apply`, `gradientmap_apply`, `crossprocess_apply`, `bleachbypass_apply`, `photofilter_apply`, `channelcurves_apply`, `chromalimit_apply`, `huerotate_apply`, `warmth_apply`), compiled into one library with a driver kernel that walks an op list. Every thread takes the same branches, so the switch costs
 // nothing. Checked against the unfused chain by darkroom-engine-check E-FU (random stacks) and by every module's own check, which now run
 // through it.
 //
@@ -17,7 +17,7 @@ import Foundation
 
 /// One step of a fused run: which card function, and the uniforms that card's kernel takes.
 public struct FusedOp: Sendable, Equatable {
-    public enum Code: Int, Sendable { case gain = 0, colorBalance, channelMixer, toneCurve, monochrome, levels, splitToning, sceneTone, invert, colisa, colorZones, satCurve, liftGammaGain, baseCurve, posterize, colorize, solarize, negadoctor, lowLight }
+    public enum Code: Int, Sendable { case gain = 0, colorBalance, channelMixer, toneCurve, monochrome, levels, splitToning, sceneTone, invert, colisa, colorZones, satCurve, liftGammaGain, baseCurve, posterize, colorize, solarize, negadoctor, lowLight, gradientMap, crossProcess, bleachBypass, photoFilter, channelCurves, chromaLimit, hueRotate, warmth }
     public let code: Code
     public let params: [Float]
     public init(_ code: Code, _ params: [Float]) { self.code = code; self.params = params }
@@ -44,6 +44,8 @@ public enum MetalFused {
         s += MetalSolarize.function
         s += MetalNegativeFilm.function
         s += MetalLowLight.function
+        for part in [MetalGradientMap.function, MetalCrossProcess.function, MetalBleachBypass.function, MetalPhotoFilter.function,
+                     MetalChannelCurves.function, MetalChromaLimit.function, MetalHueRotate.function, MetalWarmth.function] { s += part }
         s += #"""
 
         kernel void fusedTex(texture2d<float, access::read> src [[texture(0)]],
@@ -77,6 +79,14 @@ public enum MetalFused {
                     case 16: rgb = solarize_apply(rgb, p); break;
                     case 17: rgb = negadoctor_apply(rgb, p); break;
                     case 18: rgb = lowlight_apply(rgb, p); break;
+                    case 19: rgb = gradientmap_apply(rgb, p); break;
+                    case 20: rgb = crossprocess_apply(rgb, p); break;
+                    case 21: rgb = bleachbypass_apply(rgb, p); break;
+                    case 22: rgb = photofilter_apply(rgb, p); break;
+                    case 23: rgb = channelcurves_apply(rgb, p); break;
+                    case 24: rgb = chromalimit_apply(rgb, p); break;
+                    case 25: rgb = huerotate_apply(rgb, p); break;
+                    case 26: rgb = warmth_apply(rgb, p); break;
                     default: break;
                 }
             }
@@ -113,6 +123,14 @@ public enum MetalFused {
                     case 16: rgb = solarize_apply(rgb, p); break;
                     case 17: rgb = negadoctor_apply(rgb, p); break;
                     case 18: rgb = lowlight_apply(rgb, p); break;
+                    case 19: rgb = gradientmap_apply(rgb, p); break;
+                    case 20: rgb = crossprocess_apply(rgb, p); break;
+                    case 21: rgb = bleachbypass_apply(rgb, p); break;
+                    case 22: rgb = photofilter_apply(rgb, p); break;
+                    case 23: rgb = channelcurves_apply(rgb, p); break;
+                    case 24: rgb = chromalimit_apply(rgb, p); break;
+                    case 25: rgb = huerotate_apply(rgb, p); break;
+                    case 26: rgb = warmth_apply(rgb, p); break;
                     default: break;
                 }
             }
