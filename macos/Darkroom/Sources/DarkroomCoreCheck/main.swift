@@ -1704,6 +1704,42 @@ do {
     check("SHD7 past white and at black the output is finite", extremes.allSatisfy { $0.x.isFinite && $0.y.isFinite && $0.z.isFinite }, "\(extremes)")
 }
 
+// BLM bloom: the highlights, blurred by three box means, added back. Nothing above the knee is no glow; a bright dot lights its surround and
+// loses nothing; light only goes up
+do {
+    let w = 41, h = 41, r = 2          // three passes of radius 2 reach 6 px, far from the borders at 20
+    let dark = SIMD3<Double>(0.2, 0.15, 0.1)
+    var dot = [SIMD3<Double>](repeating: dark, count: w * h)
+    dot[20 * w + 20] = SIMD3(3, 3, 3)
+    func at(_ img: [SIMD3<Double>], _ x: Int, _ y: Int) -> SIMD3<Double> { img[y * w + x] }
+    check("BLM1 strength 0 is the identity", Bloom.apply(dot, width: w, height: h, strength: 0, radius: r) == dot)
+    let flat = [SIMD3<Double>](repeating: dark, count: w * h)
+    check("BLM2 nothing above the knee gives no glow: a dark picture comes back untouched", Bloom.apply(flat, width: w, height: h, strength: 1, radius: r) == flat)
+    let lit = Bloom.apply(dot, width: w, height: h, strength: 0.5, radius: r)
+    check("BLM3 beyond the glow's reach (3 x 2 px) a pixel is untouched", at(lit, 0, 0) == dark && at(lit, 20, 27) == dark && at(lit, 27, 20) == dark,
+          "\(at(lit, 20, 27)) \(at(lit, 27, 20))")
+    var added = 0.0
+    for i in lit.indices { added += lit[i].x - dot[i].x }
+    check("BLM4 the glow keeps the light it was given: the added light is strength x the dot's light (0.5 x 3)", abs(added - 1.5) < 1e-9, "\(added)")
+    var falling = true, previous = Double.infinity
+    for x in 20...27 { let g = at(lit, x, 20).x - at(dot, x, 20).x; falling = falling && g <= previous + 1e-12; previous = g }
+    check("BLM5 the glow falls away from the dot and is symmetric about it", falling && near(at(lit, 15, 20) - at(dot, 15, 20), at(lit, 25, 20) - at(dot, 25, 20), 1e-12))
+    func reach(_ radius: Int) -> Int {
+        let out = Bloom.apply(dot, width: w, height: h, strength: 1, radius: radius)
+        return (0..<w).filter { out[20 * w + $0].x - dot[20 * w + $0].x > 1e-9 }.count
+    }
+    check("BLM6 a bigger radius reaches further", reach(1) < reach(2) && reach(2) < reach(3), "\(reach(1)) \(reach(2)) \(reach(3))")
+    check("BLM7 light only goes up", zip(lit, dot).allSatisfy { $0.x >= $1.x && $0.y >= $1.y && $0.z >= $1.z })
+    check("BLM8 the glow is on the colour of the highlight: a red dot lights its surround red",
+          { let red = Bloom.apply([SIMD3<Double>](repeating: .zero, count: w * h).enumerated().map { $0.offset == 20 * w + 20 ? SIMD3(3, 0.1, 0.1) : $0.element },
+                                  width: w, height: h, strength: 1, radius: r)
+            let p = at(red, 22, 20); return p.x > 0.01 && p.y < p.x * 0.2 }())
+    check("BLM9 the size sets the radius: 30 px is 10 per pass, 1 px is the least, 0 and NaN are the least",
+          Bloom.radius(size: 30) == 10 && Bloom.radius(size: 1) == 1 && Bloom.radius(size: 0) == 1 && Bloom.radius(size: .nan) == 1)
+    let extremes = Bloom.apply([SIMD3(4, 3, 2), SIMD3(0, 0, 0), SIMD3(0.9, 0.9, 0.9), SIMD3(100, 100, 100)], width: 2, height: 2, strength: 1, radius: 1)
+    check("BLM10 past white and at black the output is finite", extremes.allSatisfy { $0.x.isFinite && $0.y.isFinite && $0.z.isFinite }, "\(extremes)")
+}
+
 // CL clipping warning: blown and crushed by the 8-bit encode, the rule the histogram readout counts
 do {
     func enc(_ v: Double) -> Double { Transfer.srgbToLinear(v / 255) }

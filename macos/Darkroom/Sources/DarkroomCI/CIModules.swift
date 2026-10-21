@@ -299,11 +299,10 @@ extension CIModule {
                 field("strength", 0, 1, 0),
                 field("size", 1, 50, 10),
             ],
+            // DarkroomCore's Bloom: highlights through a soft knee, three box means, added back (darkroom-engine-check E-BLM). The size
+            // is in pixels of the full-size picture, so it follows the render scale.
             apply: { image, v in
-                image.applyingFilter("CIBloom", parameters: [
-                    kCIInputIntensityKey: v["strength"] ?? 0,
-                    kCIInputRadiusKey: (v["size"] ?? 10) * (v["_scale"] ?? 1),
-                ])
+                try CIBridge.bloom(image, strength: v["strength"] ?? 0, radius: Bloom.radius(size: (v["size"] ?? 10) * (v["_scale"] ?? 1)))
             }),
 
         // Invert: a negative of the image, the complement of each channel's display-encoded value. No parameters.
@@ -689,6 +688,8 @@ extension CIModule {
         "vignette": 2,
         // same: shadhi was Core Image's CIHighlightShadowAdjust and is now the zone exposure's shadows and highlights
         "shadhi": 2,
+        // same: bloom was Core Image's CIBloom and is now the blurred highlights added back
+        "bloom": 2,
     ]
 
     static let all: [CIModule] = (catalogue + [display] + geometryModules).map { module in

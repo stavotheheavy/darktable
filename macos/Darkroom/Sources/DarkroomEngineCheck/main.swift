@@ -1475,6 +1475,20 @@ do {
     check("E-SHD-zero both sliders at 0 returns the input untouched", runDetail([StackEntry(operation: "shadhi", params: [:])]) == detailPx)
 }
 
+// E-BLM bloom through the engine: the bright pass, three box means and the add on the GPU against Bloom in DarkroomCore, across tile seams,
+// and the identity at strength 0. Size 12 is a radius of 4 per pass at render scale 1.
+do {
+    let stack = [StackEntry(operation: "bloom", params: ["strength": .number(0.6), "size": .number(12)])]
+    let want = Bloom.apply(detailImg, width: detailW, height: detailH, strength: 0.6, radius: Bloom.radius(size: 12))
+    let got = runDetail(stack)
+    check("E-BLM bloom matches the oracle within 1/255 and unclamped within 2e-4", worst(got, want) < tol && worstLinear(got, want) < 2e-4,
+          "encoded \(worst(got, want)), linear \(worstLinear(got, want))")
+    check("E-BLM the oracle really changes the fixture (a no-op GPU path would fail)", worstLinear(detailPx, want) > 0.01, "\(worstLinear(detailPx, want))")
+    let seams = detailSeams(stack, oracle: want)
+    check("E-BLM-seam bloom renders the same in a region as in the full frame", seams.ok, "seam \(seams.seam), full vs oracle \(seams.fullVsOracle)")
+    check("E-BLM-zero strength 0 returns the input untouched", runDetail([StackEntry(operation: "bloom", params: ["strength": .number(0)])]) == detailPx)
+}
+
 // E-RL radial light through the engine: against the oracle, tile seams, the zero shortcut, and in a portrait-shot frame
 do {
     let params: [String: ParamValue] = ["exposure": .number(1.2), "x": .number(0.4), "y": .number(0.6), "size": .number(0.25), "shape": .number(0.7),
