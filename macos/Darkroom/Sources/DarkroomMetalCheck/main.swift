@@ -694,5 +694,42 @@ do {
     check("LG-M four-way colour balance kernel ran", false, "\(error)")
 }
 
+// basecurve, posterize and colorize on Metal against their oracles
+func metalPerPixelCheck(_ name: String, source: String, function: String, uniforms: [Float], tolerance: Double,
+                        oracle: (SIMD3<Double>) -> SIMD3<Double>, maxBadFraction: Double = 0) {
+    do {
+        let count = 4096
+        let pixels = (0..<count).map { i -> SIMD4<Float> in
+            let t = Double(i) / Double(count - 1), h = t * 37 * 2 * .pi, v = 0.002 + 0.98 * t
+            return SIMD4(Float(v * (0.6 + 0.4 * cos(h))), Float(v * (0.6 + 0.4 * cos(h - 2.1))), Float(v * (0.6 + 0.4 * cos(h + 2.1))), 1)
+        }
+        let out = try MetalPerPixel.run(source: source, function: function, pixels: pixels, uniforms: uniforms)
+        var bad = 0, allFinite = out.count == count, worstRel = 0.0
+        for (i, px) in pixels.enumerated() where i < out.count {
+            let cpu = oracle(SIMD3(Double(px.x), Double(px.y), Double(px.z)))
+            let gpu = SIMD3(Double(out[i].x), Double(out[i].y), Double(out[i].z))
+            var pixelWorst = 0.0
+            for c in 0..<3 {
+                if !gpu[c].isFinite { allFinite = false }
+                pixelWorst = Swift.max(pixelWorst, Swift.abs(gpu[c] - cpu[c]) / Swift.max(1, Swift.abs(cpu[c])))
+            }
+            if pixelWorst >= tolerance { bad += 1 }
+            worstRel = Swift.max(worstRel, pixelWorst)
+        }
+        check("\(name) on Metal is finite and within \(tolerance) of the oracle (\(bad) of \(count) pixels off)",
+              allFinite && Double(bad) <= maxBadFraction * Double(count), "worst relative error \(worstRel)")
+    } catch {
+        check("\(name) kernel ran", false, "\(error)")
+    }
+}
+metalPerPixelCheck("BSC-M base curve", source: MetalBaseCurve.source, function: "basecurveBuf", uniforms: [1.7], tolerance: 1e-4,
+                   oracle: { BaseCurve.apply($0, gamma: Double(Float(1.7))) })
+// a rounding tie on one channel can land one level away on the GPU, so up to 0.5% of pixels may differ by a level
+metalPerPixelCheck("DTH-M posterize", source: MetalPosterize.source, function: "posterizeBuf", uniforms: [11], tolerance: 1e-4,
+                   oracle: { Posterize.apply($0, levels: 12) }, maxBadFraction: 0.005)
+let cozTint = Colorize.tint(hue: 0.35)
+metalPerPixelCheck("COZ-M colorize", source: MetalColorize.source, function: "colorizeBuf", uniforms: [0.7, Float(cozTint.x), Float(cozTint.y)], tolerance: 1e-4,
+                   oracle: { Colorize.apply($0, strength: Double(Float(0.7)), hue: 0.35) })
+
 print(failures == 0 ? "\nall Metal checks passed" : "\n\(failures) failed")
 exit(failures == 0 ? 0 : 1)

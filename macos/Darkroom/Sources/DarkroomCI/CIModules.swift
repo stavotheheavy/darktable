@@ -19,7 +19,7 @@ struct CIModule: Sendable {
     /// The modules whose work is one pixel in, one pixel out, on our own Metal functions: a run of them is one pass over the frame
     /// (see MetalFused). The engine fuses them when they are unmasked and at full opacity.
     static let fusableOperations: Set<String> = [
-        "temperature", "exposure", "colorbalancergb", "channelmixer", "tonecurve", "monochrome", "rgblevels", "splittoning", "display", "invert", "colisa", "velvia", "colorzones", "satcurvergb", "colorbalance", "rgbcurve", "colorcontrast", "colorcorrection",
+        "temperature", "exposure", "colorbalancergb", "channelmixer", "tonecurve", "monochrome", "rgblevels", "splittoning", "display", "invert", "colisa", "velvia", "colorzones", "satcurvergb", "colorbalance", "rgbcurve", "colorcontrast", "colorcorrection", "basecurve", "dither", "colorize",
     ]
 
     /// The fused op a fusable module stands for with these values, or nil when the module does nothing at them. This is the one place the
@@ -81,6 +81,15 @@ struct CIModule: Sendable {
         case "colorcorrection":
             let brightness = v["brightness"] ?? 0, contrast = v["contrast"] ?? 0
             return contrast == 0 && brightness == 0 ? nil : FusedOp(.colisa, [Float(contrast), 0, 0, Float(Colisa.gain(brightness: brightness))])
+        case "basecurve":
+            let gamma = v["gamma"] ?? 1
+            return gamma == 1 ? nil : FusedOp(.baseCurve, [Float(gamma)])
+        case "dither":
+            return FusedOp(.posterize, [Float(max((v["levels"] ?? 64).rounded(), 2) - 1)])
+        case "colorize":
+            let strength = v["strength"] ?? 0
+            let t = Colorize.tint(hue: v["hue"] ?? 0)
+            return strength == 0 ? nil : FusedOp(.colorize, [Float(strength), Float(t.x), Float(t.y)])
         case "rgblevels":
             let black = v["black"] ?? 0
             let white = max(v["white"] ?? 1, black + 0.01)
@@ -330,16 +339,13 @@ extension CIModule {
             // DarkroomCore's Invert on the oracle-checked per-pixel kernel (darkroom-engine-check E-IV)
             apply: { image, v in try CIModule.applyFused("invert", image, v) }),
 
-        // Gamma, approximate basecurve: a power curve on the image. 1.0 is the identity.
+        // Base curve: a power curve on the encoded value, out = e^gamma (1 is the identity). BaseCurve in DarkroomCore is the oracle
+        // (BSC1-BSC5, basecurveBuf in darkroom-metal-check, E-BSC in darkroom-engine-check).
         CIModule(
-            operation: "basecurve", name: "base curve (gamma, approximate)", iopOrder: 34,
+            operation: "basecurve", name: "base curve (gamma)", iopOrder: 34,
             defaultEnabled: false,
             fields: [field("gamma", 0.2, 3, 1)],
-            apply: { image, v in
-                image.applyingFilter("CIGammaAdjust", parameters: [
-                    "inputPower": v["gamma"] ?? 1,
-                ])
-            }),
+            apply: { image, v in try CIModule.applyFused("basecurve", image, v) }),
 
         // Levels: black, grey and white points on the encoded value, one kernel per pixel. Checked by
         // LV1-LV5 (darkroom-core-check), the levels Metal check (darkroom-metal-check) and E-LV (darkroom-engine-check).
@@ -349,20 +355,12 @@ extension CIModule {
             fields: [field("black", 0, 0.5, 0), field("grey", 0.1, 0.9, 0.5), field("white", 0.5, 1, 1)],
             apply: { image, v in try CIModule.applyFused("rgblevels", image, v) }),
 
-        // Colorize, approximate: tints the image towards a hue at a strength.
+        // Colorize: every pixel's OkLab a and b mixed toward a fixed tint at a hue, by the strength; lightness is kept. Colorize in
+        // DarkroomCore is the oracle (COZ1-COZ5, colorizeBuf in darkroom-metal-check, E-COZ in darkroom-engine-check).
         CIModule(
-            operation: "colorize", name: "colorize (approximate)", iopOrder: 46, defaultEnabled: false,
+            operation: "colorize", name: "colorize", iopOrder: 46, defaultEnabled: false,
             fields: [field("strength", 0, 1, 0), field("hue", 0, 1, 0)],
-            apply: { image, v in
-                let hue = v["hue"] ?? 0
-                let tint = CIColor(red: CGFloat(0.5 + 0.5 * cos(2 * .pi * hue)),
-                                   green: CGFloat(0.5 + 0.5 * cos(2 * .pi * (hue - 1.0 / 3))),
-                                   blue: CGFloat(0.5 + 0.5 * cos(2 * .pi * (hue - 2.0 / 3))))
-                return image.applyingFilter("CIColorMonochrome", parameters: [
-                    kCIInputColorKey: tint,
-                    kCIInputIntensityKey: v["strength"] ?? 0,
-                ])
-            }),
+            apply: { image, v in try CIModule.applyFused("colorize", image, v) }),
 
         // Blur, approximate: a Gaussian blur over the image, mixed in by opacity.
         CIModule(
@@ -389,14 +387,13 @@ extension CIModule {
                 return blurred
             }),
 
-        // Dither, approximate: posterizes the image to a number of levels.
+        // Dither or posterize: the encoded value quantised to a number of levels per channel, no noise. Posterize in DarkroomCore is
+        // the oracle (DTH1-DTH5, posterizeBuf in darkroom-metal-check, E-DTH in darkroom-engine-check).
         CIModule(
-            operation: "dither", name: "dither or posterize (approximate)", iopOrder: 60,
+            operation: "dither", name: "dither or posterize", iopOrder: 60,
             defaultEnabled: false,
             fields: [field("levels", 2, 64, 64)],
-            apply: { image, v in
-                image.applyingFilter("CIColorPosterize", parameters: ["inputLevels": v["levels"] ?? 64])
-            }),
+            apply: { image, v in try CIModule.applyFused("dither", image, v) }),
 
         // Censorize, approximate: pixelates the image; a larger size hides more detail.
         CIModule(
@@ -707,10 +704,10 @@ extension CIModule {
     /// The catalogue as the engine lists it: the Core Image modules, the display transform, then geometry.
     /// Modules whose output moved when the working space changed from sRGB primaries to Rec.2020 (their luminance, OkLab or tone stage is
     /// in the working primaries): a saved edit made before shows the "maths changed" notice. The other modules (gains, curves, levels,
-    /// the curves, levels) are per channel and did not move. `colorize` is a Core Image filter that weighs the channels, so it moved too.
+    /// the curves, levels) are per channel and did not move. `colorize` is a Core Image filter that weighs the channels, so it moved too (3: then Core Image's CIColorMonochrome became the OkLab tint mix).
     static let workingSpaceVersions: [String: Int] = [
         "display": 3, "colorbalancergb": 2, "monochrome": 2, "splittoning": 2, "sharpen": 2, "bilat": 2, "atrous": 2,
-        "denoiseprofile": 2, "hazeremoval": 2, "zones": 2, "colorize": 2,
+        "denoiseprofile": 2, "hazeremoval": 2, "zones": 2, "colorize": 3,
         // not the working space: invert was Core Image's complement of the linear value and is now the complement of the encoded one
         "invert": 2,
         // same: colisa was Core Image's colour controls (pivot 0.5, additive brightness) and is now scene-referred
@@ -727,6 +724,8 @@ extension CIModule {
         "rgbcurve": 2,
         // same: colorcontrast and colorcorrection were Core Image's colour controls and are now the OkLab saturation and the colisa maths
         "colorcontrast": 2, "colorcorrection": 2,
+        // same: basecurve (CIGammaAdjust), dither (CIColorPosterize) and colorize (CIColorMonochrome) are now their own maths on the encoded value or in OkLab
+        "basecurve": 2, "dither": 2,
     ]
 
     static let all: [CIModule] = (catalogue + [display] + geometryModules).map { module in

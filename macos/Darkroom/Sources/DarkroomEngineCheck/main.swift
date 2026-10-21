@@ -1680,5 +1680,21 @@ do {
           worstLinear(run([StackEntry(operation: "colorcontrast", params: [:]), StackEntry(operation: "colorcorrection", params: [:])]), scene) < 1e-4)
 }
 
+// E-BSC base curve, E-DTH posterize, E-COZ colorize: the fused per-pixel kernels through the engine against their oracles
+do {
+    let bsEngine = run([StackEntry(operation: "basecurve", params: ["gamma": .number(1.7)])])
+    let bsOracle = scene.map { BaseCurve.apply($0, gamma: 1.7) }
+    check("E-BSC base curve matches the oracle within 1/255", worst(bsEngine, bsOracle) < tol, "\(worst(bsEngine, bsOracle))")
+    let dtEngine = run([StackEntry(operation: "dither", params: ["levels": .number(12)])])
+    let dtOracle = scene.map { Posterize.apply($0, levels: 12) }
+    check("E-DTH posterize matches the oracle within 1/255", worst(dtEngine, dtOracle) < tol, "\(worst(dtEngine, dtOracle))")
+    let czEngine2 = run([StackEntry(operation: "colorize", params: ["strength": .number(0.7), "hue": .number(0.35)])])
+    let czOracle2 = scene.map { Colorize.apply($0, strength: 0.7, hue: 0.35) }
+    check("E-COZ colorize matches the oracle within 1/255 and unclamped within 1e-4", worst(czEngine2, czOracle2) < tol && worstLinear(czEngine2, czOracle2) < 1e-4,
+          "encoded \(worst(czEngine2, czOracle2)), linear \(worstLinear(czEngine2, czOracle2))")
+    check("E-BSC E-COZ zero settings change nothing (gamma 1, strength 0; within 1/255)",
+          worst(run([StackEntry(operation: "basecurve", params: [:]), StackEntry(operation: "colorize", params: [:])]), scene.map { BaseCurve.apply($0, gamma: 1) }) < tol)
+}
+
 print(failures == 0 ? "\nall checks passed" : "\n\(failures) failed")
 exit(failures == 0 ? 0 : 1)

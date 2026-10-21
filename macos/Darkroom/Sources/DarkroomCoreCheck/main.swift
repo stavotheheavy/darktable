@@ -2367,5 +2367,54 @@ do {
     check("CCR4 contrast +0.5 darkens below middle grey and lightens above it", lo.x < 0.05 && hi.x > 0.6, "\(lo) \(hi)")
 }
 
+// BSC base curve, DTH posterize, COZ colorize
+do {
+    func swatch(_ i: Int) -> SIMD3<Double> {
+        let t = Double(i) / 4095, h = t * 37 * 2 * .pi, v = 0.002 + 0.95 * t
+        return SIMD3(v * (0.6 + 0.4 * cos(h)), v * (0.6 + 0.4 * cos(h - 2.1)), v * (0.6 + 0.4 * cos(h + 2.1)))
+    }
+    var idBC = 0.0, finite = true
+    for i in 0..<4096 {
+        let c = swatch(i), o = BaseCurve.apply(c, gamma: 1)
+        for k in 0..<3 { if !o[k].isFinite { finite = false }; idBC = max(idBC, abs(o[k] - c[k]) / abs(c[k])) }
+    }
+    check("BSC1 gamma 1 is the identity on 0...1 within 1e-9 relative, finite", idBC < 1e-9 && finite, "\(idBC)")
+    let mid = SIMD3(repeating: Transfer.srgbToLinear(0.5))
+    let dark = BaseCurve.apply(mid, gamma: 2), light = BaseCurve.apply(mid, gamma: 0.5)
+    check("BSC2 gamma 2 maps encoded 0.5 to 0.25 and gamma 0.5 to 0.7071 (within 1e-9)",
+          abs(Transfer.linearToSRGB(dark.x) - 0.25) < 1e-9 && abs(Transfer.linearToSRGB(light.x) - 0.5.squareRoot()) < 1e-9)
+    let ends = BaseCurve.apply(SIMD3(0, 1, 1), gamma: 2.7)
+    check("BSC3 black and white stay put (within 1e-9)", abs(ends.x) < 1e-9 && abs(ends.y - 1) < 1e-9)
+    let wild = BaseCurve.apply(SIMD3(-0.3, 4, .nan), gamma: 1.4)
+    check("BSC4 below black, above white and NaN stay finite and in 0...1", wild.x == 0 && wild.y == 1 && wild.z == 0, "\(wild)")
+    check("BSC5 a mutation that must fail: gamma 2 and gamma 0.5 give different answers", abs(dark.x - light.x) > 0.1)
+
+    let post = Posterize.apply(SIMD3(Transfer.srgbToLinear(0.52), Transfer.srgbToLinear(0.1), Transfer.srgbToLinear(0.96)), levels: 5)
+    check("DTH1 five levels land on 0, 0.25, 0.5, 0.75, 1 of the encoded value (within 1e-9)",
+          abs(Transfer.linearToSRGB(post.x) - 0.5) < 1e-9 && abs(Transfer.linearToSRGB(post.y) - 0) < 1e-9 && abs(Transfer.linearToSRGB(post.z) - 1) < 1e-9, "\(post)")
+    let twice = Posterize.apply(post, levels: 5)
+    check("DTH2 posterizing twice changes nothing (within 1e-9)", max(abs(twice.x - post.x), abs(twice.y - post.y), abs(twice.z - post.z)) < 1e-9)
+    var distinct = Set<Double>()
+    for i in 0..<4096 { distinct.insert(Posterize.apply(swatch(i), levels: 8).x) }
+    check("DTH3 eight levels give at most eight values on a channel", distinct.count <= 8 && distinct.count >= 6, "\(distinct.count)")
+    let wildP = Posterize.apply(SIMD3(-1, 9, .nan), levels: 4)
+    check("DTH4 below black, above white and NaN stay finite (0, 1, 0)", wildP.x == 0 && abs(wildP.y - 1) < 1e-9 && wildP.z == 0, "\(wildP)")
+    check("DTH5 levels below 2 are held to 2 (two values)", Set((0..<64).map { Posterize.apply(SIMD3(repeating: Double($0) / 63), levels: 1).x }).count == 2)
+
+    let c0 = OkLab.toWorking(SIMD3(0.6, 0.05, -0.1))
+    let same = Colorize.apply(c0, strength: 0, hue: 0.3)
+    check("COZ1 strength 0 is the identity (within 1e-9)", max(abs(same.x - c0.x), abs(same.y - c0.y), abs(same.z - c0.z)) < 1e-9)
+    let full = OkLab.lch(OkLab.fromWorking(Colorize.apply(c0, strength: 1, hue: 0.25)))
+    check("COZ2 strength 1 gives the tint's chroma and hue, keeps lightness (within 1e-9)",
+          abs(full.y - Colorize.chroma) < 1e-9 && abs(full.x - 0.6) < 1e-9 && abs(ColorCommon.hueDifference(full.z, .pi / 2)) < 1e-9, "\(full)")
+    let half = OkLab.fromWorking(Colorize.apply(c0, strength: 0.5, hue: 0))
+    check("COZ3 strength 0.5 is halfway between the pixel's and the tint's a and b (within 1e-9)",
+          abs(half.y - (0.05 + Colorize.chroma) / 2) < 1e-9 && abs(half.z - (-0.1 + 0) / 2) < 1e-9, "\(half)")
+    let g = OkLab.lch(OkLab.fromWorking(Colorize.apply(SIMD3(repeating: 0.3), strength: 1, hue: 0.6)))
+    check("COZ4 a grey takes the tint at full strength (chroma 0.08) and keeps lightness", abs(g.y - 0.08) < 1e-9)
+    let h0 = Colorize.apply(c0, strength: 1, hue: 0), h1 = Colorize.apply(c0, strength: 1, hue: 1)
+    check("COZ5 hue 0 and hue 1 are the same colour (within 1e-9)", max(abs(h0.x - h1.x), abs(h0.y - h1.y), abs(h0.z - h1.z)) < 1e-9)
+}
+
 print(failures == 0 ? "\nall checks passed" : "\n\(failures) failed")
 exit(failures == 0 ? 0 : 1)
