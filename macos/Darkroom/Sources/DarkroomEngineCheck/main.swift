@@ -1644,5 +1644,18 @@ do {
     check("E-SCV zero sliders change nothing (within float rounding)", worstLinear(run([StackEntry(operation: "satcurvergb", params: [:])]), scene) < 1e-4)
 }
 
+// E-LG four-way colour balance: the fused per-pixel kernel through the engine against LiftGammaGain in DarkroomCore
+do {
+    let lgV: [String: Double] = ["shadows_hue": 220, "shadows_sat": 0.7, "shadows_lum": 0.4, "mids_hue": 40, "mids_sat": 0.5, "mids_lum": -0.3,
+                                 "highlights_hue": 80, "highlights_sat": 0.6, "highlights_lum": 0.5]
+    let lgT = LiftGammaGain.terms(lgV)
+    let lgEngine = run([StackEntry(operation: "colorbalance", params: lgV.mapValues { .number($0) })])
+    let lgOracle = scene.map { LiftGammaGain.apply($0, slope: lgT.slope, offset: lgT.offset, power: lgT.power) }
+    let eLG = worst(lgEngine, lgOracle)
+    check("E-LG four-way colour balance matches the oracle within 1/255 and unclamped within 1e-4", eLG < tol && worstLinear(lgEngine, lgOracle) < 1e-4,
+          "encoded \(eLG), linear \(worstLinear(lgEngine, lgOracle))")
+    check("E-LG zero settings change nothing (within float rounding)", worstLinear(run([StackEntry(operation: "colorbalance", params: [:])]), scene) < 1e-4)
+}
+
 print(failures == 0 ? "\nall checks passed" : "\n\(failures) failed")
 exit(failures == 0 ? 0 : 1)

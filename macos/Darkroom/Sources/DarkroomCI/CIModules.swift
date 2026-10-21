@@ -19,7 +19,7 @@ struct CIModule: Sendable {
     /// The modules whose work is one pixel in, one pixel out, on our own Metal functions: a run of them is one pass over the frame
     /// (see MetalFused). The engine fuses them when they are unmasked and at full opacity.
     static let fusableOperations: Set<String> = [
-        "temperature", "exposure", "colorbalancergb", "channelmixer", "tonecurve", "monochrome", "rgblevels", "splittoning", "display", "invert", "colisa", "velvia", "colorzones", "satcurvergb",
+        "temperature", "exposure", "colorbalancergb", "channelmixer", "tonecurve", "monochrome", "rgblevels", "splittoning", "display", "invert", "colisa", "velvia", "colorzones", "satcurvergb", "colorbalance",
     ]
 
     /// The fused op a fusable module stands for with these values, or nil when the module does nothing at them. This is the one place the
@@ -71,6 +71,10 @@ struct CIModule: Sendable {
         case "satcurvergb":
             let u = [Float(v["shadows"] ?? 0), Float(v["mids"] ?? 0), Float(v["highlights"] ?? 0)]
             return u.allSatisfy { $0 == 0 } ? nil : FusedOp(.satCurve, u)
+        case "colorbalance":
+            let t = LiftGammaGain.terms(v)
+            let u: [Float] = [t.slope, t.offset, t.power].flatMap { [Float($0.x), Float($0.y), Float($0.z)] }
+            return u == [1, 1, 1, 0, 0, 0, 1, 1, 1] ? nil : FusedOp(.liftGammaGain, u)
         case "rgblevels":
             let black = v["black"] ?? 0
             let white = max(v["white"] ?? 1, black + 0.01)
@@ -434,6 +438,17 @@ extension CIModule {
             defaultEnabled: false,
             fields: [field("shadows", -1, 1, 0), field("mids", -1, 1, 0), field("highlights", -1, 1, 0)],
             apply: { image, v in try CIModule.applyFused("satcurvergb", image, v) }),
+
+        // Four-way colour balance: a tint and a brightness for the shadows (CDL offset), the midtones (power about scene white) and
+        // the highlights (slope), on scene-linear values. LiftGammaGain in DarkroomCore is the oracle (LG1-LG7 in darkroom-core-check,
+        // lggBuf in darkroom-metal-check, E-LG in darkroom-engine-check).
+        CIModule(
+            operation: "colorbalance", name: "color balance (shadows, mids, highlights)", iopOrder: 21,
+            defaultEnabled: false,
+            fields: ["shadows", "mids", "highlights"].flatMap { r in
+                [field("\(r)_hue", 0, 360, 0), field("\(r)_sat", 0, 1, 0), field("\(r)_lum", -1, 1, 0)]
+            },
+            apply: { image, v in try CIModule.applyFused("colorbalance", image, v) }),
 
         // Split toning: a shadows tint and a highlights tint in OkLab, each with its own hue and saturation,
         // split at a balance pivot. Checked by ST1-ST7 (darkroom-core-check), splitBuf (darkroom-metal-check)

@@ -2292,5 +2292,48 @@ do {
     check("SCV6 the shadows slider does not touch a highlight (within 1e-9)", max(abs(out6.x - hi.x), abs(out6.y - hi.y), abs(out6.z - hi.z)) < 1e-9)
 }
 
+// LG four-way colour balance (LiftGammaGain)
+do {
+    func lgRun(_ c: SIMD3<Double>, _ v: [String: Double]) -> SIMD3<Double> {
+        let t = LiftGammaGain.terms(v)
+        return LiftGammaGain.apply(c, slope: t.slope, offset: t.offset, power: t.power)
+    }
+    // LG1 zero settings are the identity on 4096 colours (hue is ignored at strength 0)
+    var worstId = 0.0, finite = true
+    for i in 0..<4096 {
+        let t = Double(i) / 4095, h = t * 37 * 2 * .pi, v = 0.002 + 2.5 * t
+        let c = SIMD3(v * (0.6 + 0.4 * cos(h)), v * (0.6 + 0.4 * cos(h - 2.1)), v * (0.6 + 0.4 * cos(h + 2.1)))
+        let out = lgRun(c, ["shadows_hue": 200, "mids_hue": 90, "highlights_hue": 310])
+        for k in 0..<3 {
+            if !out[k].isFinite { finite = false }
+            worstId = max(worstId, abs(out[k] - c[k]) / abs(c[k]))
+        }
+    }
+    check("LG1 zero settings are the identity within 1e-9 relative, finite", worstId < 1e-9 && finite, "worst \(worstId), finite \(finite)")
+    // LG2 highlights brightness +1 is one stop of slope
+    let g = SIMD3(0.3, 0.5, 0.7)
+    let up = lgRun(g, ["highlights_lum": 1])
+    check("LG2 highlights brightness +1 doubles the value (within 1e-9)", max(abs(up.x - 0.6), abs(up.y - 1.0), abs(up.z - 1.4)) < 1e-9, "\(up)")
+    // LG3 midtones keep black and white where they are and lift what is between
+    let midWhite = lgRun(SIMD3(repeating: 1), ["mids_lum": 1]), midBlack = lgRun(SIMD3(repeating: 0), ["mids_lum": 1])
+    check("LG3 midtones brightness leaves white and black where they are (within 1e-9)", abs(midWhite.x - 1) < 1e-9 && midBlack.x < 1e-12, "\(midWhite) \(midBlack)")
+    let midLift = lgRun(SIMD3(repeating: 0.18), ["mids_lum": 1]).x
+    check("LG3 midtones brightness +1 lifts middle grey to 0.18^(2^-0.5) and -1 lowers it",
+          abs(midLift - pow(0.18, pow(2, -0.5))) < 1e-9 && lgRun(SIMD3(repeating: 0.18), ["mids_lum": -1]).x < 0.18, "\(midLift)")
+    // LG4 shadows brightness +1 lifts black by the offset range
+    let black = lgRun(SIMD3(repeating: 0), ["shadows_lum": 1])
+    check("LG4 shadows brightness +1 lifts black by \(LiftGammaGain.offsetRange) (within 1e-9)", abs(black.x - LiftGammaGain.offsetRange) < 1e-9, "\(black)")
+    // LG5 a highlight tint at 220 degrees gives a grey a hue near 220 (within 3 degrees), and no tint is neutral
+    let tinted = OkLab.lch(OkLab.fromWorking(lgRun(SIMD3(repeating: 0.5), ["highlights_hue": 220, "highlights_sat": 1])))
+    check("LG5 a highlight tint at 220 degrees gives a grey that hue within 3 degrees",
+          abs(ColorCommon.hueDifference(tinted.z, 220 * .pi / 180)) * 180 / .pi < 3 && tinted.y > 0.02, "\(tinted)")
+    // LG6 hostile input: zero and negative values stay finite
+    let hostile = [SIMD3(0.0, 0, 0), SIMD3(-0.2, 0.1, 0), SIMD3(5.0, 5, 5)].map { lgRun($0, ["shadows_hue": 40, "shadows_sat": 1, "shadows_lum": -1, "mids_lum": 1, "highlights_lum": 1]) }
+    check("LG6 zero, negative and bright inputs stay finite", hostile.allSatisfy { $0.x.isFinite && $0.y.isFinite && $0.z.isFinite }, "\(hostile)")
+    // LG7 a mutation that must fail: black stays black under highlights and midtones settings (no offset there)
+    let blackH = lgRun(SIMD3(repeating: 0), ["highlights_lum": 1, "highlights_sat": 1, "highlights_hue": 100, "mids_lum": -1])
+    check("LG7 highlights and midtones leave black at black (within 1e-12)", max(blackH.x, blackH.y, blackH.z) < 1e-12, "\(blackH)")
+}
+
 print(failures == 0 ? "\nall checks passed" : "\n\(failures) failed")
 exit(failures == 0 ? 0 : 1)

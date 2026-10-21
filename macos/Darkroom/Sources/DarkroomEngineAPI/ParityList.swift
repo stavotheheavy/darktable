@@ -98,7 +98,7 @@ public enum ParityList {
             e("zonesystem", .dropped("deprecated in darktable")), e("globaltonemap", .dropped("deprecated in darktable")),
             e("vibrance", .dropped("deprecated in darktable; colorbalancergb has vibrance")),
             e("channelmixerrgb", .planned("the calibration-matrix mixer; channelmixer covers the plain 3x3 case")),
-            e("colorharmonizer", .planned()), e("colorbalance", .planned("the 4-way lift/gamma/gain grading; colorbalancergb has only contrast, saturation and vibrance")),
+            e("colorharmonizer", .planned()), e("colorbalance", .exact, "shadows, midtones and highlights each with a tint and a brightness: the ASC CDL offset, power (about scene white) and slope on scene-linear values"),
             // ours
             e("display", .exact, "not a darktable module: the scene-referred display transform, with an HDR peak"),
             e("graduated", .exact, "not a darktable module: an exposure change through a soft linear gradient, for a sky or a foreground"),

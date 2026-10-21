@@ -667,5 +667,32 @@ do {
     check("SCV-M saturation by lightness kernel ran", false, "\(error)")
 }
 
+// four-way colour balance on Metal against LiftGammaGain.apply (unclamped)
+do {
+    let count = 4096
+    let v: [String: Double] = ["shadows_hue": 220, "shadows_sat": 0.7, "shadows_lum": 0.4, "mids_hue": 40, "mids_sat": 0.5, "mids_lum": -0.3,
+                               "highlights_hue": 80, "highlights_sat": 0.6, "highlights_lum": 0.5]
+    let t = LiftGammaGain.terms(v)
+    let uniforms: [Float] = [t.slope, t.offset, t.power].flatMap { [Float($0.x), Float($0.y), Float($0.z)] }
+    let pixels = (0..<count).map { i -> SIMD4<Float> in
+        let t = Double(i) / Double(count - 1), h = t * 37 * 2 * .pi, v = 0.002 + 2.5 * t
+        return SIMD4(Float(v * (0.6 + 0.4 * cos(h))), Float(v * (0.6 + 0.4 * cos(h - 2.1))), Float(v * (0.6 + 0.4 * cos(h + 2.1))), 1)
+    }
+    let out = try MetalPerPixel.run(source: MetalLiftGammaGain.source, function: "lggBuf", pixels: pixels, uniforms: uniforms)
+    var worstRel = 0.0, allFinite = out.count == count
+    for (i, px) in pixels.enumerated() where i < out.count {
+        let cpu = LiftGammaGain.apply(SIMD3(Double(px.x), Double(px.y), Double(px.z)), slope: t.slope, offset: t.offset, power: t.power)
+        let gpu = SIMD3(Double(out[i].x), Double(out[i].y), Double(out[i].z))
+        for c in 0..<3 {
+            if !gpu[c].isFinite { allFinite = false }
+            worstRel = Swift.max(worstRel, Swift.abs(gpu[c] - cpu[c]) / Swift.max(1, Swift.abs(cpu[c])))
+        }
+    }
+    check("LG-M four-way colour balance on Metal is finite and within 1e-4 of LiftGammaGain.apply (unclamped)", allFinite && worstRel < 1e-4,
+          "finite \(allFinite), worst relative error \(worstRel)")
+} catch {
+    check("LG-M four-way colour balance kernel ran", false, "\(error)")
+}
+
 print(failures == 0 ? "\nall Metal checks passed" : "\n\(failures) failed")
 exit(failures == 0 ? 0 : 1)
