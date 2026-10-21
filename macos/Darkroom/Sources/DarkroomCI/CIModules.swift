@@ -279,11 +279,15 @@ extension CIModule {
                 field("strength", 0, 2, 0),
                 field("scale", 0, 2, 1),
             ],
+            // DarkroomCore's Vignette: radial light turned inside out (darkroom-engine-check E-VG)
             apply: { image, v in
-                image.applyingFilter("CIVignette", parameters: [
-                    kCIInputIntensityKey: -(v["strength"] ?? 0),
-                    kCIInputRadiusKey: 1 + (v["scale"] ?? 1) * 2,
-                ])
+                let strength = v["strength"] ?? 0
+                guard strength > 0 else { return image }
+                var spec = Vignette.spec(scale: v["scale"] ?? 1)
+                spec.orientation = Orientation(value: Int(v["_camera"] ?? 0))
+                let g = Exposure.gain(ev: Vignette.ev(strength: strength))
+                let after = try CIBridge.gain(image, scale: SIMD3(g, g, g))
+                return try CIBridge.blendMasked(before: image, after: after, mask: try CIBridge.localMask(image, spec: spec), opacity: 1)
             }),
 
         // Bloom: a soft glow around the bright parts. Zero strength is off.
@@ -679,6 +683,8 @@ extension CIModule {
         "colisa": 2,
         // same: velvia was Core Image's vibrance and is now the OkLab vibrance step of colour balance
         "velvia": 2,
+        // same: vignette was Core Image's CIVignette and is now a scene-referred exposure change through the radial light matte
+        "vignette": 2,
     ]
 
     static let all: [CIModule] = (catalogue + [display] + geometryModules).map { module in

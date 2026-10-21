@@ -1647,6 +1647,38 @@ do {
           finite && RadialLight.apply([SIMD3(0, 0, 0)], width: 1, height: 1, ev: 3, spec: hard) == [SIMD3(0, 0, 0)])
 }
 
+// VG vignette: radial light turned inside out. The centre is left alone, the corners take the full change, the fall is smooth and
+// symmetric about the centre, and it does not depend on the picture's size
+do {
+    let w = 64, h = 48
+    let flat = [SIMD3<Double>](repeating: SIMD3(0.4, 0.3, 0.2), count: w * h)
+    func at(_ img: [SIMD3<Double>], _ x: Int, _ y: Int) -> SIMD3<Double> { img[y * w + x] }
+    check("VG1 strength 0 is the identity", Vignette.apply(flat, width: w, height: h, strength: 0, scale: 1) == flat)
+    let vg = Vignette.apply(flat, width: w, height: h, strength: 1, scale: 1)
+    let centre = at(vg, w / 2, h / 2).x / 0.4, corner = at(vg, 0, 0).x / 0.4, edge = at(vg, 0, h / 2).x / 0.4
+    check("VG2 the centre is left alone and the corner takes nearly the full -2 EV (a gain of 0.25)",
+          centre > 0.97 && corner < 0.30 && corner >= 0.25 - 1e-9, "centre \(centre), corner \(corner)")
+    var falling = true, previous = Double.infinity
+    for x in stride(from: w / 2, through: 0, by: -1) { let g = at(vg, x, h / 2).x; falling = falling && g <= previous + 1e-12; previous = g }
+    check("VG3 the light only falls from the centre to the left edge, and the centre is lighter than the edge, which is lighter than the corner",
+          falling && centre > edge && edge > corner, "centre \(centre), edge \(edge), corner \(corner)")
+    var symmetric = true
+    for y in 0..<h { for x in 0..<w { symmetric = symmetric && near(at(vg, x, y), at(vg, w - 1 - x, h - 1 - y), 1e-12) } }
+    check("VG4 the vignette is symmetric about the picture's centre", symmetric)
+    func meanGain(_ scale: Double) -> Double {
+        Vignette.apply(flat, width: w, height: h, strength: 1, scale: scale).reduce(0) { $0 + $1.x / 0.4 } / Double(w * h)
+    }
+    check("VG5 a bigger circle leaves more of the picture alone", meanGain(1.6) > meanGain(1) && meanGain(1) > meanGain(0.6),
+          "\(meanGain(0.6)) \(meanGain(1)) \(meanGain(1.6))")
+    let allGains = vg.map { $0.x / 0.4 }
+    check("VG6 no pixel is lighter than the input or darker than the full -2 EV", allGains.allSatisfy { $0 <= 1 + 1e-9 && $0 >= 0.25 - 1e-9 })
+    let corner2 = at(Vignette.apply(flat, width: w, height: h, strength: 2, scale: 1), 0, 0).x / 0.4
+    check("VG7 strength 2 darkens the corner more, down to -4 EV (a gain of 0.0625)", corner2 < corner && corner2 >= 0.0625 - 1e-9, "\(corner2)")
+    let big = Vignette.apply([SIMD3<Double>](repeating: SIMD3(0.4, 0.3, 0.2), count: 128 * 96), width: 128, height: 96, strength: 1, scale: 1)
+    let sameSpot = abs(at(vg, 16, 12).x - big[24 * 128 + 32].x) / 0.4
+    check("VG8 the same spot of the picture gets the same gain at twice the size (within 0.02)", sameSpot < 0.02, "\(sameSpot)")
+}
+
 // CL clipping warning: blown and crushed by the 8-bit encode, the rule the histogram readout counts
 do {
     func enc(_ v: Double) -> Double { Transfer.srgbToLinear(v / 255) }

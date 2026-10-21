@@ -1448,6 +1448,19 @@ do {
     check("E-GF-zero exposure 0 returns the input untouched", runDetail([StackEntry(operation: "graduated", params: ["exposure": .number(0)])]) == detailPx)
 }
 
+// E-VG vignette through the engine: against the oracle (radial light turned inside out), tile seams and the zero shortcut
+do {
+    let stack = [StackEntry(operation: "vignette", params: ["strength": .number(1.2), "scale": .number(0.9)])]
+    let want = Vignette.apply(detailImg, width: detailW, height: detailH, strength: 1.2, scale: 0.9)
+    let got = runDetail(stack)
+    check("E-VG vignette matches the oracle within 1/255 and unclamped within 2e-4", worst(got, want) < tol && worstLinear(got, want) < 2e-4,
+          "encoded \(worst(got, want)), linear \(worstLinear(got, want))")
+    check("E-VG the oracle really changes the fixture (a no-op GPU path would fail)", worstLinear(detailPx, want) > 0.05)
+    let seams = detailSeams(stack, oracle: want)
+    check("E-VG-seam vignette renders the same in a region as in the full frame", seams.ok, "seam \(seams.seam), full vs oracle \(seams.fullVsOracle)")
+    check("E-VG-zero strength 0 returns the input untouched", runDetail([StackEntry(operation: "vignette", params: ["strength": .number(0)])]) == detailPx)
+}
+
 // E-RL radial light through the engine: against the oracle, tile seams, the zero shortcut, and in a portrait-shot frame
 do {
     let params: [String: ParamValue] = ["exposure": .number(1.2), "x": .number(0.4), "y": .number(0.6), "size": .number(0.25), "shape": .number(0.7),
