@@ -81,6 +81,14 @@ public final class DarkroomModel {
     /// The display-linear peak the canvas frames are rendered with: 1 is SDR.
     public var previewPeak: Double { hdrPreview && hdrAvailable ? min(Self.screenHeadroom, 4) : 1 }
 
+    /// Replace the canvas with a synthetic HDR and wide-gamut card (TestCard), to check the display path by eye. A session setting, off at launch.
+    public var testCard = false
+
+    public func setTestCard(_ on: Bool) {
+        testCard = on
+        requestRender()
+    }
+
     public func setHDRPreview(_ on: Bool) {
         hdrPreview = on
         UserDefaults.standard.set(on, forKey: "darkroom.hdrPreview")
@@ -855,6 +863,7 @@ public final class DarkroomModel {
                             stack: entries, scale: r.scale, x: r.x, y: r.y, width: r.w, height: r.h)
                     }
                 }
+                if testCard, let p = presented, let card = TestCard.frame(device: p.texture.device, peak: previewPeak) { presented = card }
                 if let p = presented {
                     result = RenderedFrame(image: p.thumbnail, width: p.width, height: p.height, milliseconds: p.milliseconds)
                 } else if zoom == .fit || info == nil {

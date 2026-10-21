@@ -327,6 +327,18 @@ struct TopBar: View {
 
             BackdropMenu(model: model)
 
+            if model.presentsTexture {
+                Button { model.setTestCard(!model.testCard) } label: {
+                    Image(systemName: model.testCard ? "square.grid.3x1.below.line.grid.1x2.fill" : "square.grid.3x1.below.line.grid.1x2")
+                        .frame(width: 40, height: 40)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .help("Display test card: HDR steps and Display P3 colours, to check this screen by eye")
+                .accessibilityLabel(model.testCard ? "Display test card on" : "Display test card off")
+                .rig("testcard")
+            }
+
             // HDR preview: only where a screen has headroom above SDR white
             if model.hdrAvailable {
                 Button { model.setHDRPreview(!model.hdrPreview) } label: {

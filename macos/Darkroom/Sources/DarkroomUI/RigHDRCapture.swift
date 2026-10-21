@@ -8,6 +8,11 @@ import ScreenCaptureKit
 extension Rig {
     func hdrCapture(prefix: String, region: CGRect?) async -> [String: Any] {
         guard let win = window else { return ["error": "no window"] }
+        // ScreenCaptureKit alone never asks: it just reports "declined". This call is what makes macOS show its prompt and list the app.
+        if !CGPreflightScreenCaptureAccess() {
+            let asked = CGRequestScreenCaptureAccess()
+            if !asked { return ["error": "screen recording not granted yet: allow Vantage QA in System Settings > Privacy & Security > Screen Recording, then relaunch it"] }
+        }
         do {
             let content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true)
             guard let target = content.windows.first(where: { $0.windowID == CGWindowID(win.windowNumber) }) else { return ["error": "window not shareable"] }
