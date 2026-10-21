@@ -40,7 +40,7 @@ public enum ParityList {
     """.split(whereSeparator: { $0 == " " || $0 == "\n" }).map(String.init)
 
     /// Modules of ours that darktable does not have under that name.
-    public static let ownModules: [String] = ["display", "graduated", "radiallight", "zones", "solarize", "gradientmap", "crossprocess", "bleachbypass", "photofilter", "channelcurves", "chromalimit", "huerotate", "warmth", "highlightrolloff", "lumabands", "hdrtone", "fadelook", "lumacurve", "reinhard", "scurve", "deconvsharp", "chromadenoise", "mediandenoise", "deband", "skinsmooth", "texturebands", "halation", "caradial", "distortion", "perspective", "tiltshift"]
+    public static let ownModules: [String] = ["display", "graduated", "radiallight", "zones", "solarize", "gradientmap", "crossprocess", "bleachbypass", "photofilter", "channelcurves", "chromalimit", "huerotate", "warmth", "highlightrolloff", "lumabands", "hdrtone", "fadelook", "lumacurve", "reinhard", "scurve", "deconvsharp", "chromadenoise", "mediandenoise", "deband", "skinsmooth", "texturebands", "halation", "caradial", "distortion", "perspective", "tiltshift", "surfaceblur", "lensblur", "motionblur", "radialblur", "kuwahara"]
 
     public static let entries: [ParityEntry] = {
         func e(_ op: String, _ s: ParityStatus, _ note: String = "") -> ParityEntry { ParityEntry(operation: op, status: s, note: note) }
@@ -76,7 +76,7 @@ public enum ParityList {
             e("colorequal", .covered(by: "colorzones")),
             e("colorzones", .exact, "eight hue bands, each with a hue shift, a saturation change and a lightness change in OkLab, blended smoothly between neighbours; greys untouched"), e("satcurvergb", .exact, "saturation by lightness: shadows, mids and highlights each get a saturation change, blended smoothly over OkLab lightness"),
             e("lut3d", .planned("Core Image CIColorCube is the natural base")), e("grain", .exact, "lattice value noise from the pixel position with a midtone weight, neutral on all channels; repeatable for a seed"), e("lowlight", .exact, "a Purkinje-shift model: dim parts mixed toward a cool scotopic grey; a model, not a measured transform"),
-            e("highpass", .exact, "the encoded value minus its three-box blur, on mid-grey: the base of a high-pass sharpen"), e("diffuse", .planned("sharpen and denoise as diffusion; large")),
+            e("highpass", .exact, "the encoded value minus its three-box blur, on mid-grey: the base of a high-pass sharpen"), e("diffuse", .exact, "Perona-Malik anisotropic diffusion on the square root of the scene value (denoising and smoothing; the sharpening presets of darktable are not built)"),
             e("retouch", .planned("healing needs PatchMatch")), e("liquify", .planned("warp mesh")),
             e("lens", .planned("lens correction needs our own calibration tool, not lensfun data")), e("colorchecker", .planned()),
             e("cacorrectrgb", .covered(by: "caradial"), "darktable detects the aberration; ours is a manual radial correction"), e("colorreconstruct", .planned("highlight colour reconstruction")),
@@ -98,8 +98,13 @@ public enum ParityList {
             e("zonesystem", .dropped("deprecated in darktable")), e("globaltonemap", .dropped("deprecated in darktable")),
             e("vibrance", .dropped("deprecated in darktable; colorbalancergb has vibrance")),
             e("channelmixerrgb", .exact, "chromatic adaptation (Bradford) from a black-body illuminant to D65, then the mixer's 3x3"),
-            e("colorharmonizer", .planned()), e("colorbalance", .exact, "shadows, midtones and highlights each with a tint and a brightness: the ASC CDL offset, power (about scene white) and slope on scene-linear values"),
+            e("colorharmonizer", .exact, "hues pulled toward the nearest hue of a harmony scheme (complementary, triad, tetrad, analogous); chroma and lightness kept"), e("colorbalance", .exact, "shadows, midtones and highlights each with a tint and a brightness: the ASC CDL offset, power (about scene white) and slope on scene-linear values"),
             // ours
+            e("surfaceblur", .exact, "not a darktable module: an edge-preserving blur over the whole picture: the guided filter, guided by luminance"),
+            e("lensblur", .exact, "not a darktable module: a disc (bokeh) blur whose highlights spread into bright discs"),
+            e("motionblur", .exact, "not a darktable module: the mean of bilinear samples along a line at an angle"),
+            e("radialblur", .exact, "not a darktable module: a zoom or a spin blur about a centre point"),
+            e("kuwahara", .exact, "not a darktable module: the Kuwahara painterly edge-preserving smoother: the mean of the smoothest of four quadrants"),
             e("caradial", .exact, "not a darktable module: lateral chromatic aberration: red and blue scaled about the centre, bilinear; manual, where darktable's cacorrectrgb detects it"),
             e("distortion", .exact, "not a darktable module: Brown's radial lens distortion polynomial, bilinear, manual coefficients"),
             e("perspective", .exact, "not a darktable module: a keystone as a plane projective map, bilinear"),

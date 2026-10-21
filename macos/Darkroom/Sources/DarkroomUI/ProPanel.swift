@@ -24,11 +24,11 @@ extension DarkroomModel {
         ("Color", ["colorbalancergb", "channelmixer", "channelmixerrgb", "velvia", "vibrance", "colorize", "colorcontrast",
                    "colorcorrection", "splittoning", "monochrome", "primaries", "satcurvergb", "colorequal", "colisa",
                    "invert", "negadoctor", "colorzones", "lut3d", "gradientmap", "crossprocess", "bleachbypass", "photofilter",
-                   "channelcurves", "chromalimit", "huerotate", "warmth"]),
+                   "channelcurves", "chromalimit", "huerotate", "warmth", "colorharmonizer"]),
         ("Detail", ["sharpen", "denoiseprofile", "bilat", "clahe", "atrous", "highpass", "lowpass", "blurs", "diffuse",
-                    "nlmeans", "hotpixels", "rawdenoise", "defringe", "deconvsharp", "chromadenoise", "mediandenoise", "deband", "skinsmooth", "texturebands"]),
+                    "nlmeans", "hotpixels", "rawdenoise", "defringe", "surfaceblur", "lensblur", "motionblur", "radialblur", "diffuse", "deconvsharp", "chromadenoise", "mediandenoise", "deband", "skinsmooth", "texturebands"]),
         ("Geometry", ["flip", "ashift", "crop", "lens", "liquify", "retouch", "spots", "caradial", "distortion", "perspective"]),
-        ("Effects", ["vignette", "bloom", "grain", "soften", "dither", "censorize", "lowlight", "graduated", "hazeremoval", "radiallight", "solarize", "halation", "tiltshift"]),
+        ("Effects", ["vignette", "bloom", "grain", "soften", "dither", "censorize", "lowlight", "graduated", "hazeremoval", "radiallight", "solarize", "halation", "tiltshift", "kuwahara"]),
     ]
 
     /// The module behind an operation (the first instance).

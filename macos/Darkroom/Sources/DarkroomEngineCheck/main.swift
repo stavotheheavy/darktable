@@ -1892,5 +1892,68 @@ do {
             Defringe.apply(detailImg, width: detailW, height: detailH, radius: Blur.radius(px: 3), strength: 1, hueDegrees: 140, widthDegrees: 70)); zero("E-DFR", "defringe")
 }
 
+// E-SRB, E-LNB, E-MOB, E-RDB, E-DIF, E-KUW (gather and blur modules, with seam checks) and E-HRM (colour harmonizer through the fused pass)
+do {
+    func p(_ d: [String: Double]) -> [String: ParamValue] { d.mapValues { .number($0) } }
+    func compare(_ tag: String, _ stack: [StackEntry], _ want: [SIMD3<Double>], linear: Double = 5e-4, seams: Bool = true) {
+        let got = runDetail(stack)
+        check("\(tag) matches the oracle within 1/255 and unclamped within \(linear)", worst(got, want) < tol && worstLinear(got, want) < linear, "encoded \(worst(got, want)), linear \(worstLinear(got, want))")
+        check("\(tag) the oracle really changes the fixture", worstLinear(detailPx, want) > 0.003, "\(worstLinear(detailPx, want))")
+        if seams {
+            let s = detailSeams(stack, oracle: want)
+            check("\(tag)-seam renders the same in a region as in the full frame", s.ok, "seam \(s.seam), full vs oracle \(s.fullVsOracle)")
+        }
+    }
+    func zero(_ tag: String, _ op: String) { check("\(tag)-zero its default settings return the input untouched", runDetail([StackEntry(operation: op, params: [:])]) == detailPx) }
+    compare("E-SRB surface blur", [StackEntry(operation: "surfaceblur", params: p(["amount": 0.8, "radius": 8, "threshold": 0.004]))],
+            SurfaceBlur.apply(detailImg, width: detailW, height: detailH, radius: 8, eps: 0.004, amount: 0.8), linear: 2e-3); zero("E-SRB", "surfaceblur")
+    compare("E-LNB lens blur", [StackEntry(operation: "lensblur", params: p(["amount": 0.9, "radius": 6, "highlights": 3]))],
+            LensBlur.apply(detailImg, width: detailW, height: detailH, radius: 6, boost: 3, amount: 0.9)); zero("E-LNB", "lensblur")
+    compare("E-MOB motion blur", [StackEntry(operation: "motionblur", params: p(["length": 9, "angle": 25]))],
+            MotionBlur.apply(detailImg, width: detailW, height: detailH, length: 9, angleDegrees: 25)); zero("E-MOB", "motionblur")
+    compare("E-RDB zoom blur", [StackEntry(operation: "radialblur", params: p(["amount": 0.8, "spin": 0, "centre_x": 0.4, "centre_y": 0.6]))],
+            RadialBlur.apply(detailImg, width: detailW, height: detailH, spin: false, amount: 0.8, centreX: 0.4, centreY: 0.6))
+    compare("E-RDB spin blur", [StackEntry(operation: "radialblur", params: p(["amount": 0.8, "spin": 1, "centre_x": 0.4, "centre_y": 0.6]))],
+            RadialBlur.apply(detailImg, width: detailW, height: detailH, spin: true, amount: 0.8, centreX: 0.4, centreY: 0.6)); zero("E-RDB", "radialblur")
+    compare("E-DIF diffusion", [StackEntry(operation: "diffuse", params: p(["iterations": 6, "threshold": 0.1]))],
+            Diffusion.apply(detailImg, width: detailW, height: detailH, iterations: 6, threshold: 0.1)); zero("E-DIF", "diffuse")
+    compare("E-KUW Kuwahara", [StackEntry(operation: "kuwahara", params: p(["amount": 0.9, "radius": 3]))],
+            Kuwahara.apply(detailImg, width: detailW, height: detailH, radius: 3, amount: 0.9)); zero("E-KUW", "kuwahara")
+    let sch = ColorHarmony.scheme(1, baseDegrees: 100)
+    compare("E-HRM colour harmonizer", [StackEntry(operation: "colorharmonizer", params: p(["scheme": 1, "base": 100, "amount": 0.8]))],
+            detailImg.map { ColorHarmony.apply($0, hues: sch.hues, halfGap: sch.halfGap, amount: 0.8) }, linear: 1e-3, seams: false); zero("E-HRM", "colorharmonizer")
+}
+
+// E-BIG blank-frame guard: the multi-pass and gather modules rendered on a 1400 x 934 frame (the size the diffuse bug showed at), much bigger than the 48 x 40 fixture. Core Image renders a frame BLANK, silently, when a processor is
+// asked for more input than it was given (a region mismatch that only shows on larger frames), so each must come back finite and not dark.
+do {
+    let bw = 1400, bh = 934
+    var big = [SIMD4<Float>](repeating: .zero, count: bw * bh)
+    for y in 0..<bh { for x in 0..<bw {
+        let fx = Float(x) / Float(bw), fy = Float(y) / Float(bh)
+        big[y * bw + x] = SIMD4(0.15 + 0.5 * fx + 0.1 * sin(Float(x) / 5), 0.2 + 0.4 * fy + 0.1 * cos(Float(y) / 7), 0.1 + 0.3 * (fx + fy) / 2, 1)
+    } }
+    let meanIn = big.map { Double($0.x + $0.y + $0.z) / 3 }.reduce(0, +) / Double(big.count)
+    let cases: [(String, [String: Double])] = [
+        ("diffuse", ["iterations": 12, "threshold": 0.1]), ("lensblur", ["amount": 1, "radius": 6, "highlights": 2]), ("motionblur", ["length": 12, "angle": 20]),
+        ("radialblur", ["amount": 1, "spin": 0]), ("kuwahara", ["amount": 1, "radius": 4]), ("mediandenoise", ["amount": 1, "radius": 2]),
+        ("deconvsharp", ["radius": 4, "iterations": 5, "amount": 1]), ("texturebands", ["radius": 8, "amount": 1]), ("skinsmooth", ["amount": 1, "radius": 10]),
+        ("surfaceblur", ["amount": 1, "radius": 10]), ("chromadenoise", ["radius": 8, "amount": 1]), ("deband", ["radius": 12, "strength": 1]),
+        ("hdrtone", ["amount": 0.6, "scale": 0.05]), ("halation", ["strength": 0.6, "size": 40]), ("tiltshift", ["amount": 1, "radius": 20]),
+        ("defringe", ["strength": 1, "radius": 6, "hue": 140, "width": 70]), ("censorize", ["pixelation": 9]), ("grain", ["strength": 0.8]), ("highpass", ["radius": 12, "strength": 1.5]),
+        ("distortion", ["k1": 0.2]), ("perspective", ["vertical": 0.2]), ("caradial", ["red": 1, "blue": -1]), ("blurs", ["radius": 18]), ("soften", ["strength": 0.6, "radius": 12]),
+        ("zones", ["shadows": 1, "scale": 0.05]), ("bloom", ["strength": 0.5, "size": 20]), ("highlights", ["clip": 2, "strength": 1]),
+    ]
+    var bad: [String] = []
+    for (op, params) in cases {
+        let stack = [StackEntry(operation: op, params: params.mapValues { .number($0) })]
+        guard let out = try? CIEngineProbe.renderSized(stack: stack, pixels: big, width: bw, height: bh).pixels, out.count == big.count else { bad.append("\(op): no render"); continue }
+        let mean = out.map { Double($0.x + $0.y + $0.z) / 3 }.reduce(0, +) / Double(out.count)
+        if !out.allSatisfy({ $0.x.isFinite && $0.y.isFinite && $0.z.isFinite }) { bad.append("\(op): not finite"); continue }
+        if mean < 0.25 * meanIn { bad.append("\(op): blank (mean \(mean) vs \(meanIn))") }
+    }
+    check("E-BIG \(cases.count) multi-pass and gather modules render a 1400 x 934 frame finite and not blank", bad.isEmpty, "\(bad)")
+}
+
 print(failures == 0 ? "\nall checks passed" : "\n\(failures) failed")
 exit(failures == 0 ? 0 : 1)

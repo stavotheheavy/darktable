@@ -2987,5 +2987,109 @@ do {
           && finiteAll(Defringe.apply([SIMD3(0, 0, 0), SIMD3(5, 5, 5), SIMD3(0.2, 0.1, 0.9), SIMD3(0.9, 0.1, 0.8)], width: 2, height: 2, radius: 1, strength: 1, hueDegrees: 320, widthDegrees: 40)))
 }
 
+// SRB surface blur, LNB lens blur, MOB motion blur, RDB radial blur, DIF diffusion, HRM colour harmony, KUW Kuwahara
+do {
+    func gap(_ a: SIMD3<Double>, _ b: SIMD3<Double>) -> Double { max(abs(a.x - b.x), abs(a.y - b.y), abs(a.z - b.z)) }
+    func allGap(_ a: [SIMD3<Double>], _ b: [SIMD3<Double>]) -> Double { zip(a, b).map { gap($0, $1) }.max() ?? 0 }
+    func finiteAll(_ a: [SIMD3<Double>]) -> Bool { a.allSatisfy { $0.x.isFinite && $0.y.isFinite && $0.z.isFinite } }
+    let w = 41, h = 31
+    let flat = [SIMD3<Double>](repeating: SIMD3(0.3, 0.2, 0.1), count: w * h)
+    var seed: UInt64 = 99
+    func rnd() -> Double { seed = seed &* 6364136223846793005 &+ 1442695040888963407; return Double(seed >> 33) / Double(1 << 31) - 0.5 }
+    var noisy = flat
+    for i in noisy.indices { let n = 0.05 * rnd(); noisy[i] = SIMD3(0.3 + n, 0.2 + n, 0.1 + n) }
+    var step = [SIMD3<Double>](repeating: SIMD3(repeating: 0.1), count: w * h)
+    for y in 0..<h { for x in w / 2..<w { step[y * w + x] = SIMD3(repeating: 0.9) } }
+    func variance(_ a: [SIMD3<Double>]) -> Double { let m = a.map { $0.x }; let mean = m.reduce(0, +) / Double(m.count); return m.map { pow($0 - mean, 2) }.reduce(0, +) / Double(m.count) }
+    var dot = [SIMD3<Double>](repeating: .zero, count: w * h)
+    dot[15 * w + 20] = SIMD3(repeating: 1)
+
+    // SRB
+    check("SRB1 amount 0 or radius 0 is the identity", SurfaceBlur.apply(noisy, width: w, height: h, radius: 3, eps: 0.004, amount: 0) == noisy && SurfaceBlur.apply(noisy, width: w, height: h, radius: 0, eps: 0.004, amount: 1) == noisy)
+    check("SRB2 a flat picture is unchanged (within 1e-9)", allGap(SurfaceBlur.apply(flat, width: w, height: h, radius: 4, eps: 0.004, amount: 1), flat) < 1e-9)
+    let sb = SurfaceBlur.apply(noisy, width: w, height: h, radius: 4, eps: 0.01, amount: 1)
+    check("SRB3 noise is smoothed (variance under 40%)", variance(sb) < 0.4 * variance(noisy), "\(variance(sb)) vs \(variance(noisy))")
+    let sbEdge = SurfaceBlur.apply(step, width: w, height: h, radius: 4, eps: 0.004, amount: 1)
+    check("SRB4 a strong step stays sharp: the pixels beside it keep their side's value within 5% of the step", abs(sbEdge[15 * w + 19].x - 0.1) < 0.04 && abs(sbEdge[15 * w + 21].x - 0.9) < 0.04, "\(sbEdge[15 * w + 19].x) \(sbEdge[15 * w + 21].x)")
+
+    // LNB
+    check("LNB1 amount 0 or radius 0 is the identity", LensBlur.apply(dot, width: w, height: h, radius: 3, boost: 2, amount: 0) == dot && LensBlur.apply(dot, width: w, height: h, radius: 0, boost: 2, amount: 1) == dot)
+    check("LNB2 a flat picture is unchanged (within 1e-12)", allGap(LensBlur.apply(flat, width: w, height: h, radius: 5, boost: 3, amount: 1), flat) < 1e-12)
+    var discCount = 0
+    for dy in -3...3 { for dx in -3...3 where dx * dx + dy * dy <= 9 { discCount += 1 } }
+    let lb = LensBlur.apply(dot, width: w, height: h, radius: 3, boost: 0, amount: 1)
+    check("LNB3 without highlight boost a dot becomes the plain disc mean: 1 / \(discCount) at its centre and the same value across the disc (within 1e-12)",
+          abs(lb[15 * w + 20].x - 1 / Double(discCount)) < 1e-12 && abs(lb[15 * w + 23].x - 1 / Double(discCount)) < 1e-12 && lb[15 * w + 24].x == 0, "\(lb[15 * w + 20].x)")
+    var hotDot = [SIMD3<Double>](repeating: SIMD3(repeating: 0.1), count: w * h)
+    hotDot[15 * w + 20] = SIMD3(repeating: 4)
+    check("LNB4 highlight boost spreads a bright dot further: the neighbour is brighter with boost than without",
+          LensBlur.apply(hotDot, width: w, height: h, radius: 3, boost: 6, amount: 1)[15 * w + 21].x > LensBlur.apply(hotDot, width: w, height: h, radius: 3, boost: 0, amount: 1)[15 * w + 21].x)
+    check("LNB5 the blur is symmetric about the dot (within 1e-12)", abs(lb[15 * w + 18].x - lb[15 * w + 22].x) < 1e-12 && abs(lb[13 * w + 20].x - lb[17 * w + 20].x) < 1e-12)
+
+    // MOB
+    check("MOB1 length 0 is the identity", MotionBlur.apply(dot, width: w, height: h, length: 0, angleDegrees: 30) == dot)
+    let mb = MotionBlur.apply(dot, width: w, height: h, length: 4, angleDegrees: 0)
+    check("MOB2 a dot becomes a 9-pixel line along x, each pixel 1/9, and the other rows are untouched (within 1e-12)",
+          (16...24).allSatisfy { abs(mb[15 * w + $0].x - 1.0 / 9) < 1e-12 } && mb[15 * w + 25].x < 1e-12 && mb[15 * w + 15].x < 1e-12 && mb[14 * w + 20].x == 0)
+    var total = 0.0
+    for i in mb.indices { total += mb[i].x }
+    check("MOB3 the light is conserved away from the border (sum 1 within 1e-9)", abs(total - 1) < 1e-9, "\(total)")
+    let mbv = MotionBlur.apply(dot, width: w, height: h, length: 3, angleDegrees: 90)
+    check("MOB4 at 90 degrees the dot is spread along y, not x", mbv[12 * w + 20].x > 0.1 && mbv[18 * w + 20].x > 0.1 && mbv[15 * w + 22].x < 1e-12, "\(mbv[12 * w + 20].x)")
+    check("MOB5 a flat picture is unchanged (within 1e-12) and hostile angles stay finite", allGap(MotionBlur.apply(flat, width: w, height: h, length: 5, angleDegrees: 33), flat) < 1e-12
+          && finiteAll(MotionBlur.apply(noisy, width: w, height: h, length: 6, angleDegrees: 1e9)))
+
+    // RDB
+    check("RDB1 amount 0 is the identity", RadialBlur.apply(dot, width: w, height: h, spin: false, amount: 0, centreX: 0.5, centreY: 0.5) == dot)
+    var bigDot = [SIMD3<Double>](repeating: .zero, count: w * h)
+    bigDot[15 * w + 10] = SIMD3(repeating: 1)       // left of the centre at (20, 15): on the horizontal through the centre, 10 px out
+    let zoom = RadialBlur.apply(bigDot, width: w, height: h, spin: false, amount: 1, centreX: 0.5, centreY: 0.5)
+    check("RDB2 a zoom blur smears a dot along the radius (same row), not across it", zoom[15 * w + 11].x > 0.01 && zoom[12 * w + 10].x < zoom[15 * w + 11].x * 0.5, "\(zoom[15 * w + 11].x) \(zoom[12 * w + 10].x)")
+    let spin = RadialBlur.apply(bigDot, width: w, height: h, spin: true, amount: 1, centreX: 0.5, centreY: 0.5)
+    check("RDB3 a spin blur smears the same dot across the radius (along the circle), more than along it", spin[13 * w + 10].x > spin[15 * w + 12].x, "\(spin[13 * w + 10].x) \(spin[15 * w + 12].x)")
+    var atCentre = [SIMD3<Double>](repeating: .zero, count: w * h)
+    atCentre[15 * w + 20] = SIMD3(repeating: 1)
+    check("RDB4 the centre pixel is not moved by a zoom or a spin (within 1e-12)", abs(RadialBlur.apply(atCentre, width: w, height: h, spin: false, amount: 1, centreX: 0.5, centreY: 0.5)[15 * w + 20].x - 1) < 1e-12
+          && abs(RadialBlur.apply(atCentre, width: w, height: h, spin: true, amount: 1, centreX: 0.5, centreY: 0.5)[15 * w + 20].x - 1) < 1e-12)
+    check("RDB5 a flat picture is unchanged (within 1e-12) and reach is positive", allGap(RadialBlur.apply(flat, width: w, height: h, spin: true, amount: 1, centreX: 0.3, centreY: 0.7), flat) < 1e-12 && RadialBlur.reach(width: w, height: h, spin: false, amount: 1) >= 2)
+
+    // DIF
+    check("DIF1 zero iterations is the identity", Diffusion.apply(noisy, width: w, height: h, iterations: 0, threshold: 0.1) == noisy)
+    check("DIF2 a flat picture is unchanged (within 1e-12)", allGap(Diffusion.apply(flat, width: w, height: h, iterations: 8, threshold: 0.1), flat) < 1e-12)
+    let d3 = Diffusion.apply(noisy, width: w, height: h, iterations: 3, threshold: 0.3), d12 = Diffusion.apply(noisy, width: w, height: h, iterations: 12, threshold: 0.3)
+    check("DIF3 noise falls with the iterations (variance noisy > 3 > 12)", variance(noisy) > variance(d3) && variance(d3) > variance(d12), "\(variance(noisy)) \(variance(d3)) \(variance(d12))")
+    let dStep = Diffusion.apply(step, width: w, height: h, iterations: 10, threshold: 0.02)
+    check("DIF4 a big step is kept with a small threshold (the neighbours stay within 5% of their side) while a small step is smoothed",
+          abs(dStep[15 * w + 19].x - 0.1) < 0.05 && abs(dStep[15 * w + 20].x - 0.9) < 0.05)
+    let su = { (a: [SIMD3<Double>]) in a.map { sqrt($0.x) }.reduce(0, +) }
+    check("DIF5 the diffusion conserves the sum of the square-root values (within 1e-9)", abs(su(d12) - su(noisy)) < 1e-9, "\(su(d12)) vs \(su(noisy))")
+
+    // HRM
+    func labC(_ l: Double, _ c: Double, _ hDeg: Double) -> SIMD3<Double> { OkLab.toWorking(SIMD3(l, c * cos(hDeg * .pi / 180), c * sin(hDeg * .pi / 180))) }
+    func hueOf(_ c: SIMD3<Double>) -> Double { OkLab.lch(OkLab.fromWorking(c)).z * 180 / .pi }
+    let tri = ColorHarmony.scheme(1, baseDegrees: 30)
+    check("HRM1 amount 0 is the identity (within 1e-9)", gap(ColorHarmony.apply(labC(0.6, 0.1, 80), hues: tri.hues, halfGap: tri.halfGap, amount: 0), labC(0.6, 0.1, 80)) < 1e-9)
+    let greyH = SIMD3(repeating: 0.3)
+    check("HRM2 greys are untouched (within 1e-9)", gap(ColorHarmony.apply(greyH, hues: tri.hues, halfGap: tri.halfGap, amount: 1), greyH) < 1e-9)
+    let near = ColorHarmony.apply(labC(0.6, 0.1, 40), hues: tri.hues, halfGap: tri.halfGap, amount: 1)
+    check("HRM3 a hue 10 degrees from a scheme hue (30) is pulled toward it, chroma and lightness kept (within 1e-9)",
+          abs(ColorCommon.hueDifference(hueOf(near) * .pi / 180, 30 * .pi / 180)) < abs(ColorCommon.hueDifference(40 * .pi / 180, 30 * .pi / 180))
+          && abs(OkLab.lch(OkLab.fromWorking(near)).y - 0.1) < 1e-9 && abs(OkLab.fromWorking(near).x - 0.6) < 1e-9)
+    let half = ColorHarmony.apply(labC(0.6, 0.1, 90), hues: tri.hues, halfGap: tri.halfGap, amount: 1)
+    check("HRM4 a hue half way to the next scheme hue (90 between 30 and 150) is not moved (within 1e-9)", gap(half, labC(0.6, 0.1, 90)) < 1e-9)
+    let comp = ColorHarmony.scheme(0, baseDegrees: 0), ana = ColorHarmony.scheme(3, baseDegrees: 100)
+    check("HRM5 the schemes: complementary hues are pi apart, a triad has three, analogous hues sit 30 degrees apart with a half gap of 15 degrees",
+          abs((comp.hues[1] - comp.hues[0]) - .pi) < 1e-12 && tri.hues.count == 3 && abs((ana.hues[2] - ana.hues[1]) - .pi / 6) < 1e-12 && abs(ana.halfGap - .pi / 12) < 1e-12)
+
+    // KUW
+    check("KUW1 amount 0 or radius 0 is the identity", Kuwahara.apply(noisy, width: w, height: h, radius: 2, amount: 0) == noisy && Kuwahara.apply(noisy, width: w, height: h, radius: 0, amount: 1) == noisy)
+    check("KUW2 a flat picture is unchanged (within 1e-12)", allGap(Kuwahara.apply(flat, width: w, height: h, radius: 3, amount: 1), flat) < 1e-12)
+    let ku = Kuwahara.apply(step, width: w, height: h, radius: 2, amount: 1)
+    check("KUW3 an edge stays sharp: the pixels beside a step keep their side's value exactly", abs(ku[15 * w + 19].x - 0.1) < 1e-12 && abs(ku[15 * w + 20].x - 0.9) < 1e-12, "\(ku[15 * w + 19].x) \(ku[15 * w + 20].x)")
+    check("KUW4 noise is smoothed (variance under 60%)", variance(Kuwahara.apply(noisy, width: w, height: h, radius: 3, amount: 1)) < 0.6 * variance(noisy))
+    let kh = Kuwahara.apply(noisy, width: w, height: h, radius: 2, amount: 0.5), kf = Kuwahara.apply(noisy, width: w, height: h, radius: 2, amount: 1)
+    check("KUW5 amount 0.5 is halfway between the picture and the full result (within 1e-12)", gap(kh[400], (noisy[400] + kf[400]) / 2) < 1e-12)
+}
+
 print(failures == 0 ? "\nall checks passed" : "\n\(failures) failed")
 exit(failures == 0 ? 0 : 1)

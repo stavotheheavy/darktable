@@ -21,7 +21,7 @@ struct CIModule: Sendable {
     static let fusableOperations: Set<String> = [
         "temperature", "exposure", "colorbalancergb", "channelmixer", "tonecurve", "monochrome", "rgblevels", "splittoning", "display", "invert", "colisa", "velvia", "colorzones", "satcurvergb", "colorbalance", "rgbcurve", "colorcontrast", "colorcorrection", "basecurve", "dither", "colorize", "solarize", "negadoctor", "lowlight", "channelmixerrgb",
         "gradientmap", "crossprocess", "bleachbypass", "photofilter", "channelcurves", "chromalimit", "huerotate", "warmth",
-        "highlightrolloff", "lumabands", "fadelook", "lumacurve", "reinhard", "scurve",
+        "highlightrolloff", "lumabands", "fadelook", "lumacurve", "reinhard", "scurve", "colorharmonizer",
     ]
 
     /// The fused op a fusable module stands for with these values, or nil when the module does nothing at them. This is the one place the
@@ -160,6 +160,12 @@ struct CIModule: Sendable {
         case "scurve":
             let contrast = v["contrast"] ?? 0
             return contrast == 0 ? nil : FusedOp(.sCurve, [Float(SCurve.exponent(contrast: contrast)), Float(v["pivot"] ?? 0.5)])
+        case "colorharmonizer":
+            let amount = v["amount"] ?? 0
+            guard amount != 0 else { return nil }
+            let sch = ColorHarmony.scheme(Int((v["scheme"] ?? 0).rounded()), baseDegrees: v["base"] ?? 0)
+            let hues = (sch.hues + [0, 0, 0, 0]).prefix(4).map { Float($0) }
+            return FusedOp(.colorHarmony, [Float(sch.hues.count)] + hues + [Float(sch.halfGap), Float(amount)])
         case "rgblevels":
             let black = v["black"] ?? 0
             let white = max(v["white"] ?? 1, black + 0.01)
@@ -191,7 +197,7 @@ struct CIModule: Sendable {
     /// Modules that read a neighbourhood (a blur radius, a guided filter, wavelet levels): the expensive ones. The segment cache keeps
     /// the picture after each of them, so a slider moved further down the stack does not run them again.
     static let neighbourhoodOperations: Set<String> = [
-        "sharpen", "denoiseprofile", "bilat", "atrous", "hazeremoval", "zones", "clahe", "soften", "blurs", "lowpass", "censorize", "highpass", "hdrtone", "deconvsharp", "chromadenoise", "mediandenoise", "deband", "skinsmooth", "texturebands", "halation", "caradial", "distortion", "perspective", "tiltshift", "defringe", "bloom", "highlights",
+        "sharpen", "denoiseprofile", "bilat", "atrous", "hazeremoval", "zones", "clahe", "soften", "blurs", "lowpass", "censorize", "highpass", "hdrtone", "deconvsharp", "chromadenoise", "mediandenoise", "deband", "skinsmooth", "texturebands", "halation", "caradial", "distortion", "perspective", "tiltshift", "defringe", "surfaceblur", "lensblur", "motionblur", "radialblur", "diffuse", "kuwahara", "bloom", "highlights",
     ]
 
     /// The display-referred modules: they assume 0...1 values (a curve, levels, a contrast about 0.5, a lift of the shadows) and are
@@ -741,6 +747,55 @@ extension CIModule {
                 try CIBridge.defringe(image, radius: Blur.radius(px: (v["radius"] ?? 4) * (v["_scale"] ?? 1)), strength: v["strength"] ?? 0,
                                       hueDegrees: v["hue"] ?? 320, widthDegrees: v["width"] ?? 40)
             }),
+
+        // Colour harmonizer: each hue pulled toward the nearest hue of a harmony scheme (complementary, triad, tetrad, analogous) from a base hue; chroma and lightness kept.
+        // ColorHarmony in DarkroomCore is the oracle (HRM1-HRM5, E-HRM).
+        CIModule(
+            operation: "colorharmonizer", name: "colour harmonizer", iopOrder: 24, defaultEnabled: false,
+            fields: [field("scheme", 0, 3, 0), field("base", 0, 360, 30), field("amount", 0, 1, 0)],
+            apply: { image, v in try CIModule.applyFused("colorharmonizer", image, v) }),
+
+        // Surface blur: an edge-preserving blur (guided filter guided by luminance) over the whole picture. SurfaceBlur in DarkroomCore is the oracle (SRB1-SRB4, E-SRB).
+        CIModule(
+            operation: "surfaceblur", name: "surface blur", iopOrder: 74, defaultEnabled: false,
+            fields: [field("amount", 0, 1, 0), field("radius", 1, 40, 8), field("threshold", 0.0005, 0.05, 0.004)],
+            apply: { image, v in
+                try CIBridge.surfaceBlur(image, radius: max(Int(((v["radius"] ?? 8) * (v["_scale"] ?? 1)).rounded()), 1), eps: v["threshold"] ?? 0.004, amount: v["amount"] ?? 0)
+            }),
+
+        // Lens blur: a disc blur with bright highlights spread into bokeh discs. LensBlur in DarkroomCore is the oracle (LNB1-LNB5, E-LNB).
+        CIModule(
+            operation: "lensblur", name: "lens blur", iopOrder: 75, defaultEnabled: false,
+            fields: [field("amount", 0, 1, 0), field("radius", 1, 30, 8), field("highlights", 0, 8, 2)],
+            apply: { image, v in
+                try CIBridge.lensBlur(image, radius: max(Int(((v["radius"] ?? 8) * (v["_scale"] ?? 1)).rounded()), 1), boost: v["highlights"] ?? 2, amount: v["amount"] ?? 0)
+            }),
+
+        // Motion blur: the mean of samples along a line. MotionBlur in DarkroomCore is the oracle (MOB1-MOB5, E-MOB).
+        CIModule(
+            operation: "motionblur", name: "motion blur", iopOrder: 76, defaultEnabled: false,
+            fields: [field("length", 0, 100, 0), field("angle", -90, 90, 0)],
+            apply: { image, v in try CIBridge.motionBlur(image, length: Int(((v["length"] ?? 0) * (v["_scale"] ?? 1)).rounded()), angleDegrees: v["angle"] ?? 0) }),
+
+        // Radial blur: a zoom or a spin about a centre point. RadialBlur in DarkroomCore is the oracle (RDB1-RDB5, E-RDB).
+        CIModule(
+            operation: "radialblur", name: "radial blur (zoom or spin)", iopOrder: 77, defaultEnabled: false,
+            fields: [field("amount", 0, 1, 0), field("spin", 0, 1, 0), field("centre_x", 0, 1, 0.5), field("centre_y", 0, 1, 0.5)],
+            apply: { image, v in
+                try CIBridge.radialBlur(image, spin: (v["spin"] ?? 0) >= 0.5, amount: v["amount"] ?? 0, centreX: v["centre_x"] ?? 0.5, centreY: v["centre_y"] ?? 0.5)
+            }),
+
+        // Diffusion: Perona-Malik anisotropic diffusion on the square root of the scene value. Diffusion in DarkroomCore is the oracle (DIF1-DIF5, E-DIF).
+        CIModule(
+            operation: "diffuse", name: "diffuse (anisotropic)", iopOrder: 78, defaultEnabled: false,
+            fields: [field("iterations", 0, 30, 0), field("threshold", 0.01, 0.5, 0.1)],
+            apply: { image, v in try CIBridge.diffuse(image, iterations: Int((v["iterations"] ?? 0).rounded()), threshold: v["threshold"] ?? 0.1) }),
+
+        // Kuwahara: the painterly edge-preserving smoother. Kuwahara in DarkroomCore is the oracle (KUW1-KUW5, E-KUW).
+        CIModule(
+            operation: "kuwahara", name: "painterly (Kuwahara)", iopOrder: 79, defaultEnabled: false,
+            fields: [field("amount", 0, 1, 0), field("radius", 1, 8, 3)],
+            apply: { image, v in try CIBridge.kuwahara(image, radius: max(Int(((v["radius"] ?? 3) * (v["_scale"] ?? 1)).rounded()), 1), amount: v["amount"] ?? 0) }),
 
         // Split toning: a shadows tint and a highlights tint in OkLab, each with its own hue and saturation,
         // split at a balance pivot. Checked by ST1-ST7 (darkroom-core-check), splitBuf (darkroom-metal-check)

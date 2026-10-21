@@ -791,5 +791,14 @@ do {
                        oracle: { SCurve.apply($0, contrast: 0.6, pivot: Double(Float(0.45))) })
 }
 
+// colour harmonizer on Metal against ColorHarmony
+do {
+    let sch = ColorHarmony.scheme(1, baseDegrees: 100)
+    let u: [Float] = [3] + (sch.hues + [0]).map { Float($0) } + [Float(sch.halfGap), 0.8]
+    let hF = (0..<3).map { Double(u[1 + $0]) }
+    metalPerPixelCheck("HRM-M colour harmonizer", source: MetalColorHarmony.source, function: "colorharmonyBuf", uniforms: u, tolerance: 1e-3,
+                       oracle: { ColorHarmony.apply($0, hues: hF, halfGap: Double(Float(sch.halfGap)), amount: Double(Float(0.8))) })
+}
+
 print(failures == 0 ? "\nall Metal checks passed" : "\n\(failures) failed")
 exit(failures == 0 ? 0 : 1)
