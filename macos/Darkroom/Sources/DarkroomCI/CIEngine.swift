@@ -47,6 +47,9 @@ public actor CIEngine: PhotoEngine {
     private var session: Session?
     private var clippingOverlay = false
     private var maskRasters: [String: MaskRaster] = [:]
+    /// Whether session renders start from the engine's owned decode texture (on); off asks the decoder at each size, as before. For the
+    /// self-test's comparison of the two (T9).
+    private var ownedDecodeOn = true
     /// Bumped whenever the mask pictures are replaced: a raster mask's pixels are not in the stack entry.
     private var maskRasterRevision = 0
 
@@ -281,6 +284,9 @@ public actor CIEngine: PhotoEngine {
         return try Self.process(image, stack, camera: camera, scale: scale, rasters: maskRasters, segments: segments, fuse: Self.fusionEnabled)
     }
 
+    /// The owned decode texture is on unless DARKROOM_NO_OWNED_DECODE is set (to compare against the decoder's own reduced-size decode).
+    static let ownedDecodeEnabled = ProcessInfo.processInfo.environment["DARKROOM_NO_OWNED_DECODE"] == nil
+
     /// Fused per-pixel passes are on unless DARKROOM_NO_FUSE is set (to time or debug the one-pass-per-module path).
     static let fusionEnabled = ProcessInfo.processInfo.environment["DARKROOM_NO_FUSE"] == nil
 
@@ -474,7 +480,9 @@ public actor CIEngine: PhotoEngine {
     /// caching of `CIRAWFilter.outputImage`. A draft (`scale` under 1) is that same picture averaged down, never a second decode; a larger
     /// scale (zoomed regions) asks the decoder directly, as before.
     private func ownedDecode(_ s: Session, scale: Double, stack: [StackEntry]) throws -> CIImage {
-        guard let cache = segmentCache, scale <= 1.001, scale > 0, scale.isFinite else { return try decode(s, scale: s.fit * scale, stack: stack) }
+        guard let cache = segmentCache, ownedDecodeOn, Self.ownedDecodeEnabled, scale <= 1.001, scale > 0, scale.isFinite else {
+            return try decode(s, scale: s.fit * scale, stack: stack)
+        }
         let key = "\(s.id)|decode|\(s.fit)|\(Self.wantsSceneLinear(stack))"
         let full: CIImage
         if let kept = cache.lookup(key) { full = kept } else { full = cache.store(try decode(s, scale: s.fit, stack: stack), key: key) }
@@ -485,6 +493,8 @@ public actor CIEngine: PhotoEngine {
             .transformed(by: CGAffineTransform(scaleX: w / e.width, y: h / e.height))
             .cropped(to: CGRect(x: e.minX * w / e.width, y: e.minY * h / e.height, width: w, height: h))
     }
+
+    public func setOwnedDecode(_ on: Bool) { ownedDecodeOn = on; segmentCache?.clear() }
 
     /// What the segment cache holds: for the self-test, which checks the decode runs once and drafts do not decode again.
     public func segmentCacheInfo() -> (entries: Int, hits: Int, misses: Int) {
