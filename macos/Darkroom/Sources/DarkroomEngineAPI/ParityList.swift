@@ -40,7 +40,7 @@ public enum ParityList {
     """.split(whereSeparator: { $0 == " " || $0 == "\n" }).map(String.init)
 
     /// Modules of ours that darktable does not have under that name.
-    public static let ownModules: [String] = ["display", "graduated", "radiallight", "zones"]
+    public static let ownModules: [String] = ["display", "graduated", "radiallight", "zones", "solarize"]
 
     public static let entries: [ParityEntry] = {
         func e(_ op: String, _ s: ParityStatus, _ note: String = "") -> ParityEntry { ParityEntry(operation: op, status: s, note: note) }
@@ -75,12 +75,12 @@ public enum ParityList {
             e("highlights", .exact, "off by default: measured 2026-10-20 (dtb-selftest --highlight-probe, 180 raws), Apple's decoder leaves clipped highlights neutral in 24 of the 28 photos with a clip, so this is for the files where it does not"),
             e("colorequal", .covered(by: "colorzones")),
             e("colorzones", .exact, "eight hue bands, each with a hue shift, a saturation change and a lightness change in OkLab, blended smoothly between neighbours; greys untouched"), e("satcurvergb", .exact, "saturation by lightness: shadows, mids and highlights each get a saturation change, blended smoothly over OkLab lightness"),
-            e("lut3d", .planned("Core Image CIColorCube is the natural base")), e("grain", .planned()), e("lowlight", .planned()),
+            e("lut3d", .planned("Core Image CIColorCube is the natural base")), e("grain", .planned()), e("lowlight", .exact, "a Purkinje-shift model: dim parts mixed toward a cool scotopic grey; a model, not a measured transform"),
             e("highpass", .planned("the S5 bases make it small")), e("diffuse", .planned("sharpen and denoise as diffusion; large")),
             e("retouch", .planned("healing needs PatchMatch")), e("liquify", .planned("warp mesh")),
             e("lens", .planned("lens correction needs our own calibration tool, not lensfun data")), e("colorchecker", .planned()),
             e("cacorrectrgb", .planned("chromatic aberration")), e("colorreconstruct", .planned("highlight colour reconstruction")),
-            e("primaries", .planned("colour primaries rotation")), e("negadoctor", .planned("film negative inversion")),
+            e("primaries", .planned("colour primaries rotation")), e("negadoctor", .exact, "a scanned negative to positive from its film-base colour: E = exposure x (Dmin / T)^gamma - black"),
             e("defringe", .planned()),
             // left out
             e("rawprepare", .dropped("Core Image's RAW decoder does this")), e("demosaic", .dropped("Core Image's RAW decoder")),
@@ -97,9 +97,10 @@ public enum ParityList {
             e("filmic", .dropped("deprecated in darktable; filmicrgb replaced it")), e("levels", .dropped("deprecated in darktable; rgblevels replaces it")),
             e("zonesystem", .dropped("deprecated in darktable")), e("globaltonemap", .dropped("deprecated in darktable")),
             e("vibrance", .dropped("deprecated in darktable; colorbalancergb has vibrance")),
-            e("channelmixerrgb", .planned("the calibration-matrix mixer; channelmixer covers the plain 3x3 case")),
+            e("channelmixerrgb", .exact, "chromatic adaptation (Bradford) from a black-body illuminant to D65, then the mixer's 3x3"),
             e("colorharmonizer", .planned()), e("colorbalance", .exact, "shadows, midtones and highlights each with a tint and a brightness: the ASC CDL offset, power (about scene white) and slope on scene-linear values"),
             // ours
+            e("solarize", .exact, "not a darktable module: tones above a threshold mirrored about it on the encoded value, the Sabattier effect"),
             e("display", .exact, "not a darktable module: the scene-referred display transform, with an HDR peak"),
             e("graduated", .exact, "not a darktable module: an exposure change through a soft linear gradient, for a sky or a foreground"),
             e("radiallight", .exact, "not a darktable module: an exposure change through a soft ellipse, inside or around it"),

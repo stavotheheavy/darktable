@@ -2458,5 +2458,74 @@ do {
           Mosaic.block(pixelation: 24, scale: 0.5) == 12 && Mosaic.block(pixelation: 1, scale: 0.1) == 1 && Mosaic.block(pixelation: 100, scale: 9) == 400 && Mosaic.block(pixelation: .nan, scale: 1) == 1)
 }
 
+// SOL solarize, NEG film negative, LLT low light, CMX channel mixer with adaptation
+do {
+    func swatch(_ i: Int) -> SIMD3<Double> {
+        let t = Double(i) / 4095, h = t * 37 * 2 * .pi, v = 0.002 + 0.95 * t
+        return SIMD3(v * (0.6 + 0.4 * cos(h)), v * (0.6 + 0.4 * cos(h - 2.1)), v * (0.6 + 0.4 * cos(h + 2.1)))
+    }
+    func enc(_ v: Double) -> Double { Transfer.linearToSRGB(v) }
+    func lin(_ e: Double) -> Double { Transfer.srgbToLinear(e) }
+    var idSol = 0.0
+    for i in 0..<4096 { let c = swatch(i), o = Solarize.apply(c, threshold: 0.4, strength: 0); for k in 0..<3 { idSol = max(idSol, abs(o[k] - c[k]) / abs(c[k])) } }
+    check("SOL1 strength 0 is the identity within 1e-9 relative", idSol < 1e-9, "\(idSol)")
+    let sol = Solarize.apply(SIMD3(lin(0.8), lin(0.3), lin(0.5)), threshold: 0.5, strength: 1)
+    check("SOL2 threshold 0.5, strength 1: encoded 0.8 folds to 0.2, 0.3 and 0.5 are kept (within 1e-9)",
+          abs(enc(sol.x) - 0.2) < 1e-9 && abs(enc(sol.y) - 0.3) < 1e-9 && abs(enc(sol.z) - 0.5) < 1e-9, "\(enc(sol.x)) \(enc(sol.y)) \(enc(sol.z))")
+    let a = Solarize.apply(SIMD3(repeating: lin(0.5 - 1e-6)), threshold: 0.5, strength: 1).x, b = Solarize.apply(SIMD3(repeating: lin(0.5 + 1e-6)), threshold: 0.5, strength: 1).x
+    check("SOL3 the fold is continuous at the threshold (within 1e-5)", abs(a - b) < 1e-5, "\(a) \(b)")
+    let half = Solarize.apply(SIMD3(repeating: lin(0.8)), threshold: 0.5, strength: 0.5)
+    check("SOL4 strength 0.5 is halfway between the tone and its fold (encoded 0.5, within 1e-9)", abs(enc(half.x) - 0.5) < 1e-9, "\(enc(half.x))")
+    let wild = Solarize.apply(SIMD3(-1, 7, .nan), threshold: 0.5, strength: 1)
+    check("SOL5 below black, above white and NaN stay finite and in 0...1", [wild.x, wild.y, wild.z].allSatisfy { $0.isFinite && $0 >= 0 && $0 <= 1 }, "\(wild)")
+
+    let dmin = SIMD3(0.8, 0.5, 0.35)
+    let base = NegativeFilm.apply(dmin, dmin: dmin, gamma: 1.6, exposure: 0.2, black: 0)
+    check("NEG1 the film base itself reads as exposure 0.2 on every channel (within 1e-9)", abs(base.x - 0.2) < 1e-9 && abs(base.y - 0.2) < 1e-9 && abs(base.z - 0.2) < 1e-9, "\(base)")
+    let two = NegativeFilm.apply(dmin / 2, dmin: dmin, gamma: 2, exposure: 1, black: 0)
+    check("NEG2 half the film-base transmission with gamma 2 is 4x the exposure (within 1e-9)", abs(two.x - 4) < 1e-9, "\(two)")
+    var falling = true, prev = Double.infinity
+    for i in 1...200 { let e = NegativeFilm.apply(SIMD3(repeating: Double(i) / 200), dmin: dmin, gamma: 1.6, exposure: 0.2, black: 0).x; falling = falling && e <= prev; prev = e }
+    check("NEG3 a denser (darker) scan gives more light: the result falls as the scan brightens", falling)
+    let blk = NegativeFilm.apply(dmin, dmin: dmin, gamma: 1.6, exposure: 0.2, black: 0.5)
+    check("NEG4 the black offset never takes the light below 0", blk.x == 0 && blk.y == 0 && blk.z == 0, "\(blk)")
+    let wildN = NegativeFilm.apply(SIMD3(0, -1, .nan), dmin: dmin, gamma: 1.6, exposure: 0.2, black: 0)
+    check("NEG5 a black, negative or NaN scan value stays finite", [wildN.x, wildN.y, wildN.z].allSatisfy { $0.isFinite }, "\(wildN)")
+
+    // NEG6 a negative made from known light, then inverted, gives the light back: T = Dmin * (E / exposure)^(-1/gamma)
+    var roundTrip = 0.0
+    for i in 1...200 {
+        let e = SIMD3(Double(i) / 100, Double(i) / 150, Double(i) / 300)
+        let t = SIMD3(dmin.x * pow(e.x / 0.2, -1 / 1.6), dmin.y * pow(e.y / 0.2, -1 / 1.6), dmin.z * pow(e.z / 0.2, -1 / 1.6))
+        let back = NegativeFilm.apply(t, dmin: dmin, gamma: 1.6, exposure: 0.2, black: 0)
+        for k in 0..<3 where t[k] >= NegativeFilm.floor { roundTrip = max(roundTrip, abs(back[k] - e[k]) / e[k]) }
+    }
+    check("NEG6 a negative simulated from known light is inverted back to it (within 1e-9 relative)", roundTrip < 1e-9, "\(roundTrip)")
+    check("LLT1 strength 0 is the identity", LowLight.apply(SIMD3(0.01, 0.02, 0.03), strength: 0) == SIMD3(0.01, 0.02, 0.03))
+    let bright = SIMD3(0.9, 0.5, 0.4)
+    check("LLT2 a bright pixel (luminance over 0.25) is untouched", LowLight.apply(bright, strength: 1) == bright)
+    let dim = SIMD3(0.04, 0.004, 0.004), dimOut = LowLight.apply(dim, strength: 1)
+    check("LLT3 a dim red loses red and gains blue (the shift toward blue-green)", dimOut.x < dim.x && dimOut.z > dim.z, "\(dimOut)")
+    check("LLT4 the effect is monotone in strength", LowLight.apply(dim, strength: 0.5).x > dimOut.x && LowLight.apply(dim, strength: 0.5).x < dim.x)
+    check("LLT5 black stays black and a hostile pixel stays finite", LowLight.apply(.zero, strength: 1) == .zero && LowLight.apply(SIMD3(-0.1, 0.2, 0.0), strength: 1).x.isFinite)
+
+    let k65 = ChannelMixerRGB.illuminantXY(kelvin: 6500), k40 = ChannelMixerRGB.illuminantXY(kelvin: 4000), k50 = ChannelMixerRGB.illuminantXY(kelvin: 5000)
+    func within(_ p: SIMD2<Double>, _ x: Double, _ y: Double) -> Bool { abs(p.x - x) < 0.002 && abs(p.y - y) < 0.002 }
+    let locusOK = within(k65, 0.3135, 0.3237) && within(k50, 0.3451, 0.3516) && within(k40, 0.3805, 0.3768)
+    check("CMX1 the Planckian locus: 6500 K (0.3135, 0.3237), 5000 K (0.3451, 0.3516), 4000 K (0.3805, 0.3768) within 0.002", locusOK, "\(k65) \(k50) \(k40)")
+    let ident = [[1.0, 0, 0], [0, 1, 0], [0, 0, 1]]
+    check("CMX2 strength 0 (or NaN) is the identity matrix", ChannelMixerRGB.matrix(kelvin: 3000, strength: 0, rows: ident) == ident && ChannelMixerRGB.matrix(kelvin: 3000, strength: .nan, rows: ident) == ident)
+    let white = ColorSpaces.workingToXYZ.inverse()!.apply(ChannelMixerRGB.xyz(ChannelMixerRGB.illuminantXY(kelvin: 3200)))
+    let adapted = ChannelMixerRGB.adaptation(kelvin: 3200).apply(white)
+    let d65w = ColorSpaces.workingToXYZ.inverse()!.apply(ChannelMixerRGB.xyz(ChannelMixerRGB.d65))
+    let whiteGap = max(abs(adapted.x - d65w.x), abs(adapted.y - d65w.y), abs(adapted.z - d65w.z))
+    check("CMX3 the illuminant's own white maps to D65 white (within 1e-9)", whiteGap < 1e-9, "\(adapted) vs \(d65w)")
+    let warm = ChannelMixerRGB.matrix(kelvin: 3000, strength: 1, rows: ident)
+    check("CMX4 a warm (3000 K) illuminant is corrected by more blue gain than red gain", warm[2][2] > warm[0][0], "\(warm)")
+    let swap = [[0.0, 1, 0], [1, 0, 0], [0, 0, 1]]
+    check("CMX5 the mixer rows apply after the adaptation: at strength 0 a red-green swap is the swap itself", ChannelMixerRGB.matrix(kelvin: 5000, strength: 0, rows: swap) == swap)
+    check("CMX6 a temperature outside 1667...25000 or NaN is held to it (finite)", ChannelMixerRGB.illuminantXY(kelvin: 100).x.isFinite && ChannelMixerRGB.illuminantXY(kelvin: 1e9).y.isFinite && ChannelMixerRGB.illuminantXY(kelvin: .nan).x.isFinite)
+}
+
 print(failures == 0 ? "\nall checks passed" : "\n\(failures) failed")
 exit(failures == 0 ? 0 : 1)

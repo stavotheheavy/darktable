@@ -19,7 +19,7 @@ struct CIModule: Sendable {
     /// The modules whose work is one pixel in, one pixel out, on our own Metal functions: a run of them is one pass over the frame
     /// (see MetalFused). The engine fuses them when they are unmasked and at full opacity.
     static let fusableOperations: Set<String> = [
-        "temperature", "exposure", "colorbalancergb", "channelmixer", "tonecurve", "monochrome", "rgblevels", "splittoning", "display", "invert", "colisa", "velvia", "colorzones", "satcurvergb", "colorbalance", "rgbcurve", "colorcontrast", "colorcorrection", "basecurve", "dither", "colorize",
+        "temperature", "exposure", "colorbalancergb", "channelmixer", "tonecurve", "monochrome", "rgblevels", "splittoning", "display", "invert", "colisa", "velvia", "colorzones", "satcurvergb", "colorbalance", "rgbcurve", "colorcontrast", "colorcorrection", "basecurve", "dither", "colorize", "solarize", "negadoctor", "lowlight", "channelmixerrgb",
     ]
 
     /// The fused op a fusable module stands for with these values, or nil when the module does nothing at them. This is the one place the
@@ -90,6 +90,22 @@ struct CIModule: Sendable {
             let strength = v["strength"] ?? 0
             let t = Colorize.tint(hue: v["hue"] ?? 0)
             return strength == 0 ? nil : FusedOp(.colorize, [Float(strength), Float(t.x), Float(t.y)])
+        case "solarize":
+            let strength = v["strength"] ?? 0
+            return strength == 0 ? nil : FusedOp(.solarize, [Float(v["threshold"] ?? 0.5), Float(strength)])
+        case "negadoctor":
+            return FusedOp(.negadoctor, [Float(v["dmin_r"] ?? 0.8), Float(v["dmin_g"] ?? 0.5), Float(v["dmin_b"] ?? 0.35),
+                                         Float(v["gamma"] ?? 1.6), Float(v["exposure"] ?? 0.2), Float(v["black"] ?? 0)])
+        case "lowlight":
+            let strength = v["strength"] ?? 0
+            return strength == 0 ? nil : FusedOp(.lowLight, [Float(strength)])
+        case "channelmixerrgb":
+            let names = ["red_r", "red_g", "red_b", "green_r", "green_g", "green_b", "blue_r", "blue_g", "blue_b"]
+            let identity: [Double] = [1, 0, 0, 0, 1, 0, 0, 0, 1]
+            let rows = (0..<3).map { r in (0..<3).map { c in v[names[r * 3 + c]] ?? identity[r * 3 + c] } }
+            let m = ChannelMixerRGB.matrix(kelvin: v["temperature"] ?? 6500, strength: v["strength"] ?? 0, rows: rows)
+            let u = m.flatMap { $0 }.map { Float($0) }
+            return u == identity.map { Float($0) } ? nil : FusedOp(.channelMixer, u)
         case "rgblevels":
             let black = v["black"] ?? 0
             let white = max(v["white"] ?? 1, black + 0.01)
@@ -130,7 +146,7 @@ struct CIModule: Sendable {
     /// `invert` is raw-level negative inversion and stays early; `bloom` is glow from over-bright light, a scene-light effect. Checked, module by module, by darkroom-engine-check E-DOM.
     static let displayReferredOperations: Set<String> = [
         "tonecurve", "rgblevels", "rgbcurve", "basecurve", "colisa", "colorcorrection", "colorcontrast", "velvia", "shadhi",
-        "relight", "dither", "colorize", "clahe", "splittoning",
+        "relight", "dither", "colorize", "clahe", "splittoning", "solarize",
         // a negative is of what is on screen: complemented before the tone map, the dark scene values come out bright and the picture washes out
         "invert",
     ]
@@ -431,6 +447,36 @@ extension CIModule {
                 [field("\(r)_hue", 0, 360, 0), field("\(r)_sat", 0, 1, 0), field("\(r)_lum", -1, 1, 0)]
             },
             apply: { image, v in try CIModule.applyFused("colorbalance", image, v) }),
+
+        // Solarize: tones above a threshold mirrored about it, on the encoded value (the Sabattier effect). Solarize in DarkroomCore is the
+        // oracle (SOL1-SOL5, solarizeBuf in darkroom-metal-check, E-SOL in darkroom-engine-check).
+        CIModule(
+            operation: "solarize", name: "solarize", iopOrder: 59, defaultEnabled: false,
+            fields: [field("threshold", 0, 1, 0.5), field("strength", 0, 1, 0)],
+            apply: { image, v in try CIModule.applyFused("solarize", image, v) }),
+
+        // Negadoctor: a scanned colour negative turned positive from its density, E = exposure * (Dmin / T)^gamma - black, per channel, on
+        // scene-linear values. NegativeFilm in DarkroomCore is the oracle (NEG1-NEG5, negadoctorBuf, E-NEG).
+        CIModule(
+            operation: "negadoctor", name: "film negative", iopOrder: 6, defaultEnabled: false,
+            fields: [field("dmin_r", 0.02, 1, 0.8), field("dmin_g", 0.02, 1, 0.5), field("dmin_b", 0.02, 1, 0.35),
+                     field("gamma", 0.3, 4, 1.6), field("exposure", 0.02, 8, 0.2), field("black", -0.2, 0.2, 0)],
+            apply: { image, v in try CIModule.applyFused("negadoctor", image, v) }),
+
+        // Low light: a Purkinje-shift model, dim parts mixed toward a cool scotopic grey. LowLight in DarkroomCore is the oracle
+        // (LLT1-LLT5, lowlightBuf, E-LLT).
+        CIModule(
+            operation: "lowlight", name: "low light", iopOrder: 44, defaultEnabled: false,
+            fields: [field("strength", 0, 1, 0)],
+            apply: { image, v in try CIModule.applyFused("lowlight", image, v) }),
+
+        // Channel mixer with chromatic adaptation: the mixer's 3x3 after an adaptation from a black-body illuminant of the given temperature
+        // to D65 (Bradford), blended by the strength. ChannelMixerRGB in DarkroomCore is the oracle (CMX1-CMX6, E-CMX); it runs on the mixer kernel.
+        CIModule(
+            operation: "channelmixerrgb", name: "channel mixer (adaptation)", iopOrder: 15, defaultEnabled: false,
+            fields: [field("temperature", 1700, 25000, 6500), field("strength", 0, 1, 0)]
+                + ["red_r", "red_g", "red_b", "green_r", "green_g", "green_b", "blue_r", "blue_g", "blue_b"].enumerated().map { i, n in field(n, -2, 2, i % 4 == 0 ? 1 : 0) },
+            apply: { image, v in try CIModule.applyFused("channelmixerrgb", image, v) }),
 
         // Split toning: a shadows tint and a highlights tint in OkLab, each with its own hue and saturation,
         // split at a balance pivot. Checked by ST1-ST7 (darkroom-core-check), splitBuf (darkroom-metal-check)

@@ -791,7 +791,7 @@ do {
         if gap(engineOrder, after) > 1e-4 { wrong.append("\(c.operation) \(gap(engineOrder, after))") }
         if gap(engineOrder, before) < 4.0 / 255 { commute.append(c.operation) }
     }
-    check("E-DOM all \(order.count) display-referred modules run after the display transform", wrong.isEmpty && order.count == 15, "\(wrong)")
+    check("E-DOM all \(order.count) display-referred modules run after the display transform", wrong.isEmpty && order.count == 16, "\(wrong)")
     check("E-DOM for each of them the other order gives a visibly different picture (those that do not: \(commute))", commute.isEmpty, "\(commute)")
     check("E-DOM zones and the scene modules are not in the display set", !CIEngineProbe.displayReferredOperations.contains("zones")
           && !CIEngineProbe.displayReferredOperations.contains("exposure") && !CIEngineProbe.displayReferredOperations.contains("bloom") && !CIEngineProbe.displayReferredOperations.contains("colorbalancergb"))
@@ -1728,6 +1728,31 @@ do {
     let mosSeams = detailSeams(mosStack, oracle: mosWant)
     check("E-MSC-seam censorize renders the same in a region as in the full frame", mosSeams.ok, "seam \(mosSeams.seam), full vs oracle \(mosSeams.fullVsOracle)")
     check("E-MSC-zero pixelation 1 returns the input untouched", runDetail([StackEntry(operation: "censorize", params: [:])]) == detailPx)
+}
+
+// E-SOL solarize, E-NEG negadoctor, E-LLT low light, E-CMX channel mixer with adaptation: the fused kernels through the engine against their oracles
+do {
+    let solEngine = run([StackEntry(operation: "solarize", params: ["threshold": .number(0.45), "strength": .number(0.8)])])
+    let solOracle = scene.map { Solarize.apply($0, threshold: 0.45, strength: 0.8) }
+    check("E-SOL solarize matches the oracle within 1/255", worst(solEngine, solOracle) < tol, "\(worst(solEngine, solOracle))")
+    let negEngine = run([StackEntry(operation: "negadoctor", params: ["dmin_r": .number(0.8), "dmin_g": .number(0.5), "dmin_b": .number(0.35),
+                                                                      "gamma": .number(1.6), "exposure": .number(0.2), "black": .number(0.01)])])
+    let negOracle = scene.map { NegativeFilm.apply($0, dmin: SIMD3(0.8, 0.5, 0.35), gamma: 1.6, exposure: 0.2, black: 0.01) }
+    check("E-NEG negadoctor matches the oracle within 1/255", worst(negEngine, negOracle) < tol, "\(worst(negEngine, negOracle))")
+    let llEngine = run([StackEntry(operation: "lowlight", params: ["strength": .number(0.8)])])
+    let llOracle = scene.map { LowLight.apply($0, strength: 0.8) }
+    check("E-LLT low light matches the oracle within 1/255 and unclamped within 1e-4", worst(llEngine, llOracle) < tol && worstLinear(llEngine, llOracle) < 1e-4,
+          "encoded \(worst(llEngine, llOracle)), linear \(worstLinear(llEngine, llOracle))")
+    let cmRows: [[Double]] = [[1, 0.1, 0], [0, 1, 0.05], [0.02, 0, 1]]
+    var cmParams: [String: ParamValue] = ["temperature": .number(3200), "strength": .number(0.9)]
+    let cmNames = ["red_r", "red_g", "red_b", "green_r", "green_g", "green_b", "blue_r", "blue_g", "blue_b"]
+    for (i, n) in cmNames.enumerated() { cmParams[n] = .number(cmRows[i / 3][i % 3]) }
+    let cmM = ChannelMixerRGB.matrix(kelvin: 3200, strength: 0.9, rows: cmRows)
+    let cmEngine = run([StackEntry(operation: "channelmixerrgb", params: cmParams)])
+    let cmOracle = scene.map { ChannelMixer.apply($0, rows: cmM) }
+    check("E-CMX channel mixer with adaptation matches the oracle within 1/255 and unclamped within 1e-4", worst(cmEngine, cmOracle) < tol && worstLinear(cmEngine, cmOracle) < 1e-4,
+          "encoded \(worst(cmEngine, cmOracle)), linear \(worstLinear(cmEngine, cmOracle))")
+    check("E-CMX zero strength and identity rows change nothing", worstLinear(run([StackEntry(operation: "channelmixerrgb", params: [:])]), scene) < 1e-4)
 }
 
 print(failures == 0 ? "\nall checks passed" : "\n\(failures) failed")

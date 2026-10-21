@@ -731,5 +731,13 @@ let cozTint = Colorize.tint(hue: 0.35)
 metalPerPixelCheck("COZ-M colorize", source: MetalColorize.source, function: "colorizeBuf", uniforms: [0.7, Float(cozTint.x), Float(cozTint.y)], tolerance: 1e-4,
                    oracle: { Colorize.apply($0, strength: Double(Float(0.7)), hue: 0.35) })
 
+// solarize, negadoctor and low light on Metal against their oracles
+metalPerPixelCheck("SOL-M solarize", source: MetalSolarize.source, function: "solarizeBuf", uniforms: [0.45, 0.8], tolerance: 1e-4,
+                   oracle: { Solarize.apply($0, threshold: Double(Float(0.45)), strength: Double(Float(0.8))) })
+metalPerPixelCheck("NEG-M negadoctor", source: MetalNegativeFilm.source, function: "negadoctorBuf", uniforms: [0.8, 0.5, 0.35, 1.6, 0.2, 0.01], tolerance: 1e-4,
+                   oracle: { NegativeFilm.apply($0, dmin: SIMD3(Double(Float(0.8)), Double(Float(0.5)), Double(Float(0.35))), gamma: Double(Float(1.6)), exposure: Double(Float(0.2)), black: Double(Float(0.01))) })
+metalPerPixelCheck("LLT-M low light", source: MetalLowLight.source, function: "lowlightBuf", uniforms: [0.8], tolerance: 1e-4,
+                   oracle: { LowLight.apply($0, strength: Double(Float(0.8))) })
+
 print(failures == 0 ? "\nall Metal checks passed" : "\n\(failures) failed")
 exit(failures == 0 ? 0 : 1)
