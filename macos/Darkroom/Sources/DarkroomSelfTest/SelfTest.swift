@@ -1925,6 +1925,32 @@ struct SelfTest {
             skip("default stack", "the defaults are the clean engine's")
         }
 
+        print("auto white balance")
+        await reopened.preparePro()
+        if engine is CIEngine, let wbM = reopened.modules.first(where: { $0.operation == "temperature" }), let wbS = reopened.schema(for: wbM),
+           let fr = wbS.fields.first(where: { $0.name == "red" }), let fg = wbS.fields.first(where: { $0.name == "green" }),
+           let fb = wbS.fields.first(where: { $0.name == "blue" }) {
+            await reopened.settle()
+            let gains = await reopened.measureAutoWhiteBalance()
+            check(gains?.count == 3 && gains![1] == 1 && gains!.allSatisfy { $0.isFinite && $0 >= 0.25 && $0 <= 4 },
+                  "AWB1 the engine measures three finite gains with green at 1 (\(gains.map { $0.map { String(format: "%.3f", $0) }.joined(separator: " ") } ?? "nil"))")
+            let startIndex = reopened.historyIndex
+            let before = (reopened.value(wbM, fr).double, reopened.value(wbM, fb).double)
+            await reopened.autoWhiteBalance()
+            await reopened.settle()
+            if let g = gains, let r0 = before.0, let b0 = before.1 {
+                let r1 = reopened.value(wbM, fr).double, b1 = reopened.value(wbM, fb).double, g1 = reopened.value(wbM, fg).double
+                check(abs((r1 ?? 0) - r0 * g[0]) < 1e-9 && abs((b1 ?? 0) - b0 * g[2]) < 1e-9 && abs((g1 ?? 0) - 1) < 1e-9,
+                      "AWB2 the button writes the measured gains into white balance (red \(r0) to \(r1 ?? -1), blue \(b0) to \(b1 ?? -1))")
+                check(reopened.historyIndex == startIndex + 1, "AWB3 the whole change is one history step")
+                reopened.undo()
+                await reopened.settle()
+                check(reopened.value(wbM, fr).double == r0 && reopened.value(wbM, fb).double == b0, "AWB4 undo restores the white balance")
+            } else { check(false, "AWB2 the gains and the module's values are there") }
+        } else {
+            skip("auto white balance", "it is the clean engine's")
+        }
+
         print("viewport size")
         check(DarkroomModel.workingSize(forScreenLongSide: 1440) == 1600 && DarkroomModel.workingSize(forScreenLongSide: 3024) == 2419
               && DarkroomModel.workingSize(forScreenLongSide: 6016) == 3200 && DarkroomModel.workingSize(forScreenLongSide: .nan) == 1600

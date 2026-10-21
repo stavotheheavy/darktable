@@ -25,6 +25,8 @@ public protocol PhotoEngine: Actor {
     /// The display-linear peak of presented frames: 1 (the default) is SDR, a larger value renders the HDR version the display transform makes
     /// for that much headroom. Engines that cannot present frames ignore it.
     func setPreviewPeak(_ peak: Double) async
+    /// Grey-world white balance gains (red, green, blue) for the open photo, or nil when the engine cannot measure them.
+    func sessionAutoWhiteBalance() async throws -> [Double]?
     func sessionInfo() async -> SessionInfo?
     /// The camera's embedded preview of the open image, at the working size. Shown first
     /// while the full render is still coming; nil when the engine has none to offer.
@@ -71,6 +73,7 @@ extension PhotoEngine {
 
 public extension PhotoEngine {
     func setPreviewPeak(_ peak: Double) async {}
+    func sessionAutoWhiteBalance() async throws -> [Double]? { nil }
     func sessionRenderPresentable(stack: [StackEntry], scale: Double) async throws -> PresentedFrame? { nil }
     func sessionRenderRegionPresentable(stack: [StackEntry], scale: Double, x: Int, y: Int,
                                         width: Int, height: Int) async throws -> PresentedFrame? { nil }

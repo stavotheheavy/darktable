@@ -344,6 +344,7 @@ public final class Rig {
                     w.setFrameOrigin(NSPoint(x: s.frame.minX + 40, y: s.frame.minY + 40)); w.makeKeyAndOrderFront(nil)
                 }
             case "activate": NSApp.activate(ignoringOtherApps: true); window?.makeKeyAndOrderFront(nil)
+            case "awb": Task { await model.autoWhiteBalance() }
             case "testcard:on": model.setTestCard(true)
             case "testcard:off": model.setTestCard(false)
             case "hdr:on": model.setHDRPreview(true)

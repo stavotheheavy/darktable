@@ -123,6 +123,19 @@ extension DarkroomModel {
         grouped(c.rawValue, target: "simple.\(c.rawValue)") { writeSimple(c, to: v) }
     }
 
+    /// Auto white balance: the engine measures grey-world gains on the open photo and they become the white balance module's red, green and blue,
+    /// as one undo step. A photo with nothing reliable to measure gets unit gains, which is no change.
+    public func autoWhiteBalance() async {
+        guard let gains = await measureAutoWhiteBalance(), gains.count == 3,
+              let (m, fr) = field("temperature", "red"), let (_, fg) = field("temperature", "green"), let (_, fb) = field("temperature", "blue"),
+              let r = base(m, fr).double, let g = base(m, fg).double, let b = base(m, fb).double else { return }
+        grouped("Auto white balance", target: "awb") {
+            write("temperature", "red", r * gains[0])
+            write("temperature", "green", g * gains[1])
+            write("temperature", "blue", b * gains[2])
+        }
+    }
+
     private func writeSimple(_ c: SimpleControl, to v: Double) {
         let v = min(max(v, c.range.lowerBound), c.range.upperBound)
         switch c {
@@ -307,6 +320,8 @@ struct SimplePanel: View {
                         }
                     }
 
+                AutoWhiteBalanceButton(model: model, id: "simple-awb")
+
                 Button { model.rotate90() } label: {
                     Label("Rotate 90°", systemImage: "rotate.right")
                         .font(.callout.weight(.medium))
@@ -421,5 +436,24 @@ struct ModeSwitch: View {
         }
         .padding(8)
         .glassEffect(.regular, in: .capsule)
+    }
+}
+
+
+/// "Auto white balance": measures the photo and writes the white balance module's gains as one undo step.
+struct AutoWhiteBalanceButton: View {
+    @Bindable var model: DarkroomModel
+    let id: String
+
+    var body: some View {
+        Button { Task { await model.autoWhiteBalance() } } label: {
+            Label("Auto white balance", systemImage: "wand.and.stars")
+                .font(.callout.weight(.medium))
+                .frame(maxWidth: .infinity, minHeight: 36)
+                .background(Color.white.opacity(0.12), in: Capsule())
+        }
+        .buttonStyle(.plain)
+        .rig(id)
+        .accessibilityLabel("Auto white balance")
     }
 }

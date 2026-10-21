@@ -89,6 +89,9 @@ public final class DarkroomModel {
         requestRender()
     }
 
+    /// The engine's grey-world white balance gains for the open photo (see autoWhiteBalance).
+    public func measureAutoWhiteBalance() async -> [Double]? { try? await engine.sessionAutoWhiteBalance() }
+
     public func setHDRPreview(_ on: Bool) {
         hdrPreview = on
         UserDefaults.standard.set(on, forKey: "darkroom.hdrPreview")

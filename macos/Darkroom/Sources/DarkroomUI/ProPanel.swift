@@ -332,6 +332,7 @@ struct ProSection: View {
             ProGeometry(model: model)
         } else {
             ForEach(e.modules) { m in ParamList(model: model, module: m) }
+            if op == "temperature" { AutoWhiteBalanceButton(model: model, id: "pro-awb") }
         }
         // limit the module to part of the picture; only a module the engine can blend (not geometry, not the display transform)
         if e.modules.count == 1, let m = e.modules.first, m.supportsBlending, m.blend != nil {

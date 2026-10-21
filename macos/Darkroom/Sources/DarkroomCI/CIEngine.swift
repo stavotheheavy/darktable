@@ -199,6 +199,25 @@ public actor CIEngine: PhotoEngine {
         return CIGeometry.pixelSize(try CIGeometry.spec(stack, camera: s.camera), input: s.sensorFrame)
     }
 
+    /// Grey-world white balance gains (red, green = 1, blue) for the open photo, in the units of the white balance module's fields: measured on a
+    /// small scene-linear decode (a scene-referred stack makes the decoder hand over light with no look of its own), over the reliable pixels only.
+    public func sessionAutoWhiteBalance() async throws -> [Double]? {
+        let s = try openedSession()
+        guard let context else { return nil }
+        let long = max(s.native.width, s.native.height)
+        let scale = min(1, 400 / Double(max(long, 1)))
+        let image = try decode(s, scale: scale, stack: [StackEntry(operation: "display", params: [:])])
+        let rect = image.extent.integral
+        guard rect.width >= 1, rect.height >= 1, rect.width < 4096, rect.height < 4096 else { return nil }
+        let w = Int(rect.width), h = Int(rect.height)
+        var buffer = [Float](repeating: 0, count: w * h * 4)
+        context.render(image, toBitmap: &buffer, rowBytes: w * 16, bounds: rect, format: .RGBAf, colorSpace: Self.workingSpace)
+        let pixels = (0..<(w * h)).map { SIMD3<Double>(Double(buffer[$0 * 4]), Double(buffer[$0 * 4 + 1]), Double(buffer[$0 * 4 + 2])) }
+        // the decoder clips at about 3 in scene units with extended range (the highlight probe's measurement)
+        let g = AutoWhiteBalance.gains(pixels, width: w, height: h, clip: 3)
+        return [g.x, g.y, g.z]
+    }
+
     public func sessionInfo() async -> SessionInfo? {
         guard let s = session else { return nil }
         // the as-shot frame: `native` is the sensor's, which made portrait photos report as landscape
