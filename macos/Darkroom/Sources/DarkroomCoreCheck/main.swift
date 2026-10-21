@@ -1679,6 +1679,31 @@ do {
     check("VG8 the same spot of the picture gets the same gain at twice the size (within 0.02)", sameSpot < 0.02, "\(sameSpot)")
 }
 
+// SHD shadows and highlights: the zone exposure's two semantic controls. A dark region lifts and a bright one holds, each by its own gain
+// (a global exposure would give both the same), and the sliders map -100...100 to -2...+2 EV
+do {
+    let w = 64, h = 32
+    let darkPx = SIMD3(0.02, 0.018, 0.015), brightPx = SIMD3(0.6, 0.5, 0.4)
+    let split = (0..<(w * h)).map { $0 % w < w / 2 ? darkPx : brightPx }
+    func gain(_ img: [SIMD3<Double>], at x: Int) -> Double { img[(h / 2) * w + x].x / split[(h / 2) * w + x].x }
+    check("SHD1 both sliders at 0 is the identity", Shadhi.apply(split, width: w, height: h, shadows: 0, highlights: 0) == split)
+    let both = Shadhi.apply(split, width: w, height: h, shadows: 100, highlights: -50)
+    let zones = ZoneExposure.apply(split, width: w, height: h, settings: ZoneExposure.Settings(shadows: 2, highlights: -1))
+    check("SHD2 +100 shadows and -50 highlights are +2 EV and -1 EV on the zone exposure", both == zones)
+    let lifted = Shadhi.apply(split, width: w, height: h, shadows: 100, highlights: 0)
+    check("SHD3 shadows +100 lifts the dark region by over 2.5x and leaves the bright one alone",
+          gain(lifted, at: 8) > 2.5 && abs(gain(lifted, at: 56) - 1) < 1e-6, "dark \(gain(lifted, at: 8)), bright \(gain(lifted, at: 56))")
+    let held = Shadhi.apply(split, width: w, height: h, shadows: 0, highlights: -100)
+    check("SHD4 highlights -100 pulls the bright region below 0.5x and leaves the dark one alone",
+          gain(held, at: 56) < 0.5 && abs(gain(held, at: 8) - 1) < 1e-6, "dark \(gain(held, at: 8)), bright \(gain(held, at: 56))")
+    // the wrong rule, one global exposure, gives both regions the same gain: SHD3 and SHD4 tell it apart
+    check("SHD5 the two regions get different gains (a global exposure would give both the same)", abs(gain(lifted, at: 8) - gain(lifted, at: 56)) > 1)
+    let ratio = lifted[(h / 2) * w + 8] / split[(h / 2) * w + 8]
+    check("SHD6 colour ratios are kept: every channel scales by the same gain", abs(ratio.x - ratio.y) < 1e-9 && abs(ratio.y - ratio.z) < 1e-9, "\(ratio)")
+    let extremes = Shadhi.apply([SIMD3(4, 3, 2), SIMD3(0, 0, 0), SIMD3(0.2, 0.2, 0.2), SIMD3(0.01, 0.01, 0.01)], width: 2, height: 2, shadows: 100, highlights: 100)
+    check("SHD7 past white and at black the output is finite", extremes.allSatisfy { $0.x.isFinite && $0.y.isFinite && $0.z.isFinite }, "\(extremes)")
+}
+
 // CL clipping warning: blown and crushed by the 8-bit encode, the rule the histogram readout counts
 do {
     func enc(_ v: Double) -> Double { Transfer.srgbToLinear(v / 255) }

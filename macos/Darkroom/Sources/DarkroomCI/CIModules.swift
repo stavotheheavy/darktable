@@ -222,11 +222,13 @@ extension CIModule {
                 field("shadows", -100, 100, 0),
                 field("highlights", -100, 100, 0),
             ],
+            // DarkroomCore's Shadhi: the zone exposure's shadows and highlights controls (darkroom-engine-check E-SHD)
             apply: { image, v in
-                image.applyingFilter("CIHighlightShadowAdjust", parameters: [
-                    "inputShadowAmount": (v["shadows"] ?? 0) / 100,
-                    "inputHighlightAmount": 1 + (v["highlights"] ?? 0) / 100,
-                ])
+                let settings = Shadhi.settings(shadows: v["shadows"] ?? 0, highlights: v["highlights"] ?? 0)
+                guard !settings.isIdentity else { return image }
+                let e = image.extent
+                let r = ZoneExposure.radius(scale: settings.scale, longSide: Int(max(e.width, e.height)))
+                return try CIBridge.zoneExposure(image, evs: settings.zoneEVs, radius: r)
             }),
 
         // Tone curve: five nodes across the tonal range; the identity curve has each node at
@@ -685,6 +687,8 @@ extension CIModule {
         "velvia": 2,
         // same: vignette was Core Image's CIVignette and is now a scene-referred exposure change through the radial light matte
         "vignette": 2,
+        // same: shadhi was Core Image's CIHighlightShadowAdjust and is now the zone exposure's shadows and highlights
+        "shadhi": 2,
     ]
 
     static let all: [CIModule] = (catalogue + [display] + geometryModules).map { module in

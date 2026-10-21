@@ -1461,6 +1461,20 @@ do {
     check("E-VG-zero strength 0 returns the input untouched", runDetail([StackEntry(operation: "vignette", params: ["strength": .number(0)])]) == detailPx)
 }
 
+// E-SHD shadows and highlights through the engine: the zone exposure path with the slider mapping, against Shadhi in DarkroomCore, across tile
+// seams, and the identity at zero
+do {
+    let stack = [StackEntry(operation: "shadhi", params: ["shadows": .number(80), "highlights": .number(-60)])]
+    let want = Shadhi.apply(detailImg, width: detailW, height: detailH, shadows: 80, highlights: -60)
+    let got = runDetail(stack)
+    check("E-SHD shadows and highlights matches the oracle within 1/255 and unclamped within 2e-4", worst(got, want) < tol && worstLinear(got, want) < 2e-4,
+          "encoded \(worst(got, want)), linear \(worstLinear(got, want))")
+    check("E-SHD the oracle really changes the fixture (a no-op GPU path would fail)", worstLinear(detailPx, want) > 0.05, "\(worstLinear(detailPx, want))")
+    let seams = detailSeams(stack, oracle: want)
+    check("E-SHD-seam shadows and highlights renders the same in a region as in the full frame", seams.ok, "seam \(seams.seam), full vs oracle \(seams.fullVsOracle)")
+    check("E-SHD-zero both sliders at 0 returns the input untouched", runDetail([StackEntry(operation: "shadhi", params: [:])]) == detailPx)
+}
+
 // E-RL radial light through the engine: against the oracle, tile seams, the zero shortcut, and in a portrait-shot frame
 do {
     let params: [String: ParamValue] = ["exposure": .number(1.2), "x": .number(0.4), "y": .number(0.6), "size": .number(0.25), "shape": .number(0.7),
