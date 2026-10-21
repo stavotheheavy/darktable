@@ -160,6 +160,10 @@ public final class Rig {
         s["maskLayers"] = model.maskLayers.map { "\($0.name):\($0.kind.rawValue):\($0.strokes.count)" }
         s["painting"] = model.paintModuleID ?? ""
         s["clipping"] = model.showClipping
+        // the canvas path and the HDR preview, read back: is the frame a texture, at what peak, and did the layer ask for extended-range content
+        s["canvas"] = ["presentsTexture": model.presentsTexture, "texturePeak": model.frameTexture?.peak ?? 0, "hdrOn": model.hdrPreview,
+                       "hdrAvailable": model.hdrAvailable, "screenHeadroom": DarkroomModel.screenHeadroom,
+                       "layerWantsEDR": MetalFrameNSView.lastWantsEDR, "layerColorSpace": MetalFrameNSView.lastColorSpaceName] as [String: Any]
         s["library"] = libraryState()
         return s
     }
@@ -317,6 +321,8 @@ public final class Rig {
             // header toggles at model level (synthetic single clicks are dropped by SwiftUI controls)
             switch ui {
             case "hide": model.uiHidden.toggle()
+            case "hdr:on": model.setHDRPreview(true)
+            case "hdr:off": model.setHDRPreview(false)
             case "original": if model.history.count > 1 { model.showingOriginal.toggle() }
             case "back": go(.library); library.paused = false
             default:

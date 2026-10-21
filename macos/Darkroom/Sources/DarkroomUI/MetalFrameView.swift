@@ -19,6 +19,9 @@ struct MetalFrameView: NSViewRepresentable {
 }
 
 final class MetalFrameNSView: NSView {
+    /// What the last presented frame asked of the layer, for the test rig to read back.
+    nonisolated(unsafe) static var lastWantsEDR = false
+    nonisolated(unsafe) static var lastColorSpaceName = ""
     private let metal = CAMetalLayer()
     private var queue: MTLCommandQueue?
     private var shown = -1
@@ -53,6 +56,8 @@ final class MetalFrameNSView: NSView {
         }
         // a frame rendered for headroom holds values above 1: the layer must ask for extended-range content for them to show brighter than SDR white
         metal.wantsExtendedDynamicRangeContent = frame.peak > 1
+        Self.lastWantsEDR = metal.wantsExtendedDynamicRangeContent
+        Self.lastColorSpaceName = (metal.colorspace?.name as String?) ?? ""
         metal.drawableSize = CGSize(width: frame.width, height: frame.height)
         guard let queue, let drawable = metal.nextDrawable(), let cmd = queue.makeCommandBuffer(), let blit = cmd.makeBlitCommandEncoder(),
               drawable.texture.width == frame.texture.width, drawable.texture.height == frame.texture.height else { return }
