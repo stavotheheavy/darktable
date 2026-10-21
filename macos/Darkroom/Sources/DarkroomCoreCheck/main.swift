@@ -623,6 +623,42 @@ check("IV6 a lighter input never gives a lighter output", ivMonotone)
 check("IV7 each channel is its own", Invert.apply(SIMD3(0.2, 0.5, 0.8)).x == Invert.apply(SIMD3(0.2, 0, 0)).x
       && Invert.apply(SIMD3(0.2, 0.5, 0.8)).z == Invert.apply(SIMD3(0, 0, 0.8)).z)
 
+// CBS colisa: contrast about middle grey on luminance (hue kept), OkLab saturation (lightness kept), brightness as 2^(2b) of exposure
+check("CBS1 all three at 0 is the identity on 4096 colours",
+      moColours.allSatisfy { near(Colisa.apply($0, contrast: 0, brightness: 0, saturation: 0), $0, 1e-9) })
+let clGrey = Colisa.apply(SIMD3(repeating: 0.1), contrast: 0, brightness: 0.5, saturation: 0)
+check("CBS2 brightness 0.5 is +1 EV, a gain of 2^(2 * 0.5) = 2: 0.1 becomes 0.2", near(clGrey, SIMD3(repeating: 0.2), 1e-9), "\(clGrey)")
+check("CBS2 brightness -0.5 halves: 0.4 becomes 0.2",
+      near(Colisa.apply(SIMD3(repeating: 0.4), contrast: 0, brightness: -0.5, saturation: 0), SIMD3(repeating: 0.2), 1e-9))
+// the wrong rule, an additive offset (Core Image's brightness), would give 0.1 + 0.5 = 0.6 and lift black: told apart by CL2
+check("CBS2 an additive brightness is not this module (0.6 is far from 0.2)", abs((0.1 + 0.5) - 0.2) > 0.3)
+check("CBS2 black stays black at any brightness", near(Colisa.apply(SIMD3(0, 0, 0), contrast: 0, brightness: 1, saturation: 0), SIMD3(0, 0, 0), 1e-12))
+let clPivot = Colisa.apply(SIMD3(repeating: 0.18), contrast: 0.7, brightness: 0, saturation: 0)
+check("CBS3 middle grey (0.18) does not move with contrast", near(clPivot, SIMD3(repeating: 0.18), 1e-9), "\(clPivot)")
+check("CBS3 contrast 0.7 darkens 0.09 to 0.09 * 0.5^0.7 and lightens 0.36 to 0.36 * 2^0.7",
+      near(Colisa.apply(SIMD3(repeating: 0.09), contrast: 0.7, brightness: 0, saturation: 0), SIMD3(repeating: 0.09 * pow(0.5, 0.7)), 1e-9)
+      && near(Colisa.apply(SIMD3(repeating: 0.36), contrast: 0.7, brightness: 0, saturation: 0), SIMD3(repeating: 0.36 * pow(2.0, 0.7)), 1e-9))
+let clColour = moColour(30)
+let clContrasted = Colisa.apply(clColour, contrast: 0.6, brightness: 0, saturation: 0)
+let clRatio = clContrasted / clColour
+check("CBS3 contrast keeps hue: every channel scales by the same factor",
+      abs(clRatio.x - clRatio.y) < 1e-9 && abs(clRatio.y - clRatio.z) < 1e-9, "\(clRatio)")
+let clLabIn = OkLab.fromWorking(clColour)
+let clNeutral = Colisa.apply(clColour, contrast: 0, brightness: 0, saturation: -1)
+let clLabNeutral = OkLab.fromWorking(clNeutral)
+check("CBS4 saturation -1 is neutral at the same OkLab lightness",
+      abs(clNeutral.x - clNeutral.y) < 1e-6 && abs(clNeutral.y - clNeutral.z) < 1e-6 && abs(clLabNeutral.x - clLabIn.x) < 1e-9, "\(clNeutral)")
+let clLabDouble = OkLab.fromWorking(Colisa.apply(clColour, contrast: 0, brightness: 0, saturation: 1))
+check("CBS4 saturation 1 doubles the chroma and keeps the lightness",
+      abs(hypot(clLabDouble.y, clLabDouble.z) / hypot(clLabIn.y, clLabIn.z) - 2) < 1e-9 && abs(clLabDouble.x - clLabIn.x) < 1e-9)
+check("CBS5 brightness multiplies whatever contrast and saturation did",
+      near(Colisa.apply(clColour, contrast: 0.4, brightness: 0.3, saturation: 0.5),
+           Colisa.apply(clColour, contrast: 0.4, brightness: 0, saturation: 0.5) * pow(2, 0.6), 1e-9))
+let clExtremeA = Colisa.apply(SIMD3(4, 3, 2), contrast: -1, brightness: 1, saturation: 1)
+let clExtremeB = Colisa.apply(SIMD3(0, 0, 0), contrast: -1, brightness: 1, saturation: 1)
+check("CBS6 the extremes are finite past white and at black",
+      [clExtremeA, clExtremeB].allSatisfy { $0.x.isFinite && $0.y.isFinite && $0.z.isFinite }, "\(clExtremeA) \(clExtremeB)")
+
 // ST split toning: greys are built in OkLab (a = b = 0) so their chroma is exactly zero before the tint
 func splitGrey(_ L: Double) -> SIMD3<Double> { OkLab.toWorking(SIMD3(L, 0, 0)) }
 func splitRun(_ c: SIMD3<Double>, shH: Double = 0, shS: Double = 0, hiH: Double = 0, hiS: Double = 0, balance: Double = 0) -> SIMD3<Double> {

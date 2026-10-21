@@ -376,6 +376,14 @@ check("E-IV invert matches the oracle within 1/255", eIV < tol, "\(eIV)")
 let eIVLinear = worstLinear(run(invertStack), invertOracle)
 check("E-IV invert matches the oracle unclamped (relative 1e-4)", eIVLinear < 1e-4, "\(eIVLinear)")
 
+// E-CBS colisa: the fused per-pixel kernel through the engine against Colisa in DarkroomCore
+let colisaStack = [StackEntry(operation: "colisa", params: ["contrast": .number(0.4), "brightness": .number(0.3), "saturation": .number(0.5)])]
+let colisaOracle = scene.map { Colisa.apply($0, contrast: 0.4, brightness: 0.3, saturation: 0.5) }
+let eCL = worst(run(colisaStack), colisaOracle)
+check("E-CBS colisa matches the oracle within 1/255", eCL < tol, "\(eCL)")
+let eCLLinear = worstLinear(run(colisaStack), colisaOracle)
+check("E-CBS colisa matches the oracle unclamped (relative 1e-4)", eCLLinear < 1e-4, "\(eCLLinear)")
+
 // E-ST split toning: the same settings through the engine (CIBridge.perPixel, splitTex) against SplitToning in DarkroomCore
 let eSTEngine = run([StackEntry(operation: "splittoning", params: [
     "shadows_hue": .number(220), "shadows_saturation": .number(0.8),

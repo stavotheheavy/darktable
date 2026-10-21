@@ -4,7 +4,7 @@
 // instead of a full float frame written and read back between every pair.
 //
 // The functions are the cards' own (`colorbalance_apply`, `mixer_apply`, `tonecurve_apply`, `monochrome_apply`, `levels_apply`, `split_apply`,
-// `st_apply`, `invert_apply`), compiled into one library with a driver kernel that walks an op list. Every thread takes the same branches, so the switch costs
+// `st_apply`, `invert_apply`, `colisa_apply`), compiled into one library with a driver kernel that walks an op list. Every thread takes the same branches, so the switch costs
 // nothing. Checked against the unfused chain by darkroom-engine-check E-FU (random stacks) and by every module's own check, which now run
 // through it.
 //
@@ -17,7 +17,7 @@ import Foundation
 
 /// One step of a fused run: which card function, and the uniforms that card's kernel takes.
 public struct FusedOp: Sendable, Equatable {
-    public enum Code: Int, Sendable { case gain = 0, colorBalance, channelMixer, toneCurve, monochrome, levels, splitToning, sceneTone, invert }
+    public enum Code: Int, Sendable { case gain = 0, colorBalance, channelMixer, toneCurve, monochrome, levels, splitToning, sceneTone, invert, colisa }
     public let code: Code
     public let params: [Float]
     public init(_ code: Code, _ params: [Float]) { self.code = code; self.params = params }
@@ -33,6 +33,8 @@ public enum MetalFused {
                      MetalLevels.source, MetalSplitToning.source, MetalSceneTone.source, MetalInvert.source] {
             s += "\n" + part.replacingOccurrences(of: MetalColorCommon.source, with: "") + "\n"
         }
+        // a function built on another card's function, so it comes after the loop and carries no kernels of its own
+        s += MetalColisa.function
         s += #"""
 
         kernel void fusedTex(texture2d<float, access::read> src [[texture(0)]],
@@ -56,6 +58,7 @@ public enum MetalFused {
                     case 6: rgb = split_apply(rgb, p); break;
                     case 7: rgb = st_apply(rgb, p); break;
                     case 8: rgb = invert_apply(rgb, p); break;
+                    case 9: rgb = colisa_apply(rgb, p); break;
                     default: break;
                 }
             }
@@ -82,6 +85,7 @@ public enum MetalFused {
                     case 6: rgb = split_apply(rgb, p); break;
                     case 7: rgb = st_apply(rgb, p); break;
                     case 8: rgb = invert_apply(rgb, p); break;
+                    case 9: rgb = colisa_apply(rgb, p); break;
                     default: break;
                 }
             }

@@ -512,6 +512,33 @@ do {
     check("IV-M invert kernel ran", false, "\(error)")
 }
 
+// colisa on Metal (colisaBuf, which holds the colour balance kernel it calls) against Colisa.apply (unclamped): 4096 colours sweeping every hue,
+// two settings, one lifting and one lowering all three sliders
+do {
+    let clRamp = (0..<4096).map { i -> SIMD3<Double> in
+        let t = Double(i) / 4096
+        let rgb = OkLab.toWorking(OkLab.lab(SIMD3(0.2 + 0.7 * t, 0.02 + 0.23 * t, 2 * .pi * Double(i % 512) / 512)))
+        return SIMD3(min(max(rgb.x, 0.002), 2.5), min(max(rgb.y, 0.002), 2.5), min(max(rgb.z, 0.002), 2.5))
+    }
+    let clFloat = clRamp.map { SIMD4<Float>(Float($0.x), Float($0.y), Float($0.z), 1) }
+    for (contrast, brightness, saturation) in [(0.4, 0.3, 0.5), (-0.7, -0.4, -0.6)] {
+        let clOut = try MetalPerPixel.run(source: MetalColisa.source, function: "colisaBuf", pixels: clFloat,
+                                          uniforms: [Float(contrast), Float(saturation), 0, Float(Colisa.gain(brightness: brightness))])
+        var clFinite = clOut.count == clRamp.count
+        var clWorst = 0.0
+        for (px, g) in zip(clRamp, clOut) {
+            let cpu = Colisa.apply(px, contrast: contrast, brightness: brightness, saturation: saturation)
+            let gpu = SIMD3(Double(g.x), Double(g.y), Double(g.z))
+            clFinite = clFinite && gpu.x.isFinite && gpu.y.isFinite && gpu.z.isFinite
+            for k in 0..<3 { clWorst = max(clWorst, abs(gpu[k] - cpu[k]) / max(1, abs(cpu[k]))) }
+        }
+        check("CBS-M colisa (\(contrast), \(brightness), \(saturation)) on Metal is finite and within 1e-4 of Colisa.apply",
+              clFinite && clWorst < 1e-4, "finite \(clFinite), worst relative error \(clWorst)")
+    }
+} catch {
+    check("CBS-M colisa kernel ran", false, "\(error)")
+}
+
 // split toning on Metal against SplitToning.apply (unclamped): every hue, deep shadow to past white
 do {
     let count = 4096

@@ -19,7 +19,7 @@ struct CIModule: Sendable {
     /// The modules whose work is one pixel in, one pixel out, on our own Metal functions: a run of them is one pass over the frame
     /// (see MetalFused). The engine fuses them when they are unmasked and at full opacity.
     static let fusableOperations: Set<String> = [
-        "temperature", "exposure", "colorbalancergb", "channelmixer", "tonecurve", "monochrome", "rgblevels", "splittoning", "display", "invert",
+        "temperature", "exposure", "colorbalancergb", "channelmixer", "tonecurve", "monochrome", "rgblevels", "splittoning", "display", "invert", "colisa",
     ]
 
     /// The fused op a fusable module stands for with these values, or nil when the module does nothing at them. This is the one place the
@@ -57,6 +57,10 @@ struct CIModule: Sendable {
             return FusedOp(.monochrome, [Float(intensity), Float(v["filter_strength"] ?? 0), Float(cos(hue)), Float(sin(hue))])
         case "invert":
             return FusedOp(.invert, [])
+        case "colisa":
+            let brightness = v["brightness"] ?? 0
+            let u: [Double] = [v["contrast"] ?? 0, v["saturation"] ?? 0, 0, Colisa.gain(brightness: brightness)]
+            return u[0] == 0 && u[1] == 0 && brightness == 0 ? nil : FusedOp(.colisa, u.map { Float($0) })
         case "rgblevels":
             let black = v["black"] ?? 0
             let white = max(v["white"] ?? 1, black + 0.01)
@@ -245,13 +249,9 @@ extension CIModule {
             fields: [
                 field("contrast", -1, 1, 0), field("brightness", -1, 1, 0), field("saturation", -1, 1, 0),
             ],
-            apply: { image, v in
-                image.applyingFilter("CIColorControls", parameters: [
-                    kCIInputBrightnessKey: v["brightness"] ?? 0,
-                    kCIInputContrastKey: 1 + (v["contrast"] ?? 0),
-                    kCIInputSaturationKey: 1 + (v["saturation"] ?? 0),
-                ])
-            }),
+            // DarkroomCore's Colisa on the oracle-checked per-pixel kernel (darkroom-engine-check E-CL): contrast about middle grey,
+            // OkLab saturation, brightness as 2^(2 * brightness) of exposure
+            apply: { image, v in try CIModule.applyFused("colisa", image, v) }),
 
         // Velvia: boosts the less saturated colours more than the saturated ones.
         CIModule(
@@ -672,6 +672,8 @@ extension CIModule {
         "denoiseprofile": 2, "hazeremoval": 2, "zones": 2, "colorize": 2,
         // not the working space: invert was Core Image's complement of the linear value and is now the complement of the encoded one
         "invert": 2,
+        // same: colisa was Core Image's colour controls (pivot 0.5, additive brightness) and is now scene-referred
+        "colisa": 2,
     ]
 
     static let all: [CIModule] = (catalogue + [display] + geometryModules).map { module in
