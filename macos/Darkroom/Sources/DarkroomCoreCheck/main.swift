@@ -3277,5 +3277,32 @@ do {
     check("RLT4 at half the width from the centre the weight is 0.5 (gain 2^0.5, within 1e-9), and colour ratios are kept",
           abs(half - pow(2, 0.5)) < 1e-9 && abs(Relight.apply(SIMD3(0.04, 0.02, 0.01), ev: 1, center: -1, width: 4).x / Relight.apply(SIMD3(0.04, 0.02, 0.01), ev: 1, center: -1, width: 4).y - 2) < 1e-9, "\(half)")
 }
+// CLH CLAHE (tile histogram equalisation)
+do {
+    let w = 48, h = 32
+    func enc(_ v: Double) -> Double { Transfer.linearToSRGB(v) }
+    var lowContrast = [SIMD3<Double>](repeating: .zero, count: w * h)
+    for y in 0..<h { for x in 0..<w { let v = Transfer.srgbToLinear(0.45 + 0.1 * (Double((x * 7 + y * 13) % 17) / 16)); lowContrast[y * w + x] = SIMD3(v, v * 0.8, v * 0.6) } }
+    check("CLH1 amount 0 is the identity", Clahe.apply(lowContrast, width: w, height: h, tiles: 4, clip: 3, amount: 0) == lowContrast)
+    let flat = [SIMD3<Double>](repeating: SIMD3(0.3, 0.3, 0.3), count: w * h)
+    let fl = Clahe.apply(flat, width: w, height: h, tiles: 4, clip: 3, amount: 1)
+    check("CLH2 a flat picture barely moves (encoded within 0.03: the clip limit keeps the mapping near the identity)", fl.allSatisfy { abs(enc($0.x) - enc(0.3)) < 0.03 }, "\(enc(fl[0].x)) vs \(enc(0.3))")
+    func spread(_ a: [SIMD3<Double>]) -> Double { let m = a.map { enc(ColorCommon.luminance($0)) }; let mean = m.reduce(0, +) / Double(m.count); return (m.map { pow($0 - mean, 2) }.reduce(0, +) / Double(m.count)).squareRoot() }
+    let st = Clahe.apply(lowContrast, width: w, height: h, tiles: 2, clip: 4, amount: 1)
+    check("CLH3 a low-contrast picture is stretched: the encoded luminance spread grows by over 1.5x", spread(st) > 1.5 * spread(lowContrast), "\(spread(lowContrast)) -> \(spread(st))")
+    check("CLH4 colour ratios are kept (a gain on all three channels, within 1e-9)", zip(st, lowContrast).allSatisfy { abs($0.x / $0.y - $1.x / $1.y) < 1e-9 && abs($0.y / $0.z - $1.y / $1.z) < 1e-9 })
+    let luts = Clahe.luts(lowContrast, width: w, height: h, tiles: 4, clip: 3)
+    check("CLH5 every tile's mapping is non-decreasing and ends at 1 (within 1e-9), one per tile", luts.count == 4 * Clahe.grid(tiles: 4, width: w, height: h).y
+          && luts.allSatisfy { l in zip(l, l.dropFirst()).allSatisfy { $0 <= $1 + 1e-12 } && abs(l.last! - 1) < 1e-9 })
+    var ramp = [SIMD3<Double>](repeating: .zero, count: w * h)
+    for y in 0..<h { for x in 0..<w { let v = Transfer.srgbToLinear(0.2 + 0.6 * Double(x) / Double(w - 1)); ramp[y * w + x] = SIMD3(repeating: v) } }
+    let rp = Clahe.apply(ramp, width: w, height: h, tiles: 4, clip: 3, amount: 1)
+    var jump = 0.0
+    for y in 0..<h { for x in 1..<w { jump = max(jump, abs(enc(rp[y * w + x].x) - enc(rp[y * w + x - 1].x))) } }
+    check("CLH6 no tile seams: neighbouring pixels of a smooth ramp never differ by more than 0.05 encoded, boundaries included", jump < 0.05, "\(jump)")
+    let hostile = Clahe.apply([SIMD3(0, 0, 0), SIMD3(5, 5, 5), SIMD3(-1, 0.2, 0.2), SIMD3(0.5, 0.5, 0.5)], width: 2, height: 2, tiles: 2, clip: 3, amount: 1)
+    check("CLH7 black, past white and negative pixels stay finite and past-white is untouched", hostile.allSatisfy { $0.x.isFinite && $0.y.isFinite && $0.z.isFinite } && hostile[1] == SIMD3(5, 5, 5) && hostile[0] == .zero)
+}
+
 print(failures == 0 ? "\nall checks passed" : "\n\(failures) failed")
 exit(failures == 0 ? 0 : 1)

@@ -1938,7 +1938,7 @@ do {
         ("diffuse", ["iterations": 12, "threshold": 0.1]), ("lensblur", ["amount": 1, "radius": 6, "highlights": 2]), ("motionblur", ["length": 12, "angle": 20]),
         ("radialblur", ["amount": 1, "spin": 0]), ("kuwahara", ["amount": 1, "radius": 4]), ("mediandenoise", ["amount": 1, "radius": 2]),
         ("deconvsharp", ["radius": 4, "iterations": 5, "amount": 1]), ("texturebands", ["radius": 8, "amount": 1]), ("skinsmooth", ["amount": 1, "radius": 10]),
-        ("surfaceblur", ["amount": 1, "radius": 10]), ("nlmeans", ["amount": 1, "strength": 0.08]), ("bilateral", ["amount": 1, "radius": 5]), ("emboss", ["amount": 1]), ("sketch", ["amount": 1]),
+        ("surfaceblur", ["amount": 1, "radius": 10]), ("clahe", ["amount": 1, "tiles": 8, "clip": 3]), ("nlmeans", ["amount": 1, "strength": 0.08]), ("bilateral", ["amount": 1, "radius": 5]), ("emboss", ["amount": 1]), ("sketch", ["amount": 1]),
         ("halftone", ["amount": 1, "size": 12]), ("retouch", ["amount": 1, "radius": 0.1]), ("liquify", ["strength": 0.6, "radius": 0.4]), ("chromadenoise", ["radius": 8, "amount": 1]), ("deband", ["radius": 12, "strength": 1]),
         ("hdrtone", ["amount": 0.6, "scale": 0.05]), ("halation", ["strength": 0.6, "size": 40]), ("tiltshift", ["amount": 1, "radius": 20]),
         ("defringe", ["strength": 1, "radius": 6, "hue": 140, "width": 70]), ("censorize", ["pixelation": 9]), ("grain", ["strength": 0.8]), ("highpass", ["radius": 12, "strength": 1.5]),
@@ -2059,5 +2059,21 @@ do {
     check("E-RLT the oracle really changes the darkened fixture", worstLinear(rlGot.map { $0 }, dark) > 0.005, "\(worstLinear(rlGot, dark))")
     check("E-RLT-zero ev 0 returns the input untouched", runDetail([StackEntry(operation: "relight", params: [:])]) == detailPx)
 }
+// E-CLH CLAHE: the GPU tile mappings and interpolation against Clahe in DarkroomCore, with a seam check (the mappings need the whole frame)
+do {
+    func p(_ d: [String: Double]) -> [String: ParamValue] { d.mapValues { .number($0) } }
+    let stack = [StackEntry(operation: "clahe", params: p(["amount": 0.9, "tiles": 4, "clip": 3]))]
+    let want = Clahe.apply(detailImg, width: detailW, height: detailH, tiles: 4, clip: 3, amount: 0.9)
+    let got = runDetail(stack)
+    var off = 0
+    for i in 0..<got.count { let g = got[i], o = want[i]; if max(abs(Double(g.x) - o.x), abs(Double(g.y) - o.y), abs(Double(g.z) - o.z)) / max(1, o.x) > 4e-3 { off += 1 } }
+    // a pixel whose luminance sits on a histogram bin edge can fall in the next bin in float: allow 1% of the pixels
+    check("E-CLH CLAHE matches the oracle (unclamped within 4e-3 on 99% of the pixels, none off by 1/255 encoded on average)", off <= got.count / 100 && worst(got, want) < 0.08, "\(off) of \(got.count) off, worst encoded \(worst(got, want))")
+    check("E-CLH the oracle really changes the fixture", worstLinear(detailPx, want) > 0.003, "\(worstLinear(detailPx, want))")
+    let s = detailSeams(stack, oracle: want)
+    check("E-CLH-seam CLAHE renders the same in a region as in the full frame (the mappings use the whole frame)", s.ok || s.seam < 1e-3, "seam \(s.seam), full vs oracle \(s.fullVsOracle)")
+    check("E-CLH-zero amount 0 returns the input untouched", runDetail([StackEntry(operation: "clahe", params: [:])]) == detailPx)
+}
+
 print(failures == 0 ? "\nall checks passed" : "\n\(failures) failed")
 exit(failures == 0 ? 0 : 1)
