@@ -1857,6 +1857,26 @@ struct SelfTest {
               "VS1 the working size is 0.8 of the screen's long edge, held to 1600...3200, and 1600 for a hostile value")
         check(DarkroomModel.workingSize == 1600, "VS1 the self-test pins the working size (DARKROOM_WORKING_SIZE) so its pixels do not depend on the screen")
 
+        print("owned decode")
+        if let ci = engine as? CIEngine {
+            await reopened.settle()
+            let full = try await ci.sessionRender(stack: [], scale: 1)
+            let afterFull = await ci.segmentCacheInfo()
+            let d1 = try await ci.sessionRender(stack: [], scale: 0.5)
+            let d2 = try await ci.sessionRender(stack: [], scale: 0.5)
+            let afterDrafts = await ci.segmentCacheInfo()
+            check(afterDrafts.entries == afterFull.entries && afterDrafts.misses == afterFull.misses && afterDrafts.hits >= afterFull.hits + 2,
+                  "OD1 two drafts add no decode: no new entry or miss, both served from the owned texture (entries \(afterFull.entries) to \(afterDrafts.entries), hits +\(afterDrafts.hits - afterFull.hits))")
+            check(abs(d1.width * 2 - full.width) <= 2 && abs(d1.height * 2 - full.height) <= 2,
+                  "OD2 a draft is half the frame (\(d1.width)x\(d1.height) against \(full.width)x\(full.height))")
+            let fg = grid(full.image), dg = grid(d1.image)
+            check(correlation(fg, dg) > 0.98 && grid(d2.image) == dg, "OD3 the draft is the same picture as the frame, and the same every time (layout correlation \(String(format: "%.3f", correlation(fg, dg)))))")
+            let again = try await ci.sessionRender(stack: [], scale: 1)
+            check(grid(again.image) == fg, "OD4 the full frame renders identically from the owned texture")
+        } else {
+            skip("owned decode", "the decoded texture is the clean engine's")
+        }
+
         print("simple mode")
         let simple = reopened
         simple.mode = .simple

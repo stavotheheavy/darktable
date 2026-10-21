@@ -105,7 +105,7 @@ public actor CIEngine: PhotoEngine {
         let s = try openedSession()
         cancelFlag.withLock { $0 = false }
         let started = ContinuousClock.now
-        var image = try edited(try decode(s, scale: s.fit * scale, stack: stack), stack, camera: s.camera, scale: s.fit * scale, session: s)
+        var image = try edited(try ownedDecode(s, scale: scale, stack: stack), stack, camera: s.camera, scale: s.fit * scale, session: s)
         if clippingOverlay { image = try CIBridge.clippingOverlay(image) }
         // the viewport's frame is 8 bits: dither the last step so a smooth shadow does not break into bands (exports keep their own bits)
         return try frame(try CIBridge.dither8(image), crop: nil, since: started)
@@ -116,7 +116,7 @@ public actor CIEngine: PhotoEngine {
         let s = try openedSession()
         cancelFlag.withLock { $0 = false }
         let started = ContinuousClock.now
-        var image = try edited(try decode(s, scale: s.fit * scale, stack: stack), stack, camera: s.camera, scale: s.fit * scale, session: s)
+        var image = try edited(try ownedDecode(s, scale: scale, stack: stack), stack, camera: s.camera, scale: s.fit * scale, session: s)
         if clippingOverlay { image = try CIBridge.clippingOverlay(image) }
         let ext = image.extent.integral
         // Core Image's origin is bottom left; the region is given top left.
@@ -467,6 +467,29 @@ public actor CIEngine: PhotoEngine {
             throw EngineError("decode failed")
         }
         return image
+    }
+
+    /// The session's decoded picture as a texture the engine owns. The RAW is decoded once at the working size and kept (through the same
+    /// cache the segments use); every render starts from that texture, so how often the decoder runs no longer depends on Core Image's own
+    /// caching of `CIRAWFilter.outputImage`. A draft (`scale` under 1) is that same picture averaged down, never a second decode; a larger
+    /// scale (zoomed regions) asks the decoder directly, as before.
+    private func ownedDecode(_ s: Session, scale: Double, stack: [StackEntry]) throws -> CIImage {
+        guard let cache = segmentCache, scale <= 1.001, scale > 0, scale.isFinite else { return try decode(s, scale: s.fit * scale, stack: stack) }
+        let key = "\(s.id)|decode|\(s.fit)|\(Self.wantsSceneLinear(stack))"
+        let full: CIImage
+        if let kept = cache.lookup(key) { full = kept } else { full = cache.store(try decode(s, scale: s.fit, stack: stack), key: key) }
+        guard scale < 0.999 else { return full }
+        let e = full.extent
+        let w = max(1, (e.width * scale).rounded()), h = max(1, (e.height * scale).rounded())
+        return full.samplingLinear()
+            .transformed(by: CGAffineTransform(scaleX: w / e.width, y: h / e.height))
+            .cropped(to: CGRect(x: e.minX * w / e.width, y: e.minY * h / e.height, width: w, height: h))
+    }
+
+    /// What the segment cache holds: for the self-test, which checks the decode runs once and drafts do not decode again.
+    public func segmentCacheInfo() -> (entries: Int, hits: Int, misses: Int) {
+        guard let c = segmentCache else { return (0, 0, 0) }
+        return (c.count, c.hits, c.misses)
     }
 
     /// Where a module runs: its own `iopOrder`, except that display-referred modules (the tone curve) follow the
