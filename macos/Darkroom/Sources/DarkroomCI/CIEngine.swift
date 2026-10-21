@@ -39,7 +39,9 @@ public actor CIEngine: PhotoEngine {
         let camera: Orientation
 
         /// The decoded size at scale 1 (the working frame), in sensor orientation.
-        var sensorFrame: CGSize { CGSize(width: (native.width * fit).rounded(), height: (native.height * fit).rounded()) }
+        /// Core Image's RAW decoder rounds a scaled size UP (933.33 gives 934, measured with `dtb-selftest --stack` at --max 1400 and 2000), so the
+        /// size told to the UI does the same; the small tolerance keeps a size that is whole up to float error from tipping over.
+        var sensorFrame: CGSize { CGSize(width: (native.width * fit - 1e-6).rounded(.up), height: (native.height * fit - 1e-6).rounded(.up)) }
     }
 
     private var context: CIContext?
