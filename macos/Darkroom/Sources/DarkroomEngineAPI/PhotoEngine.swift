@@ -16,6 +16,12 @@ public protocol PhotoEngine: Actor {
     func sessionRender(stack: [StackEntry], scale: Double) async throws -> RenderedFrame
     func sessionRenderRegion(stack: [StackEntry], scale: Double, x: Int, y: Int,
                              width: Int, height: Int) async throws -> RenderedFrame
+    /// `sessionRender` into a Metal texture the app can present as it is (see PresentedFrame); nil when the engine cannot, and the app
+    /// falls back to `sessionRender`.
+    func sessionRenderPresentable(stack: [StackEntry], scale: Double) async throws -> PresentedFrame?
+    /// `sessionRenderRegion`, the same way.
+    func sessionRenderRegionPresentable(stack: [StackEntry], scale: Double, x: Int, y: Int,
+                                        width: Int, height: Int) async throws -> PresentedFrame?
     func sessionInfo() async -> SessionInfo?
     /// The camera's embedded preview of the open image, at the working size. Shown first
     /// while the full render is still coming; nil when the engine has none to offer.
@@ -58,4 +64,10 @@ extension PhotoEngine {
 
     /// Engines that cannot report it (darktable, for now) answer nil.
     public func sessionOutputSize(stack: [StackEntry]) async throws -> (width: Int, height: Int)? { nil }
+}
+
+public extension PhotoEngine {
+    func sessionRenderPresentable(stack: [StackEntry], scale: Double) async throws -> PresentedFrame? { nil }
+    func sessionRenderRegionPresentable(stack: [StackEntry], scale: Double, x: Int, y: Int,
+                                        width: Int, height: Int) async throws -> PresentedFrame? { nil }
 }

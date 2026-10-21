@@ -57,6 +57,17 @@ public final class DarkroomModel {
 
     // image
     public private(set) var frame: CGImage?
+    /// The canvas presents the engine's frames as a Metal texture (16-bit, no read-back of the full frame) when this is on and the engine
+    /// can; `frame` is then a small 8-bit copy for the scopes. The canvas switches it on; headless callers leave it off and get full CGImages.
+    public var presentsTexture = false
+    /// The frame as a texture, when the last render was presented that way.
+    public private(set) var frameTexture: PresentedFrame?
+    /// Counts presented frames, so a view can tell a new one from the same texture reused.
+    public private(set) var frameSerial = 0
+    /// The picture's real size when `frame` is only a thumbnail of it.
+    public private(set) var frameFullSize: CGSize?
+    /// The size of the picture on screen, whichever form the frame has.
+    public var frameSize: CGSize? { frameFullSize ?? frame.map { CGSize(width: $0.width, height: $0.height) } }
     public private(set) var fileName = "No image"
     public private(set) var filePath: String?
     public private(set) var exifLine = ""
@@ -229,6 +240,8 @@ public final class DarkroomModel {
         exifLine = Self.exif(of: path)
         status = "Developing…"
         frame = nil
+        frameTexture = nil
+        frameFullSize = nil
         scopes = nil
         center = CGPoint(x: 0.5, y: 0.5)
         zoom = .fit
@@ -255,6 +268,8 @@ public final class DarkroomModel {
             // A missing preview is not an error: the open continues and waits for the render.
             if let preview = try? await engine.sessionPreview() {
                 frame = preview.image
+                frameTexture = nil
+                frameFullSize = nil
                 frameIsDraft = true
             }
         } catch {
@@ -790,7 +805,19 @@ public final class DarkroomModel {
             renderIsDraft = draft
             do {
                 let result: RenderedFrame
-                if zoom == .fit || info == nil {
+                var presented: PresentedFrame?
+                if presentsTexture {
+                    if zoom == .fit || info == nil {
+                        presented = try await engine.sessionRenderPresentable(stack: entries, scale: draft ? Self.draftScale : 1)
+                    } else {
+                        let r = region()
+                        presented = try await engine.sessionRenderRegionPresentable(
+                            stack: entries, scale: r.scale, x: r.x, y: r.y, width: r.w, height: r.h)
+                    }
+                }
+                if let p = presented {
+                    result = RenderedFrame(image: p.thumbnail, width: p.width, height: p.height, milliseconds: p.milliseconds)
+                } else if zoom == .fit || info == nil {
                     result = try await engine.sessionRender(stack: entries, scale: draft ? Self.draftScale : 1)
                 } else {
                     let r = region()
@@ -798,6 +825,9 @@ public final class DarkroomModel {
                         stack: entries, scale: r.scale, x: r.x, y: r.y, width: r.w, height: r.h)
                 }
                 frame = result.image
+                frameTexture = presented
+                frameFullSize = presented.map { CGSize(width: $0.width, height: $0.height) }
+                if presented != nil { frameSerial += 1 }
                 frameIsDraft = draft
                 lastMilliseconds = result.milliseconds
                 if draft {

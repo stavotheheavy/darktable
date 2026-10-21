@@ -42,6 +42,10 @@ public actor CIEngine: PhotoEngine {
     }
 
     private var context: CIContext?
+    private var metalDevice: MTLDevice?
+    /// The textures `sessionRenderPresentable` renders into, three per size in turn: the app presents one while the next renders.
+    private var presentPool: [String: [MTLTexture]] = [:]
+    private var presentCount = 0
     /// Keeps the picture after each neighbourhood module (see SegmentCache), for the open session's renders only.
     private var segmentCache: SegmentCache?
     private var session: Session?
@@ -65,6 +69,7 @@ public actor CIEngine: PhotoEngine {
             throw EngineError("no Metal device for Core Image")
         }
         let made = Self.makeContext(device: device)
+        metalDevice = device
         context = made
         if let space = made.workingColorSpace { segmentCache = SegmentCache(context: made, device: device, space: space) }
     }
@@ -80,6 +85,7 @@ public actor CIEngine: PhotoEngine {
     }
 
     public func shutdown() async {
+        presentPool.removeAll()
         session = nil
         segmentCache?.clear()
         segmentCache = nil
@@ -130,6 +136,29 @@ public actor CIEngine: PhotoEngine {
             throw EngineError("region lies outside the image")
         }
         return try frame(image, crop: crop, since: started)
+    }
+
+    public func sessionRenderPresentable(stack: [StackEntry], scale: Double) async throws -> PresentedFrame? {
+        let s = try openedSession()
+        cancelFlag.withLock { $0 = false }
+        let started = ContinuousClock.now
+        var image = try edited(try ownedDecode(s, scale: scale, stack: stack), stack, camera: s.camera, scale: s.fit * scale, session: s)
+        if clippingOverlay { image = try CIBridge.clippingOverlay(image) }
+        return try presented(image, crop: nil, since: started)
+    }
+
+    public func sessionRenderRegionPresentable(stack: [StackEntry], scale: Double, x: Int, y: Int,
+                                               width: Int, height: Int) async throws -> PresentedFrame? {
+        let s = try openedSession()
+        cancelFlag.withLock { $0 = false }
+        let started = ContinuousClock.now
+        var image = try edited(try ownedDecode(s, scale: scale, stack: stack), stack, camera: s.camera, scale: s.fit * scale, session: s)
+        if clippingOverlay { image = try CIBridge.clippingOverlay(image) }
+        let ext = image.extent.integral
+        let wanted = CGRect(x: ext.minX + CGFloat(x), y: ext.maxY - CGFloat(y) - CGFloat(height), width: CGFloat(width), height: CGFloat(height))
+        let crop = wanted.intersection(ext)
+        guard !crop.isNull, crop.width >= 1, crop.height >= 1 else { throw EngineError("region lies outside the image") }
+        return try presented(image, crop: crop, since: started)
     }
 
     /// The decoder the open image uses: RAW 9 where Apple supports the camera.
@@ -510,6 +539,57 @@ public actor CIEngine: PhotoEngine {
 
     static func wantsSceneLinear(_ stack: [StackEntry]) -> Bool {
         stack.contains { $0.enabled && CIModule.named($0.operation)?.sceneReferred == true }
+    }
+
+    /// Renders `image` into the next texture of the ring (16-bit float, linear, extended Display P3) and a small 8-bit copy of it for the
+    /// scopes. No read-back of the full frame: the app presents the texture as it is.
+    private func presented(_ image: CIImage, crop: CGRect?, since started: ContinuousClock.Instant) throws -> PresentedFrame {
+        guard let context, let device = metalDevice else { throw EngineError("engine not started") }
+        if cancelFlag.withLock({ $0 }) { throw RenderCanceled() }
+        let rect = crop ?? image.extent.integral
+        let w = Int(rect.width), h = Int(rect.height)
+        guard w >= 1, h >= 1, w <= 16384, h <= 16384, let p3 = CGColorSpace(name: CGColorSpace.extendedLinearDisplayP3),
+              let srgb = CGColorSpace(name: CGColorSpace.sRGB) else { throw EngineError("could not render the frame") }
+        let key = "\(w)x\(h)"
+        if presentPool[key] == nil && presentPool.count >= 6 { presentPool.removeAll() }   // sizes come and go with the zoom
+        var ring = presentPool[key] ?? []
+        presentCount += 1
+        let slot = presentCount % 3
+        let texture: MTLTexture
+        if slot < ring.count {
+            texture = ring[slot]
+        } else {
+            let desc = MTLTextureDescriptor.texture2DDescriptor(pixelFormat: .rgba16Float, width: w, height: h, mipmapped: false)
+            desc.usage = [.shaderRead, .shaderWrite, .renderTarget]
+            desc.storageMode = .shared
+            guard let made = device.makeTexture(descriptor: desc) else { throw EngineError("could not make a frame texture") }
+            ring.append(made)
+            presentPool[key] = ring
+            texture = made
+        }
+        let destination = CIRenderDestination(mtlTexture: texture, commandBuffer: nil)
+        destination.colorSpace = p3
+        // Core Image's rows run bottom to top and a Metal texture's top to bottom: flipped, the texture's first row is the picture's top, which
+        // is what a layer presents. (Left unflipped the picture showed upside down on screen while every round trip through
+        // CIImage(mtlTexture:) looked right, because that init undoes the same flip: PT2 reads the texture's own rows.)
+        destination.isFlipped = true
+        do {
+            try context.startTask(toRender: image, from: rect, to: destination, at: .zero).waitUntilCompleted()
+        } catch {
+            throw EngineError("could not render the frame: \(error)")
+        }
+        // the scopes' copy: the texture read as an image, averaged down to at most 640 px and read back
+        let k = min(1, 640 / max(rect.width, rect.height))
+        let tw = max(1, (rect.width * k).rounded()), th = max(1, (rect.height * k).rounded())
+        // CIImage(mtlTexture:) reads the first row as the bottom, so a top-first texture comes back upside down: turn it over again
+        guard let source = CIImage(mtlTexture: texture, options: [.colorSpace: p3])?.oriented(.downMirrored),
+              let thumb = context.createCGImage(source.samplingLinear().transformed(by: CGAffineTransform(scaleX: tw / rect.width, y: th / rect.height)),
+                                                from: CGRect(x: 0, y: 0, width: tw, height: th), format: .RGBA8, colorSpace: srgb) else {
+            throw EngineError("could not make the frame's thumbnail")
+        }
+        let elapsed = started.duration(to: .now)
+        let ms = Double(elapsed.components.seconds) * 1_000 + Double(elapsed.components.attoseconds) / 1_000_000_000_000_000
+        return PresentedFrame(texture: texture, width: w, height: h, milliseconds: ms, thumbnail: thumb)
     }
 
     private func frame(_ image: CIImage, crop: CGRect?, since started: ContinuousClock.Instant) throws -> RenderedFrame {

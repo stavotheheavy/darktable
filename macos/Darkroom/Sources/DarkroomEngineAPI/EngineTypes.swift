@@ -1,4 +1,5 @@
 import CoreGraphics
+import Metal
 import Foundation
 
 public struct EngineError: Error, CustomStringConvertible, Sendable {
@@ -39,6 +40,23 @@ public struct MaskPicture: Sendable, Equatable {
 /// A session render stopped by `cancelRender()` because a newer edit superseded it.
 public struct RenderCanceled: Error, Sendable {
     public init() {}
+}
+
+/// A frame rendered straight into a Metal texture the app presents without reading it back: 16-bit float, linear, in extended Display P3
+/// (`PresentedFrame.colorSpaceName`), top row first. `thumbnail` is a small 8-bit sRGB copy for the scopes and anything else that needs
+/// pixels on the CPU; `width` and `height` are the picture's, the texture's size. The engine reuses a few textures in turn, so a frame stays
+/// valid for the next couple of renders.
+public struct PresentedFrame: @unchecked Sendable {
+    public static let colorSpaceName = "kCGColorSpaceExtendedLinearDisplayP3"
+    public let texture: MTLTexture
+    public let width: Int
+    public let height: Int
+    public let milliseconds: Double
+    public let thumbnail: CGImage
+
+    public init(texture: MTLTexture, width: Int, height: Int, milliseconds: Double, thumbnail: CGImage) {
+        self.texture = texture; self.width = width; self.height = height; self.milliseconds = milliseconds; self.thumbnail = thumbnail
+    }
 }
 
 public struct RenderedFrame: @unchecked Sendable {

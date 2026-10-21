@@ -107,6 +107,9 @@ struct PhotoView: View {
     /// The stroke being painted, in view points, until the finger lifts.
     @State private var live: [CGPoint] = []
 
+    /// The canvas presents the engine's frames as Metal textures unless DARKROOM_NO_METAL_CANVAS is set.
+    private static let metalCanvas = ProcessInfo.processInfo.environment["DARKROOM_NO_METAL_CANVAS"] == nil
+
     var body: some View {
         GeometryReader { geo in
             let size = geo.size
@@ -114,9 +117,7 @@ struct PhotoView: View {
                 BackdropView(style: model.backdrop)
                 if let frame = model.frame {
                     let r = imageRect(frame: frame, in: size)
-                    Image(decorative: frame, scale: 1)
-                        .resizable()
-                        .interpolation(.high)
+                    canvasPicture(frame)
                         .frame(width: r.width, height: r.height)
                         .overlay(Rectangle().strokeBorder(Color.white.opacity(0.07), lineWidth: 1))
                         .shadow(color: .black.opacity(0.5), radius: 26, y: 10)
@@ -132,6 +133,9 @@ struct PhotoView: View {
                 }
             }
             .contentShape(Rectangle())
+            .onAppear {
+                if Self.metalCanvas, !model.presentsTexture { model.presentsTexture = true; model.requestRender() }
+            }
             .onContinuousHover { phase in
                 switch phase {
                 case .active(let p):
@@ -202,8 +206,21 @@ struct PhotoView: View {
     }
 
     /// Where the frame sits in the view, in points.
+    /// The picture: a Metal layer presenting the engine's 16-bit texture when the model has one, else the 8-bit image.
+    @ViewBuilder
+    private func canvasPicture(_ frame: CGImage) -> some View {
+        if let presented = model.frameTexture {
+            MetalFrameView(frame: presented, serial: model.frameSerial)
+        } else {
+            Image(decorative: frame, scale: 1)
+                .resizable()
+                .interpolation(.high)
+        }
+    }
+
     func imageRect(frame: CGImage, in size: CGSize) -> CGRect {
-        let fw = CGFloat(frame.width), fh = CGFloat(frame.height)
+        // a presented frame's CGImage is a thumbnail: the picture's own size lays it out
+        let fw = model.frameSize?.width ?? CGFloat(frame.width), fh = model.frameSize?.height ?? CGFloat(frame.height)
         if model.zoom == .fit {
             // keep clear of the floating panels
             let side = DarkroomView.panelWidth + DarkroomView.margin * 2

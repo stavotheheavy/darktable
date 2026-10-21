@@ -5,6 +5,7 @@ import DarkroomUI
 import DarktableKit
 import Foundation
 import ImageIO
+import Metal
 import UniformTypeIdentifiers
 import DarkroomCI
 
@@ -1892,6 +1893,78 @@ struct SelfTest {
             check(grid(again.image) == fg, "OD4 the full frame renders identically from the owned texture")
         } else {
             skip("owned decode", "the decoded texture is the clean engine's")
+        }
+
+        print("presented frames (Metal canvas)")
+        if let ci = engine as? CIEngine {
+            await reopened.settle()
+            let plainFrame = try await ci.sessionRender(stack: [], scale: 1)
+            if let p = try await ci.sessionRenderPresentable(stack: [], scale: 1) {
+                check(p.texture.pixelFormat == .rgba16Float && p.width == plainFrame.width && p.height == plainFrame.height
+                      && p.texture.width == p.width && p.texture.height == p.height,
+                      "PT1 the frame is a 16-bit float texture of the picture's size (\(p.texture.width)x\(p.texture.height), \(p.texture.pixelFormat == .rgba16Float ? "rgba16Float" : "other"))")
+                check(max(p.thumbnail.width, p.thumbnail.height) <= 640 && p.thumbnail.width * p.height == p.thumbnail.height * p.width
+                      || abs(Double(p.thumbnail.width) / Double(p.thumbnail.height) - Double(p.width) / Double(p.height)) < 0.01,
+                      "PT1 the scopes' copy is at most 640 px and has the picture's shape (\(p.thumbnail.width)x\(p.thumbnail.height))")
+                // the texture's own rows, first row first, against the CGImage frame (top row first): the same picture, upright. Reading the
+                // texture back through CIImage(mtlTexture:) would not do: that init undoes the renderer's flip, so a texture the wrong way up
+                // still looked right (it showed upside down on screen).
+                var half = [UInt16](repeating: 0, count: p.width * p.height * 4)
+                p.texture.getBytes(&half, bytesPerRow: p.width * 8, from: MTLRegionMake2D(0, 0, p.width, p.height), mipmapLevel: 0)
+                func floatOf(_ h: UInt16) -> Double { Double(Float16(bitPattern: h)) }
+                func code(_ linearP3: Double) -> Double { 255 * (linearP3 <= 0.0031308 ? 12.92 * linearP3 : 1.055 * pow(max(linearP3, 0), 1 / 2.4) - 0.055) }
+                var textureGrid = [Double](repeating: 0, count: 48 * 48)
+                for gy in 0..<48 { for gx in 0..<48 {
+                    let x = min(p.width - 1, (gx * p.width + p.width / 2) / 48), y = min(p.height - 1, (gy * p.height + p.height / 2) / 48)
+                    let i = (y * p.width + x) * 4
+                    // luma-ish from the three channels (P3 and sRGB primaries differ a little; this is for layout)
+                    textureGrid[gy * 48 + gx] = code(0.25 * floatOf(half[i]) + 0.6 * floatOf(half[i + 1]) + 0.15 * floatOf(half[i + 2]))
+                } }
+                let b = grid(plainFrame.image)
+                check(correlation(textureGrid, b) > 0.9 && correlation(textureGrid, b) > correlation(textureGrid, upsideDown(b)) + 0.3
+                      && correlation(textureGrid, b) > correlation(textureGrid, mirrored(b)) + 0.3,
+                      "PT2 the texture's first row is the picture's top: its own rows match the CGImage frame (correlation \(String(format: "%.3f", correlation(textureGrid, b))), upside down \(String(format: "%.3f", correlation(textureGrid, upsideDown(b)))))")
+                check(correlation(grid(p.thumbnail), b) > 0.99, "PT2 the scopes' copy is upright too (correlation \(String(format: "%.3f", correlation(grid(p.thumbnail), b))))")
+                // more than 8 bits of tone: the red channel holds far more than 256 distinct values
+                var raw = [UInt16](repeating: 0, count: p.width * p.height * 4)
+                p.texture.getBytes(&raw, bytesPerRow: p.width * 8, from: MTLRegionMake2D(0, 0, p.width, p.height), mipmapLevel: 0)
+                var distinct = Set<UInt16>()
+                for i in stride(from: 0, to: raw.count, by: 4) { distinct.insert(raw[i]) }
+                check(distinct.count > 1500, "PT3 the frame carries more than 8 bits of tone (\(distinct.count) distinct red values; an 8-bit frame has at most 256)")
+            } else {
+                check(false, "PT1 the clean engine presents frames")
+            }
+
+            // the model, with the canvas's mode on
+            reopened.presentsTexture = true
+            reopened.requestRender()
+            await reopened.settle()
+            let serial0 = reopened.frameSerial
+            check(reopened.frameTexture != nil && reopened.frameSize == CGSize(width: reopened.frameTexture!.width, height: reopened.frameTexture!.height)
+                  && (reopened.frame.map { max($0.width, $0.height) <= 640 } ?? false) && reopened.scopes != nil,
+                  "PT4 the model holds the presented frame, lays out by the picture's size, and keeps the scopes fed from the thumbnail (frame \(reopened.frameSize.map { "\(Int($0.width))x\(Int($0.height))" } ?? "none"))")
+            let before = luma(reopened)
+            reopened.setSimple(.light, to: 60)
+            await reopened.settle()
+            check(reopened.frameSerial > serial0 && luma(reopened) > before + 3, "PT4 an edit presents a new frame and it is brighter (\(String(format: "%.1f", before)) to \(String(format: "%.1f", luma(reopened))))")
+            reopened.setSimple(.light, to: 0)
+            // a zoomed region renders presented too
+            reopened.zoom = .fit
+            await reopened.settle()
+            if let z = ZoomMode.allCases.first(where: { $0 != .fit }) {
+                reopened.zoom = z
+                await reopened.settle()
+                check(reopened.frameTexture != nil && reopened.frameSize != nil, "PT5 a zoomed region is presented as a texture too (\(z.rawValue): \(reopened.frameSize.map { "\(Int($0.width))x\(Int($0.height))" } ?? "none"))")
+                reopened.zoom = .fit
+                await reopened.settle()
+            }
+            reopened.presentsTexture = false
+            reopened.requestRender()
+            await reopened.settle()
+            check(reopened.frameTexture == nil && reopened.frameFullSize == nil && (reopened.frame.map { $0.width > 640 || $0.height > 640 } ?? false),
+                  "PT6 with the mode off the model is back to full-size CGImages")
+        } else {
+            skip("presented frames", "the texture canvas is the clean engine's")
         }
 
         print("simple mode")
