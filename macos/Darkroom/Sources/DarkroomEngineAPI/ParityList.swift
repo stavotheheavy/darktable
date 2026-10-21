@@ -60,8 +60,8 @@ public enum ParityList {
             e("atrous", .exact, "contrast equalizer: three groups of wavelet scales"), e("denoiseprofile", .exact, "wavelet shrinkage; no camera noise profiles"),
             e("hazeremoval", .exact), e("flip", .exact), e("ashift", .exact, "rotate and straighten only"), e("crop", .exact),
             // Core Image stand-ins
-            e("basecurve", .exact, "a power curve on the encoded value, out = e^gamma; not darktable's multi-node curve"), e("colorize", .exact, "every pixel's OkLab a and b mixed toward a fixed tint at a hue, lightness kept"), e("blurs", .approximate), e("lowpass", .approximate),
-            e("dither", .exact, "posterize: the encoded value quantised to N levels per channel, no noise"), e("censorize", .approximate), e("soften", .approximate), e("rgbcurve", .exact, "one curve of five nodes on every channel (darktable's linked mode); the tone curve's oracle and kernel"),
+            e("basecurve", .exact, "a power curve on the encoded value, out = e^gamma; not darktable's multi-node curve"), e("colorize", .exact, "every pixel's OkLab a and b mixed toward a fixed tint at a hue, lightness kept"), e("blurs", .exact, "three box means in a row, a Gaussian-like blur at any radius"), e("lowpass", .exact, "the same blur as blurs; darktable's low-pass has more settings"),
+            e("dither", .exact, "posterize: the encoded value quantised to N levels per channel, no noise"), e("censorize", .exact, "a mosaic: each block of the chosen size shows its centre pixel"), e("soften", .exact, "the picture mixed toward its own blur"), e("rgbcurve", .exact, "one curve of five nodes on every channel (darktable's linked mode); the tone curve's oracle and kernel"),
             e("relight", .approximate, "deprecated in darktable; shadhi or toneequal replace it"), e("colorcontrast", .exact, "the OkLab saturation step of colour balance on its own"),
             e("colorcorrection", .exact, "brightness as 2^(2b) of exposure and contrast about middle grey: colisa without the saturation"), e("clahe", .approximate, "deprecated in darktable; bilat replaces it"),
             // the job is done by something we have

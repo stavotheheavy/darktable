@@ -1696,5 +1696,39 @@ do {
           worst(run([StackEntry(operation: "basecurve", params: [:]), StackEntry(operation: "colorize", params: [:])]), scene.map { BaseCurve.apply($0, gamma: 1) }) < tol)
 }
 
+// E-BLR blur, E-LPF low-pass, E-SOF soften, E-MSC censorize: the GPU paths against Blur, Soften and Mosaic in DarkroomCore, across tile seams
+do {
+    let blurWant = Blur.apply(detailImg, width: detailW, height: detailH, radius: Blur.radius(px: 12))
+    for (op, tag) in [("blurs", "E-BLR"), ("lowpass", "E-LPF")] {
+        let stack = [StackEntry(operation: op, params: ["radius": .number(12)])]
+        let got = runDetail(stack)
+        check("\(tag) \(op) matches the oracle within 1/255 and unclamped within 2e-4", worst(got, blurWant) < tol && worstLinear(got, blurWant) < 2e-4,
+              "encoded \(worst(got, blurWant)), linear \(worstLinear(got, blurWant))")
+        check("\(tag) the oracle really changes the fixture", worstLinear(detailPx, blurWant) > 0.01, "\(worstLinear(detailPx, blurWant))")
+        let seams = detailSeams(stack, oracle: blurWant)
+        check("\(tag)-seam \(op) renders the same in a region as in the full frame", seams.ok, "seam \(seams.seam), full vs oracle \(seams.fullVsOracle)")
+        check("\(tag)-zero radius 0 returns the input untouched", runDetail([StackEntry(operation: op, params: [:])]) == detailPx)
+    }
+    let softStack = [StackEntry(operation: "soften", params: ["strength": .number(0.7), "radius": .number(9)])]
+    let softWant = Soften.apply(detailImg, width: detailW, height: detailH, strength: 0.7, radius: Blur.radius(px: 9))
+    let softGot = runDetail(softStack)
+    check("E-SOF soften matches the oracle within 1/255 and unclamped within 2e-4", worst(softGot, softWant) < tol && worstLinear(softGot, softWant) < 2e-4,
+          "encoded \(worst(softGot, softWant)), linear \(worstLinear(softGot, softWant))")
+    check("E-SOF the oracle really changes the fixture", worstLinear(detailPx, softWant) > 0.01, "\(worstLinear(detailPx, softWant))")
+    let softSeams = detailSeams(softStack, oracle: softWant)
+    check("E-SOF-seam soften renders the same in a region as in the full frame", softSeams.ok, "seam \(softSeams.seam), full vs oracle \(softSeams.fullVsOracle)")
+    check("E-SOF-zero strength 0 returns the input untouched", runDetail([StackEntry(operation: "soften", params: [:])]) == detailPx)
+
+    let mosStack = [StackEntry(operation: "censorize", params: ["pixelation": .number(7)])]
+    let mosWant = Mosaic.apply(detailImg, width: detailW, height: detailH, block: 7)
+    let mosGot = runDetail(mosStack)
+    check("E-MSC censorize matches the oracle within 1/255 and unclamped within 2e-4", worst(mosGot, mosWant) < tol && worstLinear(mosGot, mosWant) < 2e-4,
+          "encoded \(worst(mosGot, mosWant)), linear \(worstLinear(mosGot, mosWant))")
+    check("E-MSC the oracle really changes the fixture", worstLinear(detailPx, mosWant) > 0.01, "\(worstLinear(detailPx, mosWant))")
+    let mosSeams = detailSeams(mosStack, oracle: mosWant)
+    check("E-MSC-seam censorize renders the same in a region as in the full frame", mosSeams.ok, "seam \(mosSeams.seam), full vs oracle \(mosSeams.fullVsOracle)")
+    check("E-MSC-zero pixelation 1 returns the input untouched", runDetail([StackEntry(operation: "censorize", params: [:])]) == detailPx)
+}
+
 print(failures == 0 ? "\nall checks passed" : "\n\(failures) failed")
 exit(failures == 0 ? 0 : 1)

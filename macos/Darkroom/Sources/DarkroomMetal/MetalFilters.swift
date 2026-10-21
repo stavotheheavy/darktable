@@ -178,6 +178,12 @@ final class PerPixelManyProcessor: CIImageProcessorKernel {
     override class var outputFormat: CIFormat { .RGBAf }
     override class func formatForInput(at input: Int32) -> CIFormat { .RGBAf }
 
+    /// A gather kernel (a mosaic) names how far it reads past its output as `reach`; the others read only their own pixel.
+    override class func roi(forInput input: Int32, arguments: [String: Any]?, outputRect: CGRect) -> CGRect {
+        let reach = CGFloat((arguments?["reach"] as? Int) ?? 0)
+        return outputRect.insetBy(dx: -reach, dy: -reach)
+    }
+
     override class func process(with inputs: [CIImageProcessorInput]?, arguments: [String: Any]?,
                                 output: CIImageProcessorOutput) throws {
         guard let inputs, !inputs.isEmpty, let function = arguments?["function"] as? String,

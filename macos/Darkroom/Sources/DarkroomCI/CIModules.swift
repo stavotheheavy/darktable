@@ -121,7 +121,7 @@ struct CIModule: Sendable {
     /// Modules that read a neighbourhood (a blur radius, a guided filter, wavelet levels): the expensive ones. The segment cache keeps
     /// the picture after each of them, so a slider moved further down the stack does not run them again.
     static let neighbourhoodOperations: Set<String> = [
-        "sharpen", "denoiseprofile", "bilat", "atrous", "hazeremoval", "zones", "clahe", "soften", "blurs", "lowpass", "bloom", "highlights",
+        "sharpen", "denoiseprofile", "bilat", "atrous", "hazeremoval", "zones", "clahe", "soften", "blurs", "lowpass", "censorize", "bloom", "highlights",
     ]
 
     /// The display-referred modules: they assume 0...1 values (a curve, levels, a contrast about 0.5, a lift of the shadows) and are
@@ -362,29 +362,21 @@ extension CIModule {
             fields: [field("strength", 0, 1, 0), field("hue", 0, 1, 0)],
             apply: { image, v in try CIModule.applyFused("colorize", image, v) }),
 
-        // Blur, approximate: a Gaussian blur over the image, mixed in by opacity.
+        // Blur: three box means in a row (a Gaussian-like blur at any radius), the radius in pixels of the full-size picture.
+        // Blur in DarkroomCore is the oracle (BLR1-BLR6, E-BLR in darkroom-engine-check).
         CIModule(
-            operation: "blurs", name: "blurs (approximate)", iopOrder: 48, defaultEnabled: false,
+            operation: "blurs", name: "blurs", iopOrder: 48, defaultEnabled: false,
             fields: [field("radius", 0, 50, 0)],
             apply: { image, v in
-                let radius = (v["radius"] ?? 0) * (v["_scale"] ?? 1)
-                guard radius > 0 else { return image }
-                return image.clampedToExtent()
-                    .applyingFilter("CIGaussianBlur", parameters: [kCIInputRadiusKey: radius])
-                    .cropped(to: image.extent)
+                try CIBridge.blur(image, radius: Blur.radius(px: (v["radius"] ?? 0) * (v["_scale"] ?? 1)))
             }),
 
-        // Low-pass, approximate: keeps the fine detail removed by a blur, as its detail.
+        // Low-pass: the picture with its fine detail removed, which is the same blur as `blurs` (checked by E-LPF).
         CIModule(
-            operation: "lowpass", name: "lowpass (approximate)", iopOrder: 49, defaultEnabled: false,
+            operation: "lowpass", name: "lowpass", iopOrder: 49, defaultEnabled: false,
             fields: [field("radius", 0, 50, 0)],
             apply: { image, v in
-                let radius = (v["radius"] ?? 0) * (v["_scale"] ?? 1)
-                guard radius > 0 else { return image }
-                let blurred = image.clampedToExtent()
-                    .applyingFilter("CIGaussianBlur", parameters: [kCIInputRadiusKey: radius])
-                    .cropped(to: image.extent)
-                return blurred
+                try CIBridge.blur(image, radius: Blur.radius(px: (v["radius"] ?? 0) * (v["_scale"] ?? 1)))
             }),
 
         // Dither or posterize: the encoded value quantised to a number of levels per channel, no noise. Posterize in DarkroomCore is
@@ -395,33 +387,20 @@ extension CIModule {
             fields: [field("levels", 2, 64, 64)],
             apply: { image, v in try CIModule.applyFused("dither", image, v) }),
 
-        // Censorize, approximate: pixelates the image; a larger size hides more detail.
+        // Censorize: a mosaic, every block of the given size shows its centre pixel. Mosaic in DarkroomCore is the oracle (MSC1-MSC5, E-MSC).
         CIModule(
-            operation: "censorize", name: "censorize (approximate)", iopOrder: 61, defaultEnabled: false,
+            operation: "censorize", name: "censorize", iopOrder: 61, defaultEnabled: false,
             fields: [field("pixelation", 1, 100, 1)],
             apply: { image, v in
-                let size = max((v["pixelation"] ?? 1) * (v["_scale"] ?? 1), 1)
-                guard (v["pixelation"] ?? 1) > 1 else { return image }
-                return image.applyingFilter("CIPixellate", parameters: [
-                    "inputScale": size,
-                    "inputCenter": CIVector(x: image.extent.midX, y: image.extent.midY),
-                ]).cropped(to: image.extent)
+                try CIBridge.mosaic(image, block: Mosaic.block(pixelation: v["pixelation"] ?? 1, scale: v["_scale"] ?? 1))
             }),
 
-        // Soften, approximate: a blurred copy mixed back over the image.
+        // Soften: the picture mixed toward its own blur. Soften in DarkroomCore is the oracle (SOF1-SOF5, E-SOF).
         CIModule(
-            operation: "soften", name: "soften (approximate)", iopOrder: 62, defaultEnabled: false,
+            operation: "soften", name: "soften", iopOrder: 62, defaultEnabled: false,
             fields: [field("strength", 0, 1, 0), field("radius", 1, 30, 4)],
             apply: { image, v in
-                let strength = v["strength"] ?? 0
-                guard strength > 0 else { return image }
-                let blurred = image.clampedToExtent()
-                    .applyingFilter("CIGaussianBlur", parameters: [kCIInputRadiusKey: (v["radius"] ?? 4) * (v["_scale"] ?? 1)])
-                    .cropped(to: image.extent)
-                let mixed = blurred.applyingFilter("CIColorMatrix", parameters: [
-                    "inputAVector": CIVector(x: 0, y: 0, z: 0, w: CGFloat(strength)),
-                ])
-                return mixed.composited(over: image)
+                try CIBridge.soften(image, strength: v["strength"] ?? 0, radius: Blur.radius(px: (v["radius"] ?? 4) * (v["_scale"] ?? 1)))
             }),
 
         // Colour zones: a hue shift, a saturation change and a lightness change for each of eight hue bands, blended smoothly
@@ -726,6 +705,8 @@ extension CIModule {
         "colorcontrast": 2, "colorcorrection": 2,
         // same: basecurve (CIGammaAdjust), dither (CIColorPosterize) and colorize (CIColorMonochrome) are now their own maths on the encoded value or in OkLab
         "basecurve": 2, "dither": 2,
+        // same: blurs, lowpass, soften and censorize were Core Image filters (a Gaussian, a pixellate) and are now the box-cascade blur and the mosaic
+        "blurs": 2, "lowpass": 2, "soften": 2, "censorize": 2,
     ]
 
     static let all: [CIModule] = (catalogue + [display] + geometryModules).map { module in

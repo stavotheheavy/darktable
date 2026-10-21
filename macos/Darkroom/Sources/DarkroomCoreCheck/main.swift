@@ -2416,5 +2416,47 @@ do {
     check("COZ5 hue 0 and hue 1 are the same colour (within 1e-9)", max(abs(h0.x - h1.x), abs(h0.y - h1.y), abs(h0.z - h1.z)) < 1e-9)
 }
 
+// BLR blur, SOF soften, MSC mosaic
+do {
+    let w = 41, h = 41
+    let dark = SIMD3<Double>(0.2, 0.15, 0.1)
+    var dot = [SIMD3<Double>](repeating: dark, count: w * h)
+    dot[20 * w + 20] = SIMD3(3, 3, 3)
+    func at(_ img: [SIMD3<Double>], _ x: Int, _ y: Int) -> SIMD3<Double> { img[y * w + x] }
+    check("BLR1 radius 0 is the identity", Blur.apply(dot, width: w, height: h, radius: 0) == dot)
+    check("BLR2 a flat picture stays flat (within 1e-12), borders included", Blur.apply([SIMD3<Double>](repeating: dark, count: w * h), width: w, height: h, radius: 3)
+        .allSatisfy { near($0, dark, 1e-12) })
+    let b = Blur.apply(dot, width: w, height: h, radius: 2)
+    check("BLR3 beyond the reach (3 x 2 px) a pixel is untouched", at(b, 0, 0) == dark && at(b, 20, 27) == dark, "\(at(b, 20, 27))")
+    var kept = 0.0
+    for i in b.indices { kept += b[i].x - dark.x }
+    check("BLR4 the blur keeps the light: the sum of the differences is the dot's excess (2.8)", abs(kept - 2.8) < 1e-9, "\(kept)")
+    check("BLR5 the blur is symmetric about the dot and falls away from it", near(at(b, 15, 20) - dark, at(b, 25, 20) - dark, 1e-12) && at(b, 20, 20).x > at(b, 22, 20).x && at(b, 22, 20).x > at(b, 24, 20).x)
+    check("BLR6 the slider radius sets the box radius: 30 px is 10, 1 px is the least, 0, negative and NaN are none",
+          Blur.radius(px: 30) == 10 && Blur.radius(px: 1) == 1 && Blur.radius(px: 0) == 0 && Blur.radius(px: -4) == 0 && Blur.radius(px: .nan) == 0)
+
+    check("SOF1 strength 0 or radius 0 is the identity", Soften.apply(dot, width: w, height: h, strength: 0, radius: 2) == dot && Soften.apply(dot, width: w, height: h, strength: 1, radius: 0) == dot)
+    let full = Soften.apply(dot, width: w, height: h, strength: 1, radius: 2)
+    check("SOF2 strength 1 is the blur itself (within 1e-12)", zip(full, b).allSatisfy { near($0, $1, 1e-12) })
+    let half = Soften.apply(dot, width: w, height: h, strength: 0.5, radius: 2)
+    check("SOF3 strength 0.5 is halfway between the picture and its blur (within 1e-12)", near(at(half, 20, 20), (at(dot, 20, 20) + at(b, 20, 20)) / 2, 1e-12))
+    var lightKept = 0.0
+    for i in half.indices { lightKept += half[i].x - dot[i].x }
+    check("SOF4 the soften conserves the light (sum of differences 0 within 1e-9)", abs(lightKept) < 1e-9, "\(lightKept)")
+    check("SOF5 the dot is lowered and its neighbour raised", at(half, 20, 20).x < 3 && at(half, 21, 20).x > dark.x)
+
+    var ramp = [SIMD3<Double>](repeating: .zero, count: 10 * 7)
+    for y in 0..<7 { for x in 0..<10 { ramp[y * 10 + x] = SIMD3(Double(x), Double(y), Double(x + y)) } }
+    check("MSC1 a block of 1 is the identity", Mosaic.apply(ramp, width: 10, height: 7, block: 1) == ramp)
+    let m = Mosaic.apply(ramp, width: 10, height: 7, block: 4)
+    check("MSC2 every pixel of a block shows the block's centre: block 0 shows (2, 2), block (1, 0) shows (6, 2)",
+          m[0] == ramp[2 * 10 + 2] && m[3 * 10 + 3] == ramp[2 * 10 + 2] && m[1 * 10 + 5] == ramp[2 * 10 + 6])
+    check("MSC3 the last partial block shows its centre clamped to the frame: x 8..9 shows 9 (centre 10 clamped), y 4..6 shows 6",
+          m[5 * 10 + 8] == ramp[6 * 10 + 9], "\(m[5 * 10 + 8])")
+    check("MSC4 the pixels are only ever copies of source pixels, never mixed", m.allSatisfy { px in ramp.contains(px) })
+    check("MSC5 the block size is the pixelation times the scale: 24 at 0.5 is 12, never under 1 or over 400, NaN is 1",
+          Mosaic.block(pixelation: 24, scale: 0.5) == 12 && Mosaic.block(pixelation: 1, scale: 0.1) == 1 && Mosaic.block(pixelation: 100, scale: 9) == 400 && Mosaic.block(pixelation: .nan, scale: 1) == 1)
+}
+
 print(failures == 0 ? "\nall checks passed" : "\n\(failures) failed")
 exit(failures == 0 ? 0 : 1)
