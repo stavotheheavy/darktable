@@ -19,7 +19,7 @@ struct CIModule: Sendable {
     /// The modules whose work is one pixel in, one pixel out, on our own Metal functions: a run of them is one pass over the frame
     /// (see MetalFused). The engine fuses them when they are unmasked and at full opacity.
     static let fusableOperations: Set<String> = [
-        "temperature", "exposure", "colorbalancergb", "channelmixer", "tonecurve", "monochrome", "rgblevels", "splittoning", "display", "invert", "colisa", "velvia", "colorzones", "satcurvergb", "colorbalance",
+        "temperature", "exposure", "colorbalancergb", "channelmixer", "tonecurve", "monochrome", "rgblevels", "splittoning", "display", "invert", "colisa", "velvia", "colorzones", "satcurvergb", "colorbalance", "rgbcurve",
     ]
 
     /// The fused op a fusable module stands for with these values, or nil when the module does nothing at them. This is the one place the
@@ -40,7 +40,7 @@ struct CIModule: Sendable {
             let identity: [Double] = [1, 0, 0, 0, 1, 0, 0, 0, 1]
             let u: [Float] = names.indices.map { Float(v[names[$0]] ?? identity[$0]) }
             return u == identity.map { Float($0) } ? nil : FusedOp(.channelMixer, u)
-        case "tonecurve":
+        case "tonecurve", "rgbcurve":
             let n = Int((v["n"] ?? 0).rounded())
             let points: (xs: [Double], ys: [Double])
             if n >= 2 {
@@ -555,22 +555,15 @@ extension CIModule {
                 return try CIBridge.zoneExposure(image, evs: settings.zoneEVs, radius: r)
             }),
 
-        // RGB curve, approximate: the same five-node curve as tone curve, applied to every channel.
+        // RGB curve: the five-node curve of the tone curve (monotone cubic, on the encoded value), the same on every channel. The tone
+        // curve's oracle and kernel run it; checked by E-RC (darkroom-engine-check).
         CIModule(
-            operation: "rgbcurve", name: "rgb curve (approximate)", iopOrder: 32, defaultEnabled: false,
+            operation: "rgbcurve", name: "rgb curve", iopOrder: 32, defaultEnabled: false,
             fields: [
                 field("y0", 0, 1, 0), field("y1", 0, 1, 0.25), field("y2", 0, 1, 0.5),
                 field("y3", 0, 1, 0.75), field("y4", 0, 1, 1),
             ],
-            apply: { image, v in
-                image.applyingFilter("CIToneCurve", parameters: [
-                    "inputPoint0": CIVector(x: 0, y: v["y0"] ?? 0),
-                    "inputPoint1": CIVector(x: 0.25, y: v["y1"] ?? 0.25),
-                    "inputPoint2": CIVector(x: 0.5, y: v["y2"] ?? 0.5),
-                    "inputPoint3": CIVector(x: 0.75, y: v["y3"] ?? 0.75),
-                    "inputPoint4": CIVector(x: 1, y: v["y4"] ?? 1),
-                ])
-            }),
+            apply: { image, v in try CIModule.applyFused("rgbcurve", image, v) }),
 
         // Relight (fill light), approximate: lifts the shadows, leaves the highlights.
         CIModule(
@@ -731,6 +724,8 @@ extension CIModule {
         "shadhi": 2,
         // same: bloom was Core Image's CIBloom and is now the blurred highlights added back
         "bloom": 2,
+        // same: rgbcurve was Core Image's CIToneCurve and is now the tone curve's monotone cubic on the encoded value
+        "rgbcurve": 2,
     ]
 
     static let all: [CIModule] = (catalogue + [display] + geometryModules).map { module in

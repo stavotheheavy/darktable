@@ -1657,5 +1657,14 @@ do {
     check("E-LG zero settings change nothing (within float rounding)", worstLinear(run([StackEntry(operation: "colorbalance", params: [:])]), scene) < 1e-4)
 }
 
+// E-RC rgb curve: five nodes through the engine against ToneCurve in DarkroomCore (the tone curve's oracle, on every channel)
+do {
+    let rcYs = [0.05, 0.3, 0.45, 0.8, 0.95]
+    let rcEngine = run([StackEntry(operation: "rgbcurve", params: ["y0": .number(0.05), "y1": .number(0.3), "y2": .number(0.45), "y3": .number(0.8), "y4": .number(0.95)])])
+    let rcOracle = scene.map { ToneCurve.apply($0, ys: rcYs) }
+    check("E-RC rgb curve matches the oracle within 1/255", worst(rcEngine, rcOracle) < tol, "\(worst(rcEngine, rcOracle))")
+    check("E-RC the default curve changes nothing (unclamped within 1e-3)", worstLinear(run([StackEntry(operation: "rgbcurve", params: [:])]), scene) < 1e-3)
+}
+
 print(failures == 0 ? "\nall checks passed" : "\n\(failures) failed")
 exit(failures == 0 ? 0 : 1)

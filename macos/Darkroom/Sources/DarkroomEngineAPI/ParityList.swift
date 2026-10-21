@@ -61,7 +61,7 @@ public enum ParityList {
             e("hazeremoval", .exact), e("flip", .exact), e("ashift", .exact, "rotate and straighten only"), e("crop", .exact),
             // Core Image stand-ins
             e("basecurve", .approximate, "a gamma only"), e("colorize", .approximate), e("blurs", .approximate), e("lowpass", .approximate),
-            e("dither", .approximate), e("censorize", .approximate), e("soften", .approximate), e("rgbcurve", .approximate),
+            e("dither", .approximate), e("censorize", .approximate), e("soften", .approximate), e("rgbcurve", .exact, "one curve of five nodes on every channel (darktable's linked mode); the tone curve's oracle and kernel"),
             e("relight", .approximate, "deprecated in darktable; shadhi or toneequal replace it"), e("colorcontrast", .approximate),
             e("colorcorrection", .approximate), e("clahe", .approximate, "deprecated in darktable; bilat replaces it"),
             // the job is done by something we have
