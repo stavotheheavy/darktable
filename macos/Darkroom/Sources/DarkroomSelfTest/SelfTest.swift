@@ -812,6 +812,13 @@ struct SelfTest {
         try await run("exposure slider, with the same four detail modules") { i in
             detail + [StackEntry(operation: "exposure", params: ["exposure": num(Double(i) * 0.05)]), display(0)]
         }
+        try await run("five per-pixel modules (white balance, exposure, colour balance, display, tone curve): one pass") { i in
+            [StackEntry(operation: "temperature", params: ["red": num(1.2), "green": num(1), "blue": num(0.9)]),
+             StackEntry(operation: "exposure", params: ["exposure": num(Double(i) * 0.03)]),
+             StackEntry(operation: "colorbalancergb", params: ["contrast": num(0.2), "vibrance": num(0.3)]),
+             display(0),
+             StackEntry(operation: "tonecurve", params: ["y0": num(0), "y1": num(0.2), "y2": num(0.5), "y3": num(0.8), "y4": num(1)])]
+        }
         try await run("zone exposure, Shadows slider (the base is kept, the gain re-runs)") { i in
             [StackEntry(operation: "zones", params: ["shadows": num(Double(i) * 0.05), "highlights": num(-0.5)]), display(0)]
         }

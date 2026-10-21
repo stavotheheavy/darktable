@@ -998,6 +998,46 @@ do {
     }
 }
 
+// E-FU fusion: 50 random stacks of 2 to 6 per-pixel modules (their golden settings, some at partial opacity so a run is cut in two, a few with
+// the display transform), rendered fused (one pass per run) and unfused (one pass per module): the same picture within 1/255 encoded and
+// 2e-4 unclamped, and the fused run really is one pass (a stack of n fusable modules makes one op list)
+do {
+    let pool = CIEngineProbe.goldenCases().filter { CIEngineProbe.fusableOperations.contains($0.operation) }.map { $0.stack[0] }
+    var seed: UInt64 = 0x9E3779B97F4A7C15
+    func next() -> Int { seed = seed &* 6364136223846793005 &+ 1442695040888963407; return Int(seed >> 33) }
+    var worstEnc = 0.0, worstLin = 0.0, cases = 0, moved = 0
+    for _ in 0..<50 {
+        var chosen = pool
+        for i in stride(from: chosen.count - 1, to: 0, by: -1) { chosen.swapAt(i, next() % (i + 1)) }
+        let count = 2 + next() % 5
+        chosen = Array(chosen.prefix(count))
+        // some entries run at partial opacity: they are not fused, so they cut the run
+        chosen = chosen.map { e in
+            next() % 5 == 0 ? StackEntry(operation: e.operation, params: e.params, blend: ["opacity": .number(60)]) : e
+        }
+        let fusedOut = (try? CIEngineProbe.renderSized(stack: chosen, pixels: detailPx, width: detailW, height: detailH, fuse: true).pixels) ?? []
+        let plainOut = (try? CIEngineProbe.renderSized(stack: chosen, pixels: detailPx, width: detailW, height: detailH, fuse: false).pixels) ?? []
+        guard fusedOut.count == plainOut.count, !fusedOut.isEmpty else { worstEnc = .infinity; continue }
+        cases += 1
+        let want = plainOut.map { SIMD3(Double($0.x), Double($0.y), Double($0.z)) }
+        worstEnc = max(worstEnc, worst(fusedOut, want))
+        worstLin = max(worstLin, worstLinear(fusedOut, want))
+        if worstLinear(plainOut, detailPx.map { SIMD3(Double($0.x), Double($0.y), Double($0.z)) }) > 0.02 { moved += 1 }
+    }
+    check("E-FU \(cases) random stacks of per-pixel modules: fused equals unfused within 1/255 encoded and 2e-4 linear", cases == 50 && worstEnc < tol && worstLin < 2e-4, "encoded \(worstEnc), linear \(worstLin)")
+    check("E-FU the random stacks change the picture (a pass-through would fail): \(moved) of 50", moved >= 40, "\(moved)")
+    check("E-FU a run is one op list: white balance, exposure, colour balance, tone curve and display make five ops, one pass",
+          CIEngineProbe.fusedRunLengths([StackEntry(operation: "display", params: [:]), StackEntry(operation: "tonecurve", params: [:]),
+                                         StackEntry(operation: "colorbalancergb", params: ["contrast": .number(0.2)]),
+                                         StackEntry(operation: "exposure", params: ["exposure": .number(0.3)]),
+                                         StackEntry(operation: "temperature", params: ["red": .number(1.2)])]) == [5])
+    check("E-FU a neighbourhood module cuts the run in two",
+          CIEngineProbe.fusedRunLengths([StackEntry(operation: "exposure", params: ["exposure": .number(0.3)]),
+                                         StackEntry(operation: "sharpen", params: [:]),
+                                         StackEntry(operation: "display", params: [:]),
+                                         StackEntry(operation: "tonecurve", params: [:])]) == [1, 2])
+}
+
 // T10 HDR: a ramp from deep shadow to 4 stops over white through the display transform; the SDR render, the HDR
 // render and the exported file (an SDR JPEG carrying a gain map) must agree with each other and with SceneTone
 do {

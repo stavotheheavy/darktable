@@ -278,8 +278,11 @@ public actor CIEngine: PhotoEngine {
             // what the decoder hands over depends on the scene-referred switch and the working size, so both are in the key
             segments = Segments(cache: segmentCache, base: "\(session.id)|\(Self.wantsSceneLinear(stack))|\(maskRasterRevision)")
         }
-        return try Self.process(image, stack, camera: camera, scale: scale, rasters: maskRasters, segments: segments)
+        return try Self.process(image, stack, camera: camera, scale: scale, rasters: maskRasters, segments: segments, fuse: Self.fusionEnabled)
     }
+
+    /// Fused per-pixel passes are on unless DARKROOM_NO_FUSE is set (to time or debug the one-pass-per-module path).
+    static let fusionEnabled = ProcessInfo.processInfo.environment["DARKROOM_NO_FUSE"] == nil
 
     /// The whole edit on a sensor-orientation image: the per-pixel stack, then geometry. Static so
     /// `CIEngineProbe` runs this exact code.
@@ -289,9 +292,9 @@ public actor CIEngine: PhotoEngine {
     /// pixels (sharpen, local contrast, haze removal, mask refinement) take their radius as full-resolution pixels and
     /// shrink it by `scale`, so a preview looks like the export (roadmap T9).
     static func process(_ image: CIImage, _ stack: [StackEntry], camera: Orientation, hdrPeak: Double? = nil,
-                        scale: Double = 1, rasters: [String: MaskRaster] = [:], segments: Segments? = nil) throws -> CIImage {
+                        scale: Double = 1, rasters: [String: MaskRaster] = [:], segments: Segments? = nil, fuse: Bool = true) throws -> CIImage {
         CIGeometry.apply(try CIGeometry.spec(stack, camera: camera),
-                         to: try applyStack(image, stack, hdrPeak: hdrPeak, scale: scale, camera: camera, rasters: rasters, segments: segments))
+                         to: try applyStack(image, stack, hdrPeak: hdrPeak, scale: scale, camera: camera, rasters: rasters, segments: segments, fuse: fuse))
     }
 
     /// A segment cache and the text that identifies the decoded picture the stack starts from (photo, decode scale and settings).
@@ -310,7 +313,8 @@ public actor CIEngine: PhotoEngine {
     /// Applies the enabled stack entries in pipeline order. An operation the clean engine
     /// does not have is an error, never a silent skip. Static so `CIEngineProbe` runs this exact code.
     static func applyStack(_ image: CIImage, _ stack: [StackEntry], hdrPeak: Double? = nil, scale: Double = 1,
-                           camera: Orientation = .none, rasters: [String: MaskRaster] = [:], segments: Segments? = nil) throws -> CIImage {
+                           camera: Orientation = .none, rasters: [String: MaskRaster] = [:], segments: Segments? = nil,
+                           fuse: Bool = true) throws -> CIImage {
         let sceneReferred = wantsSceneLinear(stack)
         let ordered = try stack.filter { $0.enabled && !CIGeometry.operations.contains($0.operation) }.map { entry -> (CIModule, StackEntry) in
             guard let m = CIModule.named(entry.operation) else {
@@ -346,27 +350,24 @@ public actor CIEngine: PhotoEngine {
             guard let segments, let key = boundaryKeys[index] else { return }
             out = segments.cache.store(out, key: key)
         }
-        // Pure gains (white balance, exposure) multiply on their own, so a run of them is one multiply: it is carried along and
-        // either joins the display transform's kernel or is applied as one pass just before the next module that is not a gain.
-        var pendingGain: SIMD3<Double>?
+        // A run of per-pixel modules (white balance, exposure, colour balance, mixer, the curves, the display transform...) is one pass over
+        // the frame: their ops pile up here and are flushed as one fused kernel just before the next module that is not one of them (or at
+        // the end). `fuse: false` (the checks) runs them one by one instead, to prove the two agree.
+        var pending: [FusedOp] = []
+        func flush() throws {
+            if !pending.isEmpty { out = try CIBridge.fused(out, ops: pending); pending = [] }
+        }
         for (index, (m, entry)) in ordered.enumerated() {
             if index < start { continue }
             let maskMode = entry.blend["mask_mode"]?.double ?? 0
             var values = m.values(from: entry.params)
-            if maskMode == 0, (entry.blend["opacity"]?.double ?? 100) >= 100, let g = CIModule.foldableGain(m.operation, values) {
-                if g != SIMD3(1, 1, 1) { pendingGain = (pendingGain ?? SIMD3(1, 1, 1)) * g }
+            if let hdrPeak, m.operation == "display" { values["peak"] = hdrPeak }
+            if fuse, maskMode == 0, (entry.blend["opacity"]?.double ?? 100) >= 100, CIModule.fusableOperations.contains(m.operation) {
+                if let op = CIModule.fusedOp(m.operation, values) { pending.append(op) }
                 continue
             }
-            if let gain = pendingGain {
-                if m.operation == "display" {
-                    values["_gain_r"] = gain.x; values["_gain_g"] = gain.y; values["_gain_b"] = gain.z
-                } else {
-                    out = try CIBridge.gain(out, scale: gain)
-                }
-                pendingGain = nil
-            }
+            try flush()
             let before = out
-            if let hdrPeak, m.operation == "display" { values["peak"] = hdrPeak }
             values["_scale"] = scale.isFinite ? min(max(scale, 1e-3), 1) : 1
             values["_camera"] = Double(camera.rawValue)   // modules that draw their own matte need the upright picture
             if m.operation == "zones", let segments, let inputKey = inputKeys[index] {
@@ -417,7 +418,7 @@ public actor CIEngine: PhotoEngine {
             }
             keep(index)
         }
-        if let gain = pendingGain { out = try CIBridge.gain(out, scale: gain) }
+        try flush()
         if let showMatte {
             // red over the masked part: alpha 0.5 where the matte is 1 (a hair stronger so thin masks read)
             let tint = showMatte.applyingFilter("CIColorMatrix", parameters: [

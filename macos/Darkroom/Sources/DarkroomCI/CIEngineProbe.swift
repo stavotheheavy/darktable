@@ -20,7 +20,7 @@ public enum CIEngineProbe {
     /// Like `render`, for stacks that change the size: returns the output pixels and their size.
     public static func renderSized(stack: [StackEntry], pixels: [SIMD4<Float>], width: Int, height: Int,
                                    camera: Orientation = .none, coreImageOrientation: UInt32? = nil, scale: Double = 1,
-                                   rasters: [MaskPicture] = []) throws
+                                   rasters: [MaskPicture] = [], fuse: Bool = true) throws
         -> (pixels: [SIMD4<Float>], width: Int, height: Int) {
         guard pixels.count == width * height, width > 0, height > 0 else { throw EngineError("probe: size mismatch") }
         guard let space = CGColorSpace(name: CGColorSpace.extendedLinearSRGB),
@@ -36,7 +36,7 @@ public enum CIEngineProbe {
             let turned = input.oriented(o)
             output = turned.transformed(by: CGAffineTransform(translationX: -turned.extent.minX, y: -turned.extent.minY))
         } else {
-            output = try CIEngine.process(input, stack, camera: camera, scale: scale, rasters: Dictionary(rasters.map { ($0.id, MaskRaster(id: $0.id, width: $0.width, height: $0.height, pixels: $0.pixels)) }) { $1 })
+            output = try CIEngine.process(input, stack, camera: camera, scale: scale, rasters: Dictionary(rasters.map { ($0.id, MaskRaster(id: $0.id, width: $0.width, height: $0.height, pixels: $0.pixels)) }) { $1 }, fuse: fuse)
         }
         let context = CIContext(mtlDevice: device, options: [
             .workingColorSpace: space, .workingFormat: CIFormat.RGBAf, .cacheIntermediates: false,
@@ -175,6 +175,27 @@ public enum CIEngineProbe {
 
     /// The operations that run after the display transform when it is on.
     public static var displayReferredOperations: Set<String> { CIModule.displayReferredOperations }
+
+    /// The operations whose modules fuse into one pass.
+    public static var fusableOperations: Set<String> { CIModule.fusableOperations }
+
+    /// How many ops each fused pass of `stack` holds, in pipeline order (what the engine would dispatch). A neighbourhood module or a
+    /// module that is masked or faded ends a run.
+    public static func fusedRunLengths(_ stack: [StackEntry]) -> [Int] {
+        let ordered = stack.filter { $0.enabled && !CIGeometry.operations.contains($0.operation) }.compactMap { e in CIModule.named(e.operation).map { ($0, e) } }
+            .sorted { CIEngine.effectiveOrder($0.0, sceneReferred: CIEngine.wantsSceneLinear(stack)) < CIEngine.effectiveOrder($1.0, sceneReferred: CIEngine.wantsSceneLinear(stack)) }
+        var runs: [Int] = [], current = 0
+        for (m, e) in ordered {
+            let maskMode = e.blend["mask_mode"]?.double ?? 0
+            if maskMode == 0, (e.blend["opacity"]?.double ?? 100) >= 100, CIModule.fusableOperations.contains(m.operation) {
+                if CIModule.fusedOp(m.operation, m.values(from: e.params)) != nil { current += 1 }
+            } else {
+                if current > 0 { runs.append(current); current = 0 }
+            }
+        }
+        if current > 0 { runs.append(current) }
+        return runs
+    }
 
     /// Whether the engine would decode scene-linear for this stack.
     public static func wantsSceneLinear(_ stack: [StackEntry]) -> Bool {

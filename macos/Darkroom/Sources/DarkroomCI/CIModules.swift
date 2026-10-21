@@ -16,14 +16,70 @@ struct CIModule: Sendable {
     let apply: @Sendable (CIImage, [String: Double]) throws -> CIImage
     /// Wants the decoder's scene-linear output (no boost tone curve) when enabled.
     var sceneReferred = false
-    /// The per-channel multiply a pure-gain module (white balance, exposure) stands for, or nil for any other module. The engine
-    /// folds a run of these into one multiply instead of one pass each. The module's own `apply` is the same multiply.
-    static func foldableGain(_ operation: String, _ v: [String: Double]) -> SIMD3<Double>? {
+    /// The modules whose work is one pixel in, one pixel out, on our own Metal functions: a run of them is one pass over the frame
+    /// (see MetalFused). The engine fuses them when they are unmasked and at full opacity.
+    static let fusableOperations: Set<String> = [
+        "temperature", "exposure", "colorbalancergb", "channelmixer", "tonecurve", "monochrome", "rgblevels", "splittoning", "display",
+    ]
+
+    /// The fused op a fusable module stands for with these values, or nil when the module does nothing at them. This is the one place the
+    /// module's settings become kernel uniforms: the module's own `apply` (used when it is masked or partly faded) goes through here too.
+    static func fusedOp(_ operation: String, _ v: [String: Double]) -> FusedOp? {
         switch operation {
-        case "temperature": return SIMD3(v["red"] ?? 1, v["green"] ?? 1, v["blue"] ?? 1)
-        case "exposure": let g = Exposure.gain(ev: v["exposure"] ?? 0); return SIMD3(g, g, g)
-        default: return nil
+        case "temperature":
+            let g = SIMD3(v["red"] ?? 1, v["green"] ?? 1, v["blue"] ?? 1)
+            return g == SIMD3(1, 1, 1) ? nil : FusedOp(.gain, [Float(g.x), Float(g.y), Float(g.z)])
+        case "exposure":
+            let g = Float(Exposure.gain(ev: v["exposure"] ?? 0))
+            return g == 1 ? nil : FusedOp(.gain, [g, g, g])
+        case "colorbalancergb":
+            let u = [Float(v["contrast"] ?? 0), Float(v["saturation_global"] ?? 0), Float(v["vibrance"] ?? 0)]
+            return u.allSatisfy { $0 == 0 } ? nil : FusedOp(.colorBalance, u)
+        case "channelmixer":
+            let names = ["red_r", "red_g", "red_b", "green_r", "green_g", "green_b", "blue_r", "blue_g", "blue_b"]
+            let identity: [Double] = [1, 0, 0, 0, 1, 0, 0, 0, 1]
+            let u: [Float] = names.indices.map { Float(v[names[$0]] ?? identity[$0]) }
+            return u == identity.map { Float($0) } ? nil : FusedOp(.channelMixer, u)
+        case "tonecurve":
+            let n = Int((v["n"] ?? 0).rounded())
+            let points: (xs: [Double], ys: [Double])
+            if n >= 2 {
+                let count = min(n, ToneCurve.maxPoints)
+                points = ToneCurve.sanitized(xs: (0..<count).map { v["x\($0)"] ?? 1 }, ys: (0..<count).map { v["y\($0)"] ?? 1 })
+            } else {
+                points = ToneCurve.sanitized(xs: ToneCurve.legacyXs, ys: [v["y0"] ?? 0, v["y1"] ?? 0.25, v["y2"] ?? 0.5, v["y3"] ?? 0.75, v["y4"] ?? 1])
+            }
+            return FusedOp(.toneCurve, ToneCurve.uniforms(xs: points.xs, ys: points.ys))
+        case "monochrome":
+            let intensity = v["intensity"] ?? 0
+            guard intensity > 0 else { return nil }
+            let hue = (v["filter_hue"] ?? 30) * .pi / 180
+            return FusedOp(.monochrome, [Float(intensity), Float(v["filter_strength"] ?? 0), Float(cos(hue)), Float(sin(hue))])
+        case "rgblevels":
+            let black = v["black"] ?? 0
+            let white = max(v["white"] ?? 1, black + 0.01)
+            let grey = min(max(v["grey"] ?? 0.5, 0.01), 0.99)
+            return FusedOp(.levels, [Float(black), Float(white), Float(log(0.5) / log(grey))])
+        case "splittoning":
+            let pivot = 0.5 + 0.25 * (v["balance"] ?? 0)
+            let sh = (v["shadows_hue"] ?? 220) * .pi / 180, hh = (v["highlights_hue"] ?? 60) * .pi / 180
+            let ss = 0.08 * (v["shadows_saturation"] ?? 0), hs = 0.08 * (v["highlights_saturation"] ?? 0)
+            return FusedOp(.splitToning, [pivot, ss * cos(sh), ss * sin(sh), hs * cos(hh), hs * sin(hh)].map { Float($0) })
+        case "display":
+            // the module's own lift is a gain on the input, inside the tone kernel
+            let lift = Exposure.gain(ev: v["exposure"] ?? 0)
+            let tone = SceneTone(contrast: v["contrast"] ?? 0, whiteEV: v["white"] ?? SceneTone.defaultWhiteEV,
+                                 purity: v["purity"] ?? SceneTone.defaultPurity, peak: v["peak"] ?? 1)
+            return FusedOp(.sceneTone, tone.uniforms(gain: SIMD3(repeating: lift)))
+        default:
+            return nil
         }
+    }
+
+    /// A fusable module on its own (masked, partly faded, or the only one in its run): the same op through the same kernel.
+    static func applyFused(_ operation: String, _ image: CIImage, _ v: [String: Double]) throws -> CIImage {
+        guard let op = fusedOp(operation, v) else { return image }
+        return try CIBridge.fused(image, ops: [op])
     }
 
     /// Modules that read a neighbourhood (a blur radius, a guided filter, wavelet levels): the expensive ones. The segment cache keeps
@@ -83,9 +139,7 @@ extension CIModule {
                             min: 0, max: 8, defaultValue: .number(1), options: []),
             ],
             // the oracle-checked gain kernel (darkroom-metal-check B2, darkroom-engine-check E1)
-            apply: { image, v in
-                try CIBridge.gain(image, scale: SIMD3(v["red"] ?? 1, v["green"] ?? 1, v["blue"] ?? 1))
-            }),
+            apply: { image, v in try CIModule.applyFused("temperature", image, v) }),
 
         // Colour balance in OkLab: contrast, global saturation and vibrance, the fields Simple's
         // Contrast and Color sliders write. ColorBalance in DarkroomCore is the oracle, and the
@@ -101,11 +155,7 @@ extension CIModule {
                 FieldSchema(name: "saturation_global", description: "global saturation", kind: .float,
                             min: -1, max: 1, defaultValue: .number(0), options: []),
             ],
-            apply: { image, v in
-                try CIBridge.perPixel(image, source: MetalColorBalance.source, function: "colorbalanceTex",
-                                      uniforms: [Float(v["contrast"] ?? 0), Float(v["saturation_global"] ?? 0),
-                                                 Float(v["vibrance"] ?? 0)])
-            }),
+            apply: { image, v in try CIModule.applyFused("colorbalancergb", image, v) }),
 
         // Exposure in stops, applied as a gain on linear light.
         CIModule(
@@ -115,10 +165,7 @@ extension CIModule {
                             min: -18, max: 18, defaultValue: .number(0), options: []),
             ],
             // DarkroomCore's Exposure.gain on the oracle-checked gain kernel (darkroom-engine-check E2)
-            apply: { image, v in
-                let g = Exposure.gain(ev: v["exposure"] ?? 0)
-                return try CIBridge.gain(image, scale: SIMD3(g, g, g))
-            }),
+            apply: { image, v in try CIModule.applyFused("exposure", image, v) }),
 
         // Two-dimensional unsharp mask on the square root of luminance: amount and the radius it works over.
         CIModule(
@@ -155,12 +202,7 @@ extension CIModule {
                 field("blue_r", -2, 2, 0), field("blue_g", -2, 2, 0), field("blue_b", -2, 2, 1),
             ],
             // DarkroomCore's ChannelMixer on the oracle-checked per-pixel kernel (darkroom-engine-check E-CM)
-            apply: { image, v in
-                let names = ["red_r", "red_g", "red_b", "green_r", "green_g", "green_b", "blue_r", "blue_g", "blue_b"]
-                let identity: [Double] = [1, 0, 0, 0, 1, 0, 0, 0, 1]
-                let uniforms: [Float] = names.indices.map { Float(v[names[$0]] ?? identity[$0]) }
-                return try CIBridge.perPixel(image, source: MetalChannelMixer.source, function: "mixerTex", uniforms: uniforms)
-            }),
+            apply: { image, v in try CIModule.applyFused("channelmixer", image, v) }),
 
         // Shadows and highlights: lift or hold the two ends of the tonal range.
         CIModule(
@@ -190,18 +232,7 @@ extension CIModule {
                 field("x5", 0, 1, 1), field("x6", 0, 1, 1), field("x7", 0, 1, 1),
             ],
             // DarkroomCore's ToneCurve on the oracle-checked per-pixel kernel (darkroom-engine-check E-TC)
-            apply: { image, v in
-                let n = Int((v["n"] ?? 0).rounded())
-                let points: (xs: [Double], ys: [Double])
-                if n >= 2 {
-                    let count = min(n, ToneCurve.maxPoints)
-                    points = ToneCurve.sanitized(xs: (0..<count).map { v["x\($0)"] ?? 1 }, ys: (0..<count).map { v["y\($0)"] ?? 1 })
-                } else {
-                    points = ToneCurve.sanitized(xs: ToneCurve.legacyXs, ys: [v["y0"] ?? 0, v["y1"] ?? 0.25, v["y2"] ?? 0.5, v["y3"] ?? 0.75, v["y4"] ?? 1])
-                }
-                return try CIBridge.perPixel(image, source: MetalToneCurve.source, function: "tonecurveTex",
-                                             uniforms: ToneCurve.uniforms(xs: points.xs, ys: points.ys))
-            }),
+            apply: { image, v in try CIModule.applyFused("tonecurve", image, v) }),
 
         // Contrast, brightness and saturation, as darktable's contrast brightness saturation
         // module names them.
@@ -233,14 +264,7 @@ extension CIModule {
             defaultEnabled: false,
             fields: [field("intensity", 0, 1, 0), field("filter_hue", 0, 360, 30), field("filter_strength", 0, 1, 0)],
             // DarkroomCore's Monochrome on the oracle-checked per-pixel kernel (darkroom-engine-check E-MO)
-            apply: { image, v in
-                let intensity = v["intensity"] ?? 0
-                guard intensity > 0 else { return image }
-                let hue = (v["filter_hue"] ?? 30) * .pi / 180
-                return try CIBridge.perPixel(image, source: MetalMonochrome.source, function: "monochromeTex",
-                                             uniforms: [Float(intensity), Float(v["filter_strength"] ?? 0),
-                                                        Float(cos(hue)), Float(sin(hue))])
-            }),
+            apply: { image, v in try CIModule.applyFused("monochrome", image, v) }),
 
         // Vignetting: darkens the corners. Zero strength is off.
         CIModule(
@@ -293,14 +317,7 @@ extension CIModule {
             operation: "rgblevels", name: "rgb levels", iopOrder: 33,
             defaultEnabled: false,
             fields: [field("black", 0, 0.5, 0), field("grey", 0.1, 0.9, 0.5), field("white", 0.5, 1, 1)],
-            apply: { image, v in
-                let black = v["black"] ?? 0
-                let white = max(v["white"] ?? 1, black + 0.01)
-                let grey = min(max(v["grey"] ?? 0.5, 0.01), 0.99)
-                let gamma = log(0.5) / log(grey)
-                return try CIBridge.perPixel(image, source: MetalLevels.source, function: "levelsTex",
-                                             uniforms: [Float(black), Float(white), Float(gamma)])
-            }),
+            apply: { image, v in try CIModule.applyFused("rgblevels", image, v) }),
 
         // Colorize, approximate: tints the image towards a hue at a strength.
         CIModule(
@@ -392,13 +409,7 @@ extension CIModule {
                 field("balance", -1, 1, 0),
             ],
             // DarkroomCore's SplitToning on the oracle-checked per-pixel kernel (darkroom-engine-check E-ST)
-            apply: { image, v in
-                let pivot = 0.5 + 0.25 * (v["balance"] ?? 0)
-                let sh = (v["shadows_hue"] ?? 220) * .pi / 180, hh = (v["highlights_hue"] ?? 60) * .pi / 180
-                let ss = 0.08 * (v["shadows_saturation"] ?? 0), hs = 0.08 * (v["highlights_saturation"] ?? 0)
-                let uniforms: [Float] = [pivot, ss * cos(sh), ss * sin(sh), hs * cos(hh), hs * sin(hh)].map { Float($0) }
-                return try CIBridge.perPixel(image, source: MetalSplitToning.source, function: "splitTex", uniforms: uniforms)
-            }),
+            apply: { image, v in try CIModule.applyFused("splittoning", image, v) }),
 
         // Local contrast: a guided filter on square-root luminance, so the boost stops at strong edges (no halos).
         // LocalContrast in DarkroomCore is the oracle, and the GPU path is checked against it (darkroom-engine-check E-LC).
@@ -555,15 +566,7 @@ extension CIModule {
                 FieldSchema(name: "purity", description: "path to white", kind: .float,
                             min: 0, max: 1, defaultValue: .number(SceneTone.defaultPurity), options: []),
             ],
-            apply: { image, v in
-                // white balance and exposure ahead of this module arrive folded in `_gain_*` (see CIEngine.applyStack); the
-                // module's own lift joins them, so the whole run of gains is one multiply inside the tone kernel
-                let lift = Exposure.gain(ev: v["exposure"] ?? 0)
-                let gain = SIMD3(v["_gain_r"] ?? 1, v["_gain_g"] ?? 1, v["_gain_b"] ?? 1) * lift
-                let tone = SceneTone(contrast: v["contrast"] ?? 0, whiteEV: v["white"] ?? SceneTone.defaultWhiteEV,
-                                     purity: v["purity"] ?? SceneTone.defaultPurity, peak: v["peak"] ?? 1)
-                return try CIBridge.sceneTone(image, tone: tone, gain: gain)
-            })
+            apply: { image, v in try CIModule.applyFused("display", image, v) })
         m.algorithmVersion = 2
         m.sceneReferred = true
         return m
