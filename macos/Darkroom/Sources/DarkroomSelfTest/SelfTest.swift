@@ -1,5 +1,6 @@
 import CoreGraphics
 import CoreImage
+import DarkroomCore
 import DarkroomUI
 import DarktableKit
 import Foundation
@@ -82,6 +83,7 @@ struct SelfTest {
         let visionMasks = take("--vision-masks")
         let previewVsExport = has("--preview-vs-export")
         let viewportBench = has("--viewport-bench")
+        let highlightProbe = has("--highlight-probe")
         // darktable is the default; `ci` runs the clean engine (only --bench supports it so far)
         let engineName = take("--engine") ?? "darktable"
         guard let path = args.first else {
@@ -106,6 +108,8 @@ struct SelfTest {
                 try await runOneShot(engine: engine, sessionPath: path, other: oneShot)
             } else if let visionMasks {
                 try runVisionMasks(path: path, out: visionMasks)
+            } else if highlightProbe {
+                try runHighlightProbe(path: path)
             } else if viewportBench {
                 try await runViewportBench(engine: engine, path: path, maxSide: maxSide)
             } else if previewVsExport {
@@ -697,6 +701,74 @@ struct SelfTest {
             if !ok { failed = true }
         }
         if failed { throw EngineError("HDR export check failed") }
+    }
+
+    /// How Apple's decoder leaves clipped highlights, measured on its scene-linear output (the engine's own decode settings: boost,
+    /// shadow lift and sharpening off, extended range on). Per photo: the plateau the data tops out on, the share of pixels at it,
+    /// and how coloured those pixels are (mean OkLab chroma of the linear value, against a neutral's zero). The decision rule for
+    /// building highlight reconstruction: mean chroma of the blown pixels above 0.02 means the decoder leaves a cast the engine
+    /// would have to remove; a plateau below 1.5 (in units of display white) means the clip level is too low to keep headroom.
+    static func runHighlightProbe(path: String) throws {
+        var isDir: ObjCBool = false
+        FileManager.default.fileExists(atPath: path, isDirectory: &isDir)
+        let raws = ["nef", "arw", "cr2", "cr3", "dng", "raf"]
+        let files: [String] = isDir.boolValue
+            ? ((try? FileManager.default.contentsOfDirectory(atPath: path)) ?? []).sorted()
+                .filter { raws.contains(($0 as NSString).pathExtension.lowercased()) }.map { path + "/" + $0 }
+            : [path]
+        guard let space = CGColorSpace(name: CGColorSpace.extendedLinearSRGB), let device = MTLCreateSystemDefaultDevice() else { return }
+        let context = CIContext(mtlDevice: device, options: [.workingColorSpace: space, .workingFormat: CIFormat.RGBAf])
+        print("highlight probe: \(files.count) raws")
+        print("file\tplateau\tblown %\tmean chroma of blown\tneutral share of blown\tdistinct values in blown")
+        var rows: [(String, Double, Double, Double)] = []
+        for f in files {
+            guard let raw = CIRAWFilter(imageURL: URL(fileURLWithPath: f)) else { continue }
+            raw.scaleFactor = 0.25
+            raw.boostAmount = 0; raw.localToneMapAmount = 0; raw.boostShadowAmount = 0; raw.shadowBias = 0; raw.sharpnessAmount = 0
+            raw.extendedDynamicRangeAmount = 1
+            guard let image = raw.outputImage else { continue }
+            let w = Int(image.extent.width), h = Int(image.extent.height)
+            var px = [Float](repeating: 0, count: w * h * 4)
+            context.render(image, toBitmap: &px, rowBytes: w * 16, bounds: image.extent, format: .RGBAf, colorSpace: space)
+            // the plateau: the most common value among each pixel's largest channel, in the top 2% of the range
+            var tops = [Float](); tops.reserveCapacity(w * h)
+            for i in 0..<(w * h) { tops.append(max(px[i * 4], px[i * 4 + 1], px[i * 4 + 2])) }
+            let sorted = tops.sorted()
+            let top = sorted[Int(Double(sorted.count - 1) * 0.9999)]
+            guard top > 0.5 else { continue }
+            var bins = [Int](repeating: 0, count: 200)
+            for v in tops where v > top * 0.9 { bins[min(199, Int((v - top * 0.9) / (top * 0.1) * 200))] += 1 }
+            let peak = bins.enumerated().max { $0.element < $1.element }!.offset
+            let plateau = Double(top) * (0.9 + 0.1 * (Double(peak) + 0.5) / 200)
+            var blown = 0, neutral = 0, chromaSum = 0.0
+            var distinct = Set<Float>()
+            for i in 0..<(w * h) where Double(tops[i]) >= plateau * 0.995 && tops[i] <= Float(plateau * 1.005) {
+                blown += 1
+                let rgb = SIMD3<Double>(Double(px[i * 4]), Double(px[i * 4 + 1]), Double(px[i * 4 + 2]))
+                let lab = OkLab.fromWorking(rgb)
+                let c = hypot(lab.y, lab.z)
+                chromaSum += c
+                if c < 0.02 { neutral += 1 }
+                if distinct.count < 5000 { distinct.insert(tops[i]) }
+            }
+            let share = Double(blown) / Double(w * h) * 100
+            let mean = blown > 0 ? chromaSum / Double(blown) : 0
+            print(String(format: "%@\t%.2f\t%.2f\t%.4f\t%.0f%%\t%d", (f as NSString).lastPathComponent, plateau, share, mean,
+                         blown > 0 ? Double(neutral) / Double(blown) * 100 : 100, distinct.count))
+            if share >= 0.05 { rows.append(((f as NSString).lastPathComponent, plateau, share, mean)) }
+        }
+        if rows.isEmpty { print("no photo had a plateau holding 0.05% of its pixels"); return }
+        let meanChroma = rows.map { $0.3 }.reduce(0, +) / Double(rows.count)
+        var worst = rows[0], lowest = rows[0]
+        for r in rows { if r.3 > worst.3 { worst = r }; if r.1 < lowest.1 { lowest = r } }
+        print("summary: \(rows.count) photos with a real clip (0.05% of pixels or more on the plateau); mean chroma of blown pixels "
+              + "\(String(format: "%.4f", meanChroma)) (worst \(String(format: "%.4f", worst.3)) in \(worst.0)); "
+              + "lowest plateau \(String(format: "%.2f", lowest.1)) in \(lowest.0)")
+        let neutralPhotos = rows.filter { $0.3 < 0.02 }.count
+        print("photos whose blown pixels are neutral (mean chroma under 0.02): \(neutralPhotos) of \(rows.count)")
+        print("decision: " + (meanChroma > 0.02 || worst.3 > 0.05
+                              ? "some photos have coloured blown regions: see the list; the cause (a real coloured light versus a cast the decoder leaves) needs a look"
+                              : "the decoder leaves blown highlights near-neutral: highlight reconstruction is not needed on these photos"))
     }
 
     /// Edit-to-pixels latency of the engine session, the number T5's MetalChain microbenchmark never measured: open at `maxSide`

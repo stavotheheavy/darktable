@@ -853,6 +853,113 @@ do {
     }
 }
 
+// E-CTX the app's own context (half float, linear sRGB, CIEngine.makeContext) renders what the full-precision probe context does: the
+// oracle checks above run in float, so this is what ties them to the pictures the app shows
+do {
+    if let probe = try? SegmentProbe() {
+        let cases: [(String, [StackEntry])] = [
+            ("white balance, exposure, display", chain),
+            ("tone curve after display", [StackEntry(operation: "display", params: ["contrast": .number(0)]),
+                                          StackEntry(operation: "tonecurve", params: ["y0": .number(0), "y1": .number(0.15), "y2": .number(0.5), "y3": .number(0.85), "y4": .number(1)])]),
+            ("colour balance", [StackEntry(operation: "colorbalancergb", params: ["contrast": .number(0.3), "saturation_global": .number(0.4)])]),
+            ("rgb levels", [StackEntry(operation: "rgblevels", params: ["black": .number(0.1), "grey": .number(0.4), "white": .number(0.9)])]),
+        ]
+        for (name, stack) in cases {
+            let app = (try? probe.render(stack: stack, pixels: input, width: n, height: n, cached: false)) ?? []
+            let full = run(stack)
+            var e = app.count == full.count ? 0.0 : Double.infinity
+            for (a, b) in zip(app, full) {
+                for k in 0..<3 {
+                    guard a[k].isFinite else { e = .infinity; continue }
+                    e = max(e, abs(Double(a[k]) - Double(b[k])) / max(1, abs(Double(b[k]))))
+                }
+            }
+            check("E-CTX the app's context agrees with the float context on \(name) within 2e-3 relative", e < 2e-3, "\(e)")
+        }
+    } else {
+        check("E-CTX the app's context could not start", false)
+    }
+}
+
+// T5v the viewport: edit-to-pixels at 2200 x 1467 (the size that used to fall off Core Image's cache) in the app's own context and through the
+// segment cache, with the viewport's 8-bit read-back. The default edit (white balance, exposure, display) and a display-contrast drag with the
+// four detail modules on must both stay under 16 ms at p95. Load-sensitive like any timing: it has several times of margin on an idle Mac.
+do {
+    if let probe = try? SegmentProbe() {
+        let vw = 2200, vh = 1467
+        let big: [SIMD4<Float>] = (0..<(vw * vh)).map { i in
+            let x = Double(i % vw) / Double(vw), y = Double(i / vw) / Double(vh)
+            return SIMD4(Float(0.05 + 0.6 * x * y + 0.02 * sin(x * 90)), Float(0.04 + 0.5 * x), Float(0.03 + 0.4 * y), 1)
+        }
+        let source = probe.makeSource(pixels: big, width: vw, height: vh)
+        func p95(_ make: (Int) -> [StackEntry]) -> Double {
+            _ = try? probe.timeFrame(stack: make(0), source: source)
+            var times: [Double] = []
+            for i in 1...30 { if let ms = try? probe.timeFrame(stack: make(i), source: source) { times.append(ms) } }
+            guard times.count == 30 else { return .infinity }
+            return times.sorted()[Int(Double(times.count) * 0.95) - 1]
+        }
+        let wbEntry = StackEntry(operation: "temperature", params: ["red": .number(1.2), "green": .number(1), "blue": .number(0.9)])
+        let defaultEdit = p95 { i in [wbEntry, StackEntry(operation: "exposure", params: ["exposure": .number(Double(i) * 0.02)]),
+                                      StackEntry(operation: "display", params: ["contrast": .number(0), "exposure": .number(0.5)])] }
+        let detail: [StackEntry] = [StackEntry(operation: "sharpen", params: ["amount": .number(0.8)]), StackEntry(operation: "bilat", params: [:]),
+                                    StackEntry(operation: "atrous", params: [:]), StackEntry(operation: "denoiseprofile", params: [:])]
+        let drag = p95 { i in detail + [StackEntry(operation: "display", params: ["contrast": .number(Double(i)), "exposure": .number(0.5)])] }
+        print("      viewport \(vw)x\(vh): default edit p95 \(String(format: "%.1f", defaultEdit)) ms, contrast drag with four detail modules p95 \(String(format: "%.1f", drag)) ms")
+        check("T5v viewport p95 under 16 ms for the default edit at \(vw) px", defaultEdit < 16, "\(defaultEdit)")
+        check("T5v viewport p95 under 16 ms for a contrast drag with the four detail modules on (the segment cache)", drag < 16, "\(drag)")
+    } else {
+        check("T5v the segment probe could not start", false)
+    }
+}
+
+// E-DIT the viewport's dither: a dark smooth ramp (linear 0.0005...0.02, about sRGB codes 6 to 40) rendered to 8 bits. Plain, it is a
+// staircase; dithered, the codes average to the ideal value over a few pixels, the error stays within a code and a half, and black and
+// white are left alone. The mutation is the plain render (no dither), which has the larger local error.
+do {
+    if let probe = try? SegmentProbe() {
+        let dw = 1024, dh = 16
+        func linear(_ x: Int) -> Double { 0.0005 + 0.02 * Double(x) / Double(dw) }
+        func codeOf(_ v: Double) -> Double { 255 * (v <= 0.0031308 ? 12.92 * v : 1.055 * pow(v, 1 / 2.4) - 0.055) }
+        let ramp: [SIMD4<Float>] = (0..<(dw * dh)).map { i in let v = Float(linear(i % dw)); return SIMD4(v, v, v, 1) }
+        if let plain = try? probe.codes8(pixels: ramp, width: dw, height: dh, dither: false),
+           let dith = try? probe.codes8(pixels: ramp, width: dw, height: dh, dither: true) {
+            func localError(_ codes: [UInt8], window: Int) -> (worst: Double, mean: Double) {
+                var worst = 0.0, sum = 0.0, n = 0
+                var x0 = 0
+                while x0 + window <= dw {
+                    var m = 0.0, ideal = 0.0
+                    for y in 0..<dh { for x in x0..<(x0 + window) { m += Double(codes[y * dw + x]); ideal += codeOf(linear(x)) } }
+                    let e = (m - ideal) / Double(window * dh)
+                    worst = max(worst, abs(e)); sum += e; n += 1; x0 += window
+                }
+                return (worst, sum / Double(n))
+            }
+            let p = localError(plain, window: 4), d = localError(dith, window: 4)
+            var maxDev = 0.0
+            for y in 0..<dh { for x in 0..<dw { maxDev = max(maxDev, abs(Double(dith[y * dw + x]) - codeOf(linear(x)))) } }
+            check("E-DIT dithered, the local error over 4 pixels by 16 rows is under 0.2 code and under half the plain staircase's (\(String(format: "%.2f", d.worst)) vs \(String(format: "%.2f", p.worst)))",
+                  d.worst < 0.2 && d.worst < 0.5 * p.worst, "\(d.worst) vs \(p.worst)")
+            check("E-DIT the dither is unbiased (mean error under 0.02 code) and never moves a pixel more than 1.5 codes", abs(d.mean) < 0.02 && maxDev < 1.5, "mean \(d.mean), max \(maxDev)")
+            check("E-DIT it does not move the average level of a smooth ramp away from the plain render's", abs(d.mean - p.mean) < 0.05)
+        } else {
+            check("E-DIT the ramp rendered", false)
+        }
+        // black, white and mid grey: black and white stay exactly, mid grey stays within a code
+        let edge: [SIMD4<Float>] = (0..<64).map { i in i < 21 ? SIMD4(0, 0, 0, 1) : (i < 42 ? SIMD4(1, 1, 1, 1) : SIMD4(0.2158, 0.2158, 0.2158, 1)) }
+        if let e = try? probe.codes8(pixels: edge, width: 64, height: 1, dither: true) {
+            check("E-DIT black stays 0, white stays 255, mid grey (sRGB code 128) stays within a code",
+                  e[0..<21].allSatisfy { $0 == 0 } && e[21..<42].allSatisfy { $0 == 255 } && e[42..<64].allSatisfy { abs(Int($0) - 128) <= 1 },
+                  "\(Array(e[0..<4])) \(Array(e[21..<25])) \(Array(e[42..<48]))")
+        }
+        let a = try? probe.codes8(pixels: ramp, width: dw, height: dh, dither: true)
+        let b = try? probe.codes8(pixels: ramp, width: dw, height: dh, dither: true)
+        check("E-DIT the same picture dithers the same way every time", a != nil && a == b)
+    } else {
+        check("E-DIT the segment probe could not start", false)
+    }
+}
+
 // T10 HDR: a ramp from deep shadow to 4 stops over white through the display transform; the SDR render, the HDR
 // render and the exported file (an SDR JPEG carrying a gain map) must agree with each other and with SceneTone
 do {

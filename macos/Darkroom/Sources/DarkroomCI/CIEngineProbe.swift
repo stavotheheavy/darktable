@@ -182,8 +182,8 @@ public enum CIEngineProbe {
     }
 }
 
-/// A segment cache on pixels the caller supplies, for darkroom-engine-check: the same `CIEngine.applyStack` the app runs, with the
-/// same kind of context (Core Image's default working format and space), so the check sees what a session render sees.
+/// A segment cache on pixels the caller supplies, for darkroom-engine-check: the same `CIEngine.applyStack` the app runs, in the very
+/// context the app builds (`CIEngine.makeContext`), so the check sees what a session render sees.
 public final class SegmentProbe {
     private let context: CIContext
     private let space: CGColorSpace
@@ -192,7 +192,7 @@ public final class SegmentProbe {
 
     public init() throws {
         guard let device = MTLCreateSystemDefaultDevice() else { throw EngineError("probe: no device") }
-        let made = CIContext(mtlDevice: device, options: [.cacheIntermediates: true])
+        let made = CIEngine.makeContext(device: device)
         guard let space = made.workingColorSpace else { throw EngineError("probe: no working space") }
         self.device = device; self.context = made; self.space = space
         self.cache = SegmentCache(context: made, device: device, space: space)
@@ -215,5 +215,39 @@ public final class SegmentProbe {
                            format: .RGBAf, colorSpace: space)
         }
         return out
+    }
+
+    /// A source image for `timeFrame`, built once: the app's decode stays resident between frames, so a timing must not pay a bitmap upload per frame.
+    public func makeSource(pixels: [SIMD4<Float>], width: Int, height: Int) -> CIImage {
+        CIImage(bitmapData: pixels.withUnsafeBytes { Data($0) }, bytesPerRow: width * 16,
+                size: CGSize(width: width, height: height), format: .RGBAf, colorSpace: space)
+    }
+
+    /// Milliseconds to turn `stack` over `source` into the viewport's 8-bit sRGB frame, as `CIEngine.frame` does (a createCGImage
+    /// read-back), through the cache.
+    public func timeFrame(stack: [StackEntry], source: CIImage) throws -> Double {
+        let w = Int(source.extent.width), h = Int(source.extent.height)
+        let started = ContinuousClock.now
+        let output = try CIEngine.process(source, stack, camera: .none, scale: 1,
+                                          segments: CIEngine.Segments(cache: cache, base: "time|\(w)x\(h)"))
+        guard context.createCGImage(output, from: CGRect(x: 0, y: 0, width: w, height: h), format: .RGBA8,
+                                    colorSpace: CGColorSpace(name: CGColorSpace.sRGB)) != nil else { throw EngineError("probe: no frame") }
+        let d = started.duration(to: .now)
+        return Double(d.components.seconds) * 1_000 + Double(d.components.attoseconds) / 1_000_000_000_000_000
+    }
+
+    /// The 8-bit sRGB codes (red channel, one row) of a horizontal ramp or any pixels, as the viewport makes them, with or without the dither.
+    public func codes8(pixels: [SIMD4<Float>], width: Int, height: Int, dither: Bool) throws -> [UInt8] {
+        let source = makeSource(pixels: pixels, width: width, height: height)
+        let image = dither ? try CIBridge.dither8(source) : source
+        guard let cg = context.createCGImage(image, from: CGRect(x: 0, y: 0, width: width, height: height), format: .RGBA8,
+                                             colorSpace: CGColorSpace(name: CGColorSpace.sRGB)) else { throw EngineError("probe: no frame") }
+        var bytes = [UInt8](repeating: 0, count: width * height * 4)
+        guard let c = CGContext(data: &bytes, width: width, height: height, bitsPerComponent: 8, bytesPerRow: width * 4,
+                                space: CGColorSpace(name: CGColorSpace.sRGB)!, bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else {
+            throw EngineError("probe: no context")
+        }
+        c.draw(cg, in: CGRect(x: 0, y: 0, width: width, height: height))
+        return stride(from: 0, to: bytes.count, by: 4).map { bytes[$0] }
     }
 }

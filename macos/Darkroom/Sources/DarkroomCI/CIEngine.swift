@@ -61,9 +61,19 @@ public actor CIEngine: PhotoEngine {
         guard let device = MTLCreateSystemDefaultDevice() else {
             throw EngineError("no Metal device for Core Image")
         }
-        let made = CIContext(mtlDevice: device, options: [.cacheIntermediates: true])
+        let made = Self.makeContext(device: device)
         context = made
         if let space = made.workingColorSpace { segmentCache = SegmentCache(context: made, device: device, space: space) }
+    }
+
+    /// The one definition of the engine's Core Image context: linear sRGB primaries (unclamped, so scene light above 1 survives) in half
+    /// float, named explicitly so an OS default cannot move it. Every module's kernel works in this space (the OkLab matrices and
+    /// luminance weights are sRGB's), the segment cache's textures hold it, and `SegmentProbe` builds its context here so
+    /// darkroom-engine-check measures what the app runs.
+    static func makeContext(device: MTLDevice) -> CIContext {
+        var options: [CIContextOption: Any] = [.cacheIntermediates: true, .workingFormat: CIFormat.RGBAh]
+        if let space = CGColorSpace(name: CGColorSpace.extendedLinearSRGB) { options[.workingColorSpace] = space }
+        return CIContext(mtlDevice: device, options: options)
     }
 
     public func shutdown() async {
@@ -97,7 +107,8 @@ public actor CIEngine: PhotoEngine {
         let started = ContinuousClock.now
         var image = try edited(try decode(s, scale: s.fit * scale, stack: stack), stack, camera: s.camera, scale: s.fit * scale, session: s)
         if clippingOverlay { image = try CIBridge.clippingOverlay(image) }
-        return try frame(image, crop: nil, since: started)
+        // the viewport's frame is 8 bits: dither the last step so a smooth shadow does not break into bands (exports keep their own bits)
+        return try frame(try CIBridge.dither8(image), crop: nil, since: started)
     }
 
     public func sessionRenderRegion(stack: [StackEntry], scale: Double, x: Int, y: Int,

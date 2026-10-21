@@ -2,8 +2,8 @@
 //
 // OkLab: Björn Ottosson, "A perceptual color space for image processing" (2020); the matrices are
 // published there. sRGB, SMPTE ST 2084 (PQ) and ITU-R BT.2100 HLG are standards; BT.2020 primaries
-// and D65 are standard values. The structure (a working space of linear Rec.2020, OkLab/OkLCh
-// built from it, matrices derived once) follows LightCraft's `lightcraft-color`
+// and D65 are standard values. The structure (a working space, OkLab/OkLCh built from it, matrices
+// derived once) follows LightCraft's `lightcraft-color`
 // (https://github.com/storytold/lightcraft, MIT OR Apache-2.0, Copyright (c) 2026 ArtCraft Team and
 // the LightCraft contributors), re-written in Swift. See THIRD-PARTY.md.
 
@@ -61,7 +61,9 @@ public enum ColorSpaces {
                      [prim.m[2][0] * s.x, prim.m[2][1] * s.y, prim.m[2][2] * s.z]])
     }
 
-    /// Linear BT.2020 (D65) to CIE XYZ. The engine's working space is linear Rec.2020.
+    /// Linear BT.2020 (D65) to CIE XYZ. The engine's WORKING space (what every module's pixels are in) is linear sRGB primaries:
+    /// Core Image's extended linear sRGB, which `CIEngine.makeContext` names explicitly. Rec.2020 is where the display transform's
+    /// tone stage computes (SceneTone), and the matrices here move between the two.
     public static let rec2020ToXYZ = rgbToXYZ(r: SIMD2(0.708, 0.292), g: SIMD2(0.170, 0.797),
                                               b: SIMD2(0.131, 0.046), white: d65)
     /// Linear sRGB / Rec.709 (D65) to CIE XYZ.
