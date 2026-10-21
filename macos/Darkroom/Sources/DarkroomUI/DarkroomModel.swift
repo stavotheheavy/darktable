@@ -63,13 +63,18 @@ public final class DarkroomModel {
     /// Show the HDR rendition on a screen with headroom above SDR white (a photo's highlights go brighter than the page, as an HDR export
     /// does). Off by default: it changes how every photo looks, so it is the photographer's call. Only has an effect while `hdrAvailable`.
     public var hdrPreview = UserDefaults.standard.bool(forKey: "darkroom.hdrPreview")
-    /// The headroom the screens can reach, as a multiple of SDR white: the largest "potential" extended range of any screen (macOS raises the
-    /// current value once a layer asks for extended-range content). A test sets `headroomOverride` instead of having a display.
+    /// The headroom the screen can show right now, as a multiple of SDR white. macOS raises the screen's current value (what the panel can show
+    /// at the present brightness) once a layer asks for extended-range content, and its "potential" is the most it could ever reach; so the
+    /// current value is used once it is above 1 and the potential before that (the first HDR frame). A test sets `headroomOverride` instead
+    /// of having a display.
     nonisolated(unsafe) public static var headroomOverride: Double?
     public static var screenHeadroom: Double {
         if let o = headroomOverride { return o }
         if let s = ProcessInfo.processInfo.environment["DARKROOM_EDR_HEADROOM"], let v = Double(s), v >= 1 { return v }
-        return NSScreen.screens.map { max($0.maximumExtendedDynamicRangeColorComponentValue, $0.maximumPotentialExtendedDynamicRangeColorComponentValue) }.max() ?? 1
+        let screen = NSApp?.windows.first(where: { $0.isVisible && $0.frame.width > 400 })?.screen ?? NSScreen.main
+        let current = screen?.maximumExtendedDynamicRangeColorComponentValue ?? 1
+        let potential = screen?.maximumPotentialExtendedDynamicRangeColorComponentValue ?? 1
+        return current > 1.05 ? current : max(current, potential)
     }
     /// Whether the HDR preview can do anything here: the canvas presents textures and a screen has headroom.
     public var hdrAvailable: Bool { presentsTexture && Self.screenHeadroom > 1.05 }
@@ -220,7 +225,18 @@ public final class DarkroomModel {
 
     public init(engine: any PhotoEngine = Engine()) {
         self.engine = engine
+        // the screen's headroom follows its brightness and whether a layer asks for extended range: when it moves while the HDR preview is on,
+        // the frame is rendered again for the new peak
+        headroomObserver = NotificationCenter.default.addObserver(forName: NSApplication.didChangeScreenParametersNotification, object: nil, queue: .main) { [weak self] _ in
+            Task { @MainActor in
+                guard let self, self.hdrPreview, self.hdrAvailable, abs(self.previewPeak - self.lastPresentedPeak) > 0.05 else { return }
+                self.requestRender()
+            }
+        }
     }
+    private var headroomObserver: NSObjectProtocol?
+    /// The peak the last presented frame was rendered for.
+    private var lastPresentedPeak = 1.0
 
     /// For layout checks and previews: a model that already holds a picture and modules.
     public static func preview(image: CGImage, fileName: String, modules: [ModuleInfo] = []) -> DarkroomModel {
@@ -829,6 +845,7 @@ public final class DarkroomModel {
                 let result: RenderedFrame
                 var presented: PresentedFrame?
                 if presentsTexture {
+                    lastPresentedPeak = previewPeak
                     await engine.setPreviewPeak(previewPeak)
                     if zoom == .fit || info == nil {
                         presented = try await engine.sessionRenderPresentable(stack: entries, scale: draft ? Self.draftScale : 1)

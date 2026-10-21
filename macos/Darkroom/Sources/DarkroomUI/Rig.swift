@@ -13,7 +13,7 @@ import SwiftUI
 public final class Rig {
     static var shared: Rig?
 
-    private let model: DarkroomModel
+    let model: DarkroomModel
     private let library: LibraryModel
     private let go: (Screen) -> Void
     private let openPhoto: (String) -> Void
@@ -114,6 +114,23 @@ public final class Rig {
             return json(model.modules.map { ["id": $0.id, "op": $0.operation, "name": $0.name, "enabled": model.isEnabled($0), "params": $0.haveIntrospection] as [String: Any] })
         case ("GET", "/fingerprint"): return json(fingerprint())
         case ("GET", "/screen"): return ("image/png", screenshot() ?? Data())
+        case ("GET", "/screen-hdr"):
+            // ?out=<path prefix>&x=&y=&w=&h= (window points) : an HDR capture of the window and what part of it is above SDR white
+            var q: [String: String] = [:]
+            if let qs = path.split(separator: "?", maxSplits: 1).dropFirst().first {
+                for pair in qs.split(separator: "&") { let kv = pair.split(separator: "=", maxSplits: 1).map(String.init); if kv.count == 2 { q[kv[0]] = kv[1].removingPercentEncoding ?? kv[1] } }
+            }
+            let region = (q["x"].flatMap(Double.init) != nil && q["w"].flatMap(Double.init) != nil)
+                ? CGRect(x: Double(q["x"] ?? "0") ?? 0, y: Double(q["y"] ?? "0") ?? 0, width: Double(q["w"] ?? "0") ?? 0, height: Double(q["h"] ?? "0") ?? 0) : nil
+            return json(await hdrCapture(prefix: q["out"] ?? "/tmp/vantage-hdr", region: region))
+        case ("GET", "/frame-map"):
+            // the presented texture itself (what the display is sent): texels above SDR white painted cyan, the rest shown as is; ?out=<png path>
+            var out = "/tmp/vantage-frame-map.png", gamut = false
+            if let qs = path.split(separator: "?", maxSplits: 1).dropFirst().first {
+                if let o = qs.split(separator: "&").first(where: { $0.hasPrefix("out=") }) { out = String(o.dropFirst(4)).removingPercentEncoding ?? out }
+                gamut = qs.split(separator: "&").contains("mode=gamut")
+            }
+            return json(frameMap(out: out, gamut: gamut))
         case ("POST", "/reset"): clicks = 0; return json(["ok": true])
         case ("POST", "/act"):
             let o = (try? JSONSerialization.jsonObject(with: body)) as? [String: Any] ?? [:]
@@ -163,7 +180,7 @@ public final class Rig {
         // the canvas path and the HDR preview, read back: is the frame a texture, at what peak, and did the layer ask for extended-range content
         s["canvas"] = ["presentsTexture": model.presentsTexture, "texturePeak": model.frameTexture?.peak ?? 0, "hdrOn": model.hdrPreview,
                        "hdrAvailable": model.hdrAvailable, "screenHeadroom": DarkroomModel.screenHeadroom,
-                       "layerWantsEDR": MetalFrameNSView.lastWantsEDR, "layerColorSpace": MetalFrameNSView.lastColorSpaceName] as [String: Any]
+                       "layerWantsEDR": MetalFrameNSView.lastWantsEDR, "screenCurrentHeadroom": Double(window?.screen?.maximumExtendedDynamicRangeColorComponentValue ?? NSScreen.main?.maximumExtendedDynamicRangeColorComponentValue ?? 1), "appActive": NSApp.isActive, "windowVisible": window?.occlusionState.contains(.visible) ?? false, "layerColorSpace": MetalFrameNSView.lastColorSpaceName] as [String: Any]
         s["library"] = libraryState()
         return s
     }
@@ -195,7 +212,7 @@ public final class Rig {
         enabled && (ProcessInfo.processInfo.environment["DARKROOM_CANARY"] ?? "").split(separator: ",").contains { $0 == name }
     }
 
-    private var window: NSWindow? { NSApp.windows.first { $0.isVisible && $0.frame.width > 400 && $0.contentView != nil } }
+    var window: NSWindow? { NSApp.windows.first { $0.isVisible && $0.frame.width > 400 && $0.contentView != nil } }
 
     private func tree() -> [String: Any] {
         let w = window?.contentView?.bounds.size ?? .zero
@@ -321,6 +338,12 @@ public final class Rig {
             // header toggles at model level (synthetic single clicks are dropped by SwiftUI controls)
             switch ui {
             case "hide": model.uiHidden.toggle()
+            case "builtin":
+                // move the window onto the built-in display (the one with HDR headroom on this Mac)
+                if let w = window, let s = NSScreen.screens.first(where: { $0.localizedName.localizedCaseInsensitiveContains("built-in") }) {
+                    w.setFrameOrigin(NSPoint(x: s.frame.minX + 40, y: s.frame.minY + 40)); w.makeKeyAndOrderFront(nil)
+                }
+            case "activate": NSApp.activate(ignoringOtherApps: true); window?.makeKeyAndOrderFront(nil)
             case "hdr:on": model.setHDRPreview(true)
             case "hdr:off": model.setHDRPreview(false)
             case "original": if model.history.count > 1 { model.showingOriginal.toggle() }
