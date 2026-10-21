@@ -10,6 +10,11 @@ extension CIBridge {
     private static let gatherPrelude = MetalColorCommon.source + #"""
 
     // the pixel at absolute (X, Y) of this thread's tile is `base + (X, Y)`: base = gid + off[0] - (ax, ay)
+    // the texel `d` away from absolute position `a`, clamped into the frame (p is this thread's own texel): a gather never reads outside the frame
+    static int2 gb_clamp(int2 p, int2 a, int2 d, float W, float H) {
+        return p + int2(clamp(a.x + d.x, 0, int(W) - 1) - a.x, clamp(a.y + d.y, 0, int(H) - 1) - a.y);
+    }
+
     static float3 gb_bilinear(texture2d<float, access::read> src, int2 base, float2 p, float W, float H) {
         float x = clamp(isfinite(p.x) ? p.x : 0.0f, 0.0f, W - 1.0f), y = clamp(isfinite(p.y) ? p.y : 0.0f, 0.0f, H - 1.0f);
         int x0 = int(floor(x)), y0 = int(floor(y));
@@ -23,10 +28,10 @@ extension CIBridge {
 
     private static func gather(_ image: CIImage, source: String, function: String, uniforms: [Float], reach: Int) throws -> CIImage {
         let ext = image.extent
-        let out = try PerPixelManyProcessor.apply(withExtent: ext, inputs: [image.clampedToExtent()],
-                                                  arguments: ["function": function, "uniforms": uniforms, "source": source, "reach": reach,
+        let out = try PerPixelManyProcessor.apply(withExtent: ext, inputs: [image],
+                                                  arguments: ["function": function, "uniforms": uniforms, "source": source, "reach": reach, "clampToFrame": true,
                                                               "extent": [Double(ext.minX), Double(ext.minY), Double(ext.width), Double(ext.height)]])
-        return out.cropped(to: ext)
+        return out
     }
 
     // MARK: surface blur
@@ -58,12 +63,14 @@ extension CIBridge {
                             uint2 gid [[thread_position_in_grid]]) {
         if (gid.x >= dst.get_width() || gid.y >= dst.get_height()) { return; }
         int R = int(u[0] + 0.5f);
+        float W = geom[0].z, H = geom[0].w;
+        int2 a = int2(int(geom[0].x + 0.5f) + int(gid.x), int(geom[0].y + 0.5f) + int(gid.y));
         float3 sum = float3(0.0f);
         float wsum = 0.0f;
         for (int dy = -R; dy <= R; dy++) {
             for (int dx = -R; dx <= R; dx++) {
                 if (dx * dx + dy * dy > R * R) { continue; }
-                float3 p = src.read(uint2(int2(gid) + off[0] + int2(dx, dy))).rgb;
+                float3 p = src.read(uint2(gb_clamp(int2(gid) + off[0], a, int2(dx, dy), W, H))).rgb;
                 float wt = 1.0f + u[1] * cc_smoothstep(\#(String(format: "%.9ff", Bloom.kneeLow)), \#(String(format: "%.9ff", Bloom.kneeHigh)), cc_luminance(p));
                 sum += p * wt;
                 wsum += wt;
@@ -146,8 +153,8 @@ extension CIBridge {
 
     private static let diffusionSource = gatherPrelude + #"""
 
-    static float3 diff_read(texture2d<float, access::read> src, int2 p, float sq) {
-        float3 v = src.read(uint2(p)).rgb;
+    static float3 diff_read(texture2d<float, access::read> src, int2 t, float sq) {
+        float3 v = src.read(uint2(t)).rgb;
         return sq > 0.5f ? sqrt(max(v, float3(0.0f))) : v;
     }
 
@@ -158,11 +165,13 @@ extension CIBridge {
                             uint2 gid [[thread_position_in_grid]]) {
         if (gid.x >= dst.get_width() || gid.y >= dst.get_height()) { return; }
         int2 p = int2(gid) + off[0];
+        float W = geom[0].z, H = geom[0].w;
+        int2 a = int2(int(geom[0].x + 0.5f) + int(gid.x), int(geom[0].y + 0.5f) + int(gid.y));
         float3 c = diff_read(src, p, u[2]);
         float3 flow = float3(0.0f);
         const int2 dirs[4] = { int2(-1, 0), int2(1, 0), int2(0, -1), int2(0, 1) };
         for (int i = 0; i < 4; i++) {
-            float3 d = diff_read(src, p + dirs[i], u[2]) - c;
+            float3 d = diff_read(src, gb_clamp(p, a, dirs[i], W, H), u[2]) - c;
             flow += d / (1.0f + (d * d) / (u[1] * u[1]));
         }
         float3 o = c + u[0] * flow;
@@ -192,6 +201,8 @@ extension CIBridge {
         if (gid.x >= dst.get_width() || gid.y >= dst.get_height()) { return; }
         int R = int(u[0] + 0.5f);
         int2 p = int2(gid) + off[0];
+        float W = geom[0].z, H = geom[0].w;
+        int2 a = int2(int(geom[0].x + 0.5f) + int(gid.x), int(geom[0].y + 0.5f) + int(gid.y));
         float4 centre = src.read(uint2(p));
         float bestVar = INFINITY;
         float3 bestMean = centre.rgb;
@@ -201,7 +212,7 @@ extension CIBridge {
             float ls = 0.0f, lq = 0.0f;
             for (int j = 0; j <= R; j++) {
                 for (int i = 0; i <= R; i++) {
-                    float3 v = src.read(uint2(p + int2(quads[q].x * i, quads[q].y * j))).rgb;
+                    float3 v = src.read(uint2(gb_clamp(p, a, int2(quads[q].x * i, quads[q].y * j), W, H))).rgb;
                     float l = cc_luminance(v);
                     sum += v; ls += l; lq += l * l;
                 }

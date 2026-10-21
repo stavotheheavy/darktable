@@ -92,6 +92,8 @@ extension CIBridge {
                           uint2 gid [[thread_position_in_grid]]) {
         if (gid.x >= dst.get_width() || gid.y >= dst.get_height()) { return; }
         int r = int(u[0] + 0.5f);
+        float W = geom[0].z, H = geom[0].w;
+        int2 a = int2(int(geom[0].x + 0.5f) + int(gid.x), int(geom[0].y + 0.5f) + int(gid.y));
         float4 centre = src.read(uint2(int2(gid) + off[0]));
         float3 med = float3(0.0f);
         for (int c = 0; c < 3; c++) {
@@ -99,7 +101,7 @@ extension CIBridge {
             int n = 0;
             for (int dy = -r; dy <= r; dy++) {
                 for (int dx = -r; dx <= r; dx++) {
-                    v[n++] = src.read(uint2(int2(gid) + off[0] + int2(dx, dy)))[c];
+                    v[n++] = src.read(uint2(int2(gid) + off[0] + int2(clamp(a.x + dx, 0, int(W) - 1) - a.x, clamp(a.y + dy, 0, int(H) - 1) - a.y)))[c];
                 }
             }
             for (int i = 1; i < n; i++) {
@@ -118,11 +120,11 @@ extension CIBridge {
     public static func medianDenoise(_ image: CIImage, radius: Int, amount: Double) throws -> CIImage {
         guard amount != 0, radius > 0 else { return image }
         let ext = image.extent
-        let out = try PerPixelManyProcessor.apply(withExtent: ext, inputs: [image.clampedToExtent()],
+        let out = try PerPixelManyProcessor.apply(withExtent: ext, inputs: [image],
                                                   arguments: ["function": "medianTex", "uniforms": [Float(min(radius, 2)), Float(amount)], "source": medianSource,
-                                                              "reach": min(radius, 2),
+                                                              "reach": min(radius, 2), "clampToFrame": true,
                                                               "extent": [Double(ext.minX), Double(ext.minY), Double(ext.width), Double(ext.height)]])
-        return out.cropped(to: ext)
+        return out
     }
 
     // MARK: deband

@@ -4,7 +4,7 @@
 // instead of a full float frame written and read back between every pair.
 //
 // The functions are the cards' own (`colorbalance_apply`, `mixer_apply`, `tonecurve_apply`, `monochrome_apply`, `levels_apply`, `split_apply`,
-// `st_apply`, `invert_apply`, `colisa_apply`, `colorzones_apply`, `satcurve_apply`, `lgg_apply`, `basecurve_apply`, `posterize_apply`, `colorize_apply`, `solarize_apply`, `negadoctor_apply`, `lowlight_apply`, `gradientmap_apply`, `crossprocess_apply`, `bleachbypass_apply`, `photofilter_apply`, `channelcurves_apply`, `chromalimit_apply`, `huerotate_apply`, `warmth_apply`, `highlightrolloff_apply`, `lumabands_apply`, `fadelook_apply`, `lumacurve_apply`, `reinhard_apply`, `scurve_apply`, `colorharmony_apply`), compiled into one library with a driver kernel that walks an op list. Every thread takes the same branches, so the switch costs
+// `st_apply`, `invert_apply`, `colisa_apply`, `colorzones_apply`, `satcurve_apply`, `lgg_apply`, `basecurve_apply`, `posterize_apply`, `colorize_apply`, `solarize_apply`, `negadoctor_apply`, `lowlight_apply`, `gradientmap_apply`, `crossprocess_apply`, `bleachbypass_apply`, `photofilter_apply`, `channelcurves_apply`, `chromalimit_apply`, `huerotate_apply`, `warmth_apply`, `highlightrolloff_apply`, `lumabands_apply`, `fadelook_apply`, `lumacurve_apply`, `reinhard_apply`, `scurve_apply`, `colorharmony_apply`, `bwmixer_apply`, `selectivecolor_apply`), compiled into one library with a driver kernel that walks an op list. Every thread takes the same branches, so the switch costs
 // nothing. Checked against the unfused chain by darkroom-engine-check E-FU (random stacks) and by every module's own check, which now run
 // through it.
 //
@@ -17,7 +17,7 @@ import Foundation
 
 /// One step of a fused run: which card function, and the uniforms that card's kernel takes.
 public struct FusedOp: Sendable, Equatable {
-    public enum Code: Int, Sendable { case gain = 0, colorBalance, channelMixer, toneCurve, monochrome, levels, splitToning, sceneTone, invert, colisa, colorZones, satCurve, liftGammaGain, baseCurve, posterize, colorize, solarize, negadoctor, lowLight, gradientMap, crossProcess, bleachBypass, photoFilter, channelCurves, chromaLimit, hueRotate, warmth, highlightRolloff, lumaBands, fadeLook, lumaCurve, reinhard, sCurve, colorHarmony }
+    public enum Code: Int, Sendable { case gain = 0, colorBalance, channelMixer, toneCurve, monochrome, levels, splitToning, sceneTone, invert, colisa, colorZones, satCurve, liftGammaGain, baseCurve, posterize, colorize, solarize, negadoctor, lowLight, gradientMap, crossProcess, bleachBypass, photoFilter, channelCurves, chromaLimit, hueRotate, warmth, highlightRolloff, lumaBands, fadeLook, lumaCurve, reinhard, sCurve, colorHarmony, bwMixer, selectiveColor }
     public let code: Code
     public let params: [Float]
     public init(_ code: Code, _ params: [Float]) { self.code = code; self.params = params }
@@ -46,7 +46,7 @@ public enum MetalFused {
         s += MetalLowLight.function
         for part in [MetalGradientMap.function, MetalCrossProcess.function, MetalBleachBypass.function, MetalPhotoFilter.function,
                      MetalChannelCurves.function, MetalChromaLimit.function, MetalHueRotate.function, MetalWarmth.function, MetalHighlightRolloff.function, MetalLumaBands.function, MetalFadeLook.function,
-                     MetalLumaCurve.function, MetalReinhard.function, MetalSCurve.function, MetalColorHarmony.function] { s += part }
+                     MetalLumaCurve.function, MetalReinhard.function, MetalSCurve.function, MetalColorHarmony.function, MetalBWMixer.function, MetalSelectiveColor.function] { s += part }
         s += #"""
 
         kernel void fusedTex(texture2d<float, access::read> src [[texture(0)]],
@@ -95,6 +95,8 @@ public enum MetalFused {
                     case 31: rgb = reinhard_apply(rgb, p); break;
                     case 32: rgb = scurve_apply(rgb, p); break;
                     case 33: rgb = colorharmony_apply(rgb, p); break;
+                    case 34: rgb = bwmixer_apply(rgb, p); break;
+                    case 35: rgb = selectivecolor_apply(rgb, p); break;
                     default: break;
                 }
             }
@@ -146,6 +148,8 @@ public enum MetalFused {
                     case 31: rgb = reinhard_apply(rgb, p); break;
                     case 32: rgb = scurve_apply(rgb, p); break;
                     case 33: rgb = colorharmony_apply(rgb, p); break;
+                    case 34: rgb = bwmixer_apply(rgb, p); break;
+                    case 35: rgb = selectivecolor_apply(rgb, p); break;
                     default: break;
                 }
             }

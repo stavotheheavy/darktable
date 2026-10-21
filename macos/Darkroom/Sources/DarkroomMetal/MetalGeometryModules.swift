@@ -25,6 +25,13 @@ extension CIBridge {
             float s = ch == 0 ? 1.0f + u[1] : (ch == 2 ? 1.0f + u[2] : 1.0f);
             return float2(cx + (x - cx) * s, cy + (y - cy) * s);
         }
+        if (mode == 3) {
+            float px = u[1] * (W - 1.0f), py = u[2] * (H - 1.0f);
+            float r = max(u[3] * H, 1e-6f);
+            float d = length(float2(x - px, y - py)) / r;
+            float f = d < 1.0f ? 1.0f - u[4] * (1.0f - d * d) * (1.0f - d * d) : 1.0f;
+            return float2(px + (x - px) * f, py + (y - py) * f);
+        }
         float uu = cx > 0.0f ? (x - cx) / cx : 0.0f, vv = cy > 0.0f ? (y - cy) / cy : 0.0f;
         float w = 1.0f + u[1] * uu + u[2] * vv;
         float d = fabs(w) < 1e-6f ? 1e-6f : w;
@@ -63,13 +70,14 @@ extension CIBridge {
         case .distortion(let k1, let k2): u = [0, Float(k1), Float(k2)]
         case .chromaticAberration(let red, let blue): u = [1, Float(red), Float(blue)]
         case .perspective(let kx, let ky): u = [2, Float(kx), Float(ky)]
+        case .warp(let cx, let cy, let radius, let strength): u = [3, Float(cx), Float(cy), Float(radius), Float(strength)]
         }
-        if u[1] == 0 && u[2] == 0 { return image }
+        if case .warp(_, _, _, let strength) = kind { if strength == 0 { return image } } else if u[1] == 0 && u[2] == 0 { return image }
         let reach = Remap.reach(kind, width: w, height: h)
-        let out = try PerPixelManyProcessor.apply(withExtent: ext, inputs: [image.clampedToExtent()],
-                                                  arguments: ["function": "remapTex", "uniforms": u, "source": remapSource, "reach": reach,
+        let out = try PerPixelManyProcessor.apply(withExtent: ext, inputs: [image],
+                                                  arguments: ["function": "remapTex", "uniforms": u, "source": remapSource, "reach": reach, "clampToFrame": true,
                                                               "extent": [Double(ext.minX), Double(ext.minY), Double(ext.width), Double(ext.height)]])
-        return out.cropped(to: ext)
+        return out
     }
 
     // MARK: tilt-shift

@@ -1938,7 +1938,8 @@ do {
         ("diffuse", ["iterations": 12, "threshold": 0.1]), ("lensblur", ["amount": 1, "radius": 6, "highlights": 2]), ("motionblur", ["length": 12, "angle": 20]),
         ("radialblur", ["amount": 1, "spin": 0]), ("kuwahara", ["amount": 1, "radius": 4]), ("mediandenoise", ["amount": 1, "radius": 2]),
         ("deconvsharp", ["radius": 4, "iterations": 5, "amount": 1]), ("texturebands", ["radius": 8, "amount": 1]), ("skinsmooth", ["amount": 1, "radius": 10]),
-        ("surfaceblur", ["amount": 1, "radius": 10]), ("chromadenoise", ["radius": 8, "amount": 1]), ("deband", ["radius": 12, "strength": 1]),
+        ("surfaceblur", ["amount": 1, "radius": 10]), ("nlmeans", ["amount": 1, "strength": 0.08]), ("bilateral", ["amount": 1, "radius": 5]), ("emboss", ["amount": 1]), ("sketch", ["amount": 1]),
+        ("halftone", ["amount": 1, "size": 12]), ("retouch", ["amount": 1, "radius": 0.1]), ("liquify", ["strength": 0.6, "radius": 0.4]), ("chromadenoise", ["radius": 8, "amount": 1]), ("deband", ["radius": 12, "strength": 1]),
         ("hdrtone", ["amount": 0.6, "scale": 0.05]), ("halation", ["strength": 0.6, "size": 40]), ("tiltshift", ["amount": 1, "radius": 20]),
         ("defringe", ["strength": 1, "radius": 6, "hue": 140, "width": 70]), ("censorize", ["pixelation": 9]), ("grain", ["strength": 0.8]), ("highpass", ["radius": 12, "strength": 1.5]),
         ("distortion", ["k1": 0.2]), ("perspective", ["vertical": 0.2]), ("caradial", ["red": 1, "blue": -1]), ("blurs", ["radius": 18]), ("soften", ["strength": 0.6, "radius": 12]),
@@ -1953,6 +1954,89 @@ do {
         if mean < 0.25 * meanIn { bad.append("\(op): blank (mean \(mean) vs \(meanIn))") }
     }
     check("E-BIG \(cases.count) multi-pass and gather modules render a 1400 x 934 frame finite and not blank", bad.isEmpty, "\(bad)")
+}
+
+// E-NLM, E-BIL, E-EMB, E-SKT, E-HLF, E-RTC, E-LQF (gather and warp modules, with seam checks), E-BWM and E-SLC (per-pixel, fused)
+do {
+    func p(_ d: [String: Double]) -> [String: ParamValue] { d.mapValues { .number($0) } }
+    func compare(_ tag: String, _ stack: [StackEntry], _ want: [SIMD3<Double>], linear: Double = 5e-4, seams: Bool = true) {
+        let got = runDetail(stack)
+        check("\(tag) matches the oracle within 1/255 and unclamped within \(linear)", worst(got, want) < tol && worstLinear(got, want) < linear, "encoded \(worst(got, want)), linear \(worstLinear(got, want))")
+        check("\(tag) the oracle really changes the fixture", worstLinear(detailPx, want) > 0.003, "\(worstLinear(detailPx, want))")
+        if seams {
+            let s = detailSeams(stack, oracle: want)
+            check("\(tag)-seam renders the same in a region as in the full frame", s.ok, "seam \(s.seam), full vs oracle \(s.fullVsOracle)")
+        }
+    }
+    func zero(_ tag: String, _ op: String) { check("\(tag)-zero its default settings return the input untouched", runDetail([StackEntry(operation: op, params: [:])]) == detailPx) }
+    compare("E-NLM non-local means", [StackEntry(operation: "nlmeans", params: p(["amount": 0.9, "strength": 0.08]))],
+            NonLocalMeans.apply(detailImg, width: detailW, height: detailH, h: 0.08, amount: 0.9)); zero("E-NLM", "nlmeans")
+    compare("E-BIL bilateral", [StackEntry(operation: "bilateral", params: p(["amount": 0.9, "radius": 4, "range": 0.1]))],
+            BilateralFilter.apply(detailImg, width: detailW, height: detailH, radius: 4, range: 0.1, amount: 0.9)); zero("E-BIL", "bilateral")
+    compare("E-EMB emboss", [StackEntry(operation: "emboss", params: p(["amount": 1, "angle": 135, "strength": 3]))],
+            Emboss.apply(detailImg, width: detailW, height: detailH, angleDegrees: 135, strength: 3, amount: 1)); zero("E-EMB", "emboss")
+    compare("E-SKT sketch", [StackEntry(operation: "sketch", params: p(["amount": 1, "strength": 6]))],
+            Sketch.apply(detailImg, width: detailW, height: detailH, strength: 6, amount: 1)); zero("E-SKT", "sketch")
+    compare("E-HLF halftone", [StackEntry(operation: "halftone", params: p(["amount": 1, "size": 6, "angle": 15, "colour": 0]))],
+            Halftone.apply(detailImg, width: detailW, height: detailH, size: 6, angleDegrees: 15, colour: false, amount: 1), linear: 2e-3); zero("E-HLF", "halftone")
+    compare("E-HLF colour halftone", [StackEntry(operation: "halftone", params: p(["amount": 0.9, "size": 7, "angle": -20, "colour": 1]))],
+            Halftone.apply(detailImg, width: detailW, height: detailH, size: 7, angleDegrees: -20, colour: true, amount: 0.9), linear: 2e-3)
+    var spot = CloneSpot.Spot(); spot.srcX = 0.25; spot.srcY = 0.4; spot.dstX = 0.7; spot.dstY = 0.55; spot.radius = 0.25; spot.feather = 0.5; spot.heal = 0.8; spot.amount = 1
+    compare("E-RTC retouch spot", [StackEntry(operation: "retouch", params: p(["amount": 1, "src_x": 0.25, "src_y": 0.4, "dst_x": 0.7, "dst_y": 0.55, "radius": 0.25, "feather": 0.5, "heal": 0.8]))],
+            CloneSpot.apply(detailImg, width: detailW, height: detailH, spot: spot)); zero("E-RTC", "retouch")
+    compare("E-LQF liquify", [StackEntry(operation: "liquify", params: p(["strength": 0.6, "centre_x": 0.45, "centre_y": 0.5, "radius": 0.4]))],
+            Remap.apply(detailImg, width: detailW, height: detailH, kind: .warp(centreX: 0.45, centreY: 0.5, radius: 0.4, strength: 0.6))); zero("E-LQF", "liquify")
+    compare("E-BWM B&W mixer", [StackEntry(operation: "bwmixer", params: p(["amount": 0.8, "red": 0.5, "green": 0.4, "blue": 0.1]))],
+            detailImg.map { BWMixer.apply($0, weights: SIMD3(0.5, 0.4, 0.1), amount: 0.8) }, linear: 1e-3, seams: false); zero("E-BWM", "bwmixer")
+    var slc = [Double](repeating: 0, count: 24)
+    var slcP: [String: Double] = [:]
+    for (f, fam) in SelectiveColor.families.enumerated() { for (k, ink) in SelectiveColor.inks.enumerated() { let v = sin(Double(f * 4 + k) * 1.3 + 0.2) * 0.8; slc[f * 4 + k] = v; slcP["\(fam)_\(ink)"] = v } }
+    compare("E-SLC selective colour", [StackEntry(operation: "selectivecolor", params: p(slcP))], detailImg.map { SelectiveColor.apply($0, adjust: slc) }, linear: 2e-3, seams: false); zero("E-SLC", "selectivecolor")
+}
+
+// E-EDGE gather modules fed by another module, edges included: Core Image supplies only a thin ring past the frame to a processor whose input is another processor's output, so a gather
+// that reached outside the frame read black or failed (the heal's blur did). Each gather module clamps its own reads into the frame now; this renders every one of them after an
+// exposure change on a 300 x 200 frame and compares the whole frame, border pixels included, with its oracle.
+do {
+    let bw = 300, bh = 200
+    var big = [SIMD4<Float>](repeating: .zero, count: bw * bh)
+    for y in 0..<bh { for x in 0..<bw {
+        let fx = Float(x) / Float(bw), fy = Float(y) / Float(bh)
+        big[y * bw + x] = SIMD4(0.15 + 0.5 * fx + 0.1 * sin(Float(x) / 3), 0.2 + 0.4 * fy + 0.1 * cos(Float(y) / 4), 0.1 + 0.3 * (fx + fy) / 2 + 0.05 * sin(Float(x + y) / 2), 1)
+    } }
+    let gain = pow(2.0, 0.5)
+    let src = big.map { SIMD3(Double($0.x), Double($0.y), Double($0.z)) * gain }
+    var spot = CloneSpot.Spot(); spot.srcX = 0.1; spot.srcY = 0.1; spot.dstX = 0.85; spot.dstY = 0.8; spot.radius = 0.15; spot.feather = 0.4; spot.heal = 1; spot.amount = 1
+    let exposure = StackEntry(operation: "exposure", params: ["exposure": .number(0.5)])
+    let cases: [(String, [String: Double], [SIMD3<Double>])] = [
+        ("lensblur", ["amount": 1, "radius": 12, "highlights": 2], LensBlur.apply(src, width: bw, height: bh, radius: 12, boost: 2, amount: 1)),
+        ("kuwahara", ["amount": 1, "radius": 5], Kuwahara.apply(src, width: bw, height: bh, radius: 5, amount: 1)),
+        ("bilateral", ["amount": 1, "radius": 6, "range": 0.1], BilateralFilter.apply(src, width: bw, height: bh, radius: 6, range: 0.1, amount: 1)),
+        ("nlmeans", ["amount": 1, "strength": 0.08], NonLocalMeans.apply(src, width: bw, height: bh, h: 0.08, amount: 1)),
+        ("motionblur", ["length": 20, "angle": 30], MotionBlur.apply(src, width: bw, height: bh, length: 20, angleDegrees: 30)),
+        ("diffuse", ["iterations": 6, "threshold": 0.1], Diffusion.apply(src, width: bw, height: bh, iterations: 6, threshold: 0.1)),
+        ("radialblur", ["amount": 1, "spin": 0], RadialBlur.apply(src, width: bw, height: bh, spin: false, amount: 1, centreX: 0.5, centreY: 0.5)),
+        ("retouch", ["amount": 1, "src_x": 0.1, "src_y": 0.1, "dst_x": 0.85, "dst_y": 0.8, "radius": 0.15, "feather": 0.4, "heal": 1], CloneSpot.apply(src, width: bw, height: bh, spot: spot)),
+        ("distortion", ["k1": 0.2], Remap.apply(src, width: bw, height: bh, kind: .distortion(k1: 0.2, k2: 0))),
+        ("halftone", ["amount": 1, "size": 9, "angle": 20], Halftone.apply(src, width: bw, height: bh, size: 9, angleDegrees: 20, colour: false, amount: 1)),
+    ]
+    var bad: [String] = []
+    for (op, params, want) in cases {
+        let stack = [exposure, StackEntry(operation: op, params: params.mapValues { .number($0) })]
+        guard let out = try? CIEngineProbe.renderSized(stack: stack, pixels: big, width: bw, height: bh).pixels, out.count == big.count else { bad.append("\(op): no render"); continue }
+        var worstEdge = 0.0, worstAll = 0.0, off = 0
+        for y in 0..<bh { for x in 0..<bw {
+            let g = out[y * bw + x], o = want[y * bw + x]
+            let d = max(abs(Double(g.x) - o.x), abs(Double(g.y) - o.y), abs(Double(g.z) - o.z)) / max(1, max(abs(o.x), abs(o.y), abs(o.z)))
+            worstAll = max(worstAll, d)
+            if d > 2e-3 { off += 1 }
+            if x < 14 || y < 14 || x >= bw - 14 || y >= bh - 14 { worstEdge = max(worstEdge, d) }
+        } }
+        // Kuwahara picks one of four windows by variance, so where two variances are nearly tied float and double precision may pick differently: allow 1% of its pixels
+        let allowed = op == "kuwahara" ? bw * bh / 100 : 0
+        if worstEdge > 2e-3 || off > allowed { bad.append("\(op): worst \(worstAll), at the border \(worstEdge), \(off) pixels off") }
+    }
+    check("E-EDGE \(cases.count) gather modules after another module match their oracle over the whole 300 x 200 frame, borders included", bad.isEmpty, "\(bad)")
 }
 
 print(failures == 0 ? "\nall checks passed" : "\n\(failures) failed")

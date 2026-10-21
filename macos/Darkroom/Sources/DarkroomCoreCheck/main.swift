@@ -3091,5 +3091,138 @@ do {
     check("KUW5 amount 0.5 is halfway between the picture and the full result (within 1e-12)", gap(kh[400], (noisy[400] + kf[400]) / 2) < 1e-12)
 }
 
+// NLM non-local means, BIL bilateral, EMB emboss, SKT sketch, HLF halftone, BWM B&W mixer, SLC selective colour, RTC retouch spot, LQF liquify
+do {
+    func gap(_ a: SIMD3<Double>, _ b: SIMD3<Double>) -> Double { max(abs(a.x - b.x), abs(a.y - b.y), abs(a.z - b.z)) }
+    func allGap(_ a: [SIMD3<Double>], _ b: [SIMD3<Double>]) -> Double { zip(a, b).map { gap($0, $1) }.max() ?? 0 }
+    func finiteAll(_ a: [SIMD3<Double>]) -> Bool { a.allSatisfy { $0.x.isFinite && $0.y.isFinite && $0.z.isFinite } }
+    func enc(_ v: Double) -> Double { Transfer.linearToSRGB(v) }
+    func lin(_ e: Double) -> Double { Transfer.srgbToLinear(e) }
+    let w = 41, h = 31
+    let flat = [SIMD3<Double>](repeating: SIMD3(0.3, 0.2, 0.1), count: w * h)
+    var seed: UInt64 = 1234
+    func rnd() -> Double { seed = seed &* 6364136223846793005 &+ 1442695040888963407; return Double(seed >> 33) / Double(1 << 31) - 0.5 }
+    var noisy = flat
+    for i in noisy.indices { let n = 0.05 * rnd(); noisy[i] = SIMD3(0.3 + n, 0.2 + n, 0.1 + n) }
+    var step = [SIMD3<Double>](repeating: SIMD3(repeating: 0.1), count: w * h)
+    for y in 0..<h { for x in w / 2..<w { step[y * w + x] = SIMD3(repeating: 0.9) } }
+    func variance(_ a: [SIMD3<Double>]) -> Double { let m = a.map { $0.x }; let mean = m.reduce(0, +) / Double(m.count); return m.map { pow($0 - mean, 2) }.reduce(0, +) / Double(m.count) }
+
+    // NLM
+    check("NLM1 amount 0 is the identity", NonLocalMeans.apply(noisy, width: w, height: h, h: 0.1, amount: 0) == noisy)
+    check("NLM2 a flat picture is unchanged (within 1e-12)", allGap(NonLocalMeans.apply(flat, width: w, height: h, h: 0.05, amount: 1), flat) < 1e-12)
+    let nl = NonLocalMeans.apply(noisy, width: w, height: h, h: 0.1, amount: 1)
+    check("NLM3 noise is averaged away (variance under 30%)", variance(nl) < 0.3 * variance(noisy), "\(variance(nl)) vs \(variance(noisy))")
+    let ns = NonLocalMeans.apply(step, width: w, height: h, h: 0.03, amount: 1)
+    check("NLM4 a step edge stays (the pixels beside it keep their side's value within 2%)", abs(ns[15 * w + 19].x - 0.1) < 0.02 && abs(ns[15 * w + 20].x - 0.9) < 0.02, "\(ns[15 * w + 19].x) \(ns[15 * w + 20].x)")
+    let nh = NonLocalMeans.apply(noisy, width: w, height: h, h: 0.1, amount: 0.5)
+    check("NLM5 amount 0.5 is halfway (within 1e-12)", gap(nh[400], (noisy[400] + nl[400]) / 2) < 1e-12)
+
+    // BIL
+    check("BIL1 amount 0 or radius 0 is the identity", BilateralFilter.apply(noisy, width: w, height: h, radius: 3, range: 0.1, amount: 0) == noisy && BilateralFilter.apply(noisy, width: w, height: h, radius: 0, range: 0.1, amount: 1) == noisy)
+    check("BIL2 a flat picture is unchanged (within 1e-12)", allGap(BilateralFilter.apply(flat, width: w, height: h, radius: 4, range: 0.1, amount: 1), flat) < 1e-12)
+    let bl = BilateralFilter.apply(noisy, width: w, height: h, radius: 4, range: 0.3, amount: 1)
+    check("BIL3 noise is smoothed (variance under 40%)", variance(bl) < 0.4 * variance(noisy), "\(variance(bl)) vs \(variance(noisy))")
+    let bs = BilateralFilter.apply(step, width: w, height: h, radius: 4, range: 0.05, amount: 1)
+    check("BIL4 a strong step stays (the pixels beside it within 1% of their side)", abs(bs[15 * w + 19].x - 0.1) < 0.01 && abs(bs[15 * w + 20].x - 0.9) < 0.01, "\(bs[15 * w + 19].x) \(bs[15 * w + 20].x)")
+    func devFromInput(_ r: Double) -> Double { allGap(BilateralFilter.apply(noisy, width: w, height: h, radius: 4, range: r, amount: 1), noisy) }
+    check("BIL5 a narrower colour range keeps the picture closer to the original", devFromInput(0.02) < devFromInput(0.3))
+
+    // EMB
+    check("EMB1 amount 0 is the identity", Emboss.apply(noisy, width: w, height: h, angleDegrees: 135, strength: 3, amount: 0) == noisy)
+    check("EMB2 a flat picture becomes mid-grey (encoded 0.5, within 1e-9)", Emboss.apply(flat, width: w, height: h, angleDegrees: 135, strength: 3, amount: 1).allSatisfy { abs(enc($0.x) - 0.5) < 1e-9 && abs($0.x - $0.y) < 1e-12 })
+    let eR = Emboss.apply(step, width: w, height: h, angleDegrees: 0, strength: 3, amount: 1), eL = Emboss.apply(step, width: w, height: h, angleDegrees: 180, strength: 3, amount: 1)
+    check("EMB3 an edge is light when the light comes from the bright side and dark from the other (0 degrees vs 180)", enc(eR[15 * w + 20].x) > 0.55 && enc(eL[15 * w + 20].x) < 0.45, "\(enc(eR[15 * w + 20].x)) \(enc(eL[15 * w + 20].x))")
+    let e1 = Emboss.apply(step, width: w, height: h, angleDegrees: 0, strength: 0.2, amount: 1), e2 = Emboss.apply(step, width: w, height: h, angleDegrees: 0, strength: 0.4, amount: 1)
+    check("EMB4 doubling the strength doubles the deviation from mid-grey (before clamping)", abs((enc(e2[15 * w + 20].x) - 0.5) / (enc(e1[15 * w + 20].x) - 0.5) - 2) < 1e-9)
+    check("EMB5 hostile values (below black, above white) stay finite", finiteAll(Emboss.apply([SIMD3(-1, 5, 9), SIMD3(0, 0, 0), SIMD3(9, 9, 9), SIMD3(0.5, 0.5, 0.5)], width: 2, height: 2, angleDegrees: 77, strength: 8, amount: 1)))
+
+    // SKT
+    check("SKT1 amount 0 is the identity", Sketch.apply(noisy, width: w, height: h, strength: 6, amount: 0) == noisy)
+    check("SKT2 a flat picture is white paper (within 1e-9)", Sketch.apply(flat, width: w, height: h, strength: 6, amount: 1).allSatisfy { gap($0, SIMD3(repeating: 1)) < 1e-9 })
+    let sk = Sketch.apply(step, width: w, height: h, strength: 6, amount: 1)
+    check("SKT3 a strong step draws a black line at the edge and leaves paper elsewhere", sk[15 * w + 20].x < 0.01 && sk[15 * w + 19].x < 0.01 && sk[15 * w + 5].x > 0.99 && sk[15 * w + 35].x > 0.99, "\(sk[15 * w + 20].x) \(sk[15 * w + 5].x)")
+    let skh = Sketch.apply(step, width: w, height: h, strength: 6, amount: 0.5)
+    check("SKT4 amount 0.5 is halfway (within 1e-12)", gap(skh[15 * w + 5], (step[15 * w + 5] + sk[15 * w + 5]) / 2) < 1e-12)
+    check("SKT5 hostile values (below black, above white) stay finite", finiteAll(Sketch.apply([SIMD3(-1, 5, 9), SIMD3(0, 0, 0), SIMD3(9, 9, 9), SIMD3(0.5, 0.5, 0.5)], width: 2, height: 2, strength: 20, amount: 1)))
+
+    // HLF
+    check("HLF1 amount 0 is the identity", Halftone.apply(noisy, width: w, height: h, size: 6, angleDegrees: 15, colour: false, amount: 0) == noisy)
+    let whiteP = [SIMD3<Double>](repeating: SIMD3(repeating: 1), count: w * h)
+    check("HLF2 a white picture stays clean white paper (within 1e-12)", allGap(Halftone.apply(whiteP, width: w, height: h, size: 8, angleDegrees: 15, colour: false, amount: 1), whiteP) < 1e-12)
+    let blackP = [SIMD3<Double>](repeating: .zero, count: w * h)
+    let hb = Halftone.apply(blackP, width: w, height: h, size: 8, angleDegrees: 0, colour: false, amount: 1)
+    check("HLF3 a black picture is mostly ink: the cell centres are black", hb[(4) * w + 4].x < 1e-9 && hb.map { $0.x }.reduce(0, +) / Double(hb.count) < 0.2, "\(hb.map { $0.x }.reduce(0, +) / Double(hb.count))")
+    func meanOut(_ v: Double) -> Double { let p = Halftone.apply([SIMD3<Double>](repeating: SIMD3(repeating: v), count: w * h), width: w, height: h, size: 8, angleDegrees: 15, colour: false, amount: 1); return p.map { $0.x }.reduce(0, +) / Double(p.count) }
+    check("HLF4 the darker the picture the more ink: mean output falls as the input darkens", meanOut(0.8) > meanOut(0.4) && meanOut(0.4) > meanOut(0.1))
+    let red = [SIMD3<Double>](repeating: SIMD3(0.4, 0.05, 0.05), count: w * h)
+    let hr = Halftone.apply(red, width: w, height: h, size: 10, angleDegrees: 0, colour: true, amount: 1)
+    check("HLF5 colour mode puts the picture's own colour in the dots (a cell centre equals the input colour, within 1e-9)", gap(hr[5 * w + 5], SIMD3(0.4, 0.05, 0.05)) < 1e-9, "\(hr[5 * w + 5])")
+
+    // BWM
+    check("BWM1 amount 0 is the identity", BWMixer.apply(SIMD3(0.3, 0.2, 0.1), weights: SIMD3(0.5, 0.4, 0.1), amount: 0) == SIMD3(0.3, 0.2, 0.1))
+    let red1 = BWMixer.apply(SIMD3(0.7, 0.2, 0.1), weights: SIMD3(1, 0, 0), amount: 1)
+    check("BWM2 weights (1, 0, 0) make the grey the red channel (within 1e-12)", gap(red1, SIMD3(repeating: 0.7)) < 1e-12)
+    let lumPx = SIMD3(0.4, 0.3, 0.2)
+    check("BWM3 the default weights (0.263, 0.678, 0.059) give the luminance within 1e-3", abs(BWMixer.apply(lumPx, weights: SIMD3(0.263, 0.678, 0.059), amount: 1).x - ColorCommon.luminance(lumPx)) < 1e-3)
+    check("BWM4 weights summing to 1 leave a neutral grey unchanged, and negative weights stay finite", gap(BWMixer.apply(SIMD3(repeating: 0.3), weights: SIMD3(0.5, 0.4, 0.1), amount: 1), SIMD3(repeating: 0.3)) < 1e-12
+          && finiteAll([BWMixer.apply(lumPx, weights: SIMD3(-1, 2, -1), amount: 1)]))
+
+    // SLC
+    let zeros = [Double](repeating: 0, count: 24)
+    var idS = 0.0
+    for i in 0..<512 { let t = Double(i) / 511; let c = SIMD3(0.02 + 0.9 * t, 0.5 * (1 - t) + 0.05, 0.1 + 0.4 * sin(t * 9) * sin(t * 9)); idS = max(idS, gap(SelectiveColor.apply(c, adjust: zeros), c) / max(c.x, 1e-6)) }
+    check("SLC1 all sliders at 0 is the identity (within 1e-9 relative)", idS < 1e-9, "\(idS)")
+    check("SLC2 a neutral grey is untouched by every slider (exactly)", SelectiveColor.apply(SIMD3(repeating: 0.3), adjust: [Double](repeating: 1, count: 24)) == SIMD3(repeating: 0.3))
+    var redM = zeros
+    redM[1] = -1     // reds, magenta -1
+    let ry = SelectiveColor.apply(SIMD3(1, 0, 0), adjust: redM)
+    check("SLC3 reds magenta -1 turns a pure red toward yellow: the green channel comes up to 1 (within 1e-9), red stays 1", abs(enc(ry.y) - 1) < 1e-9 && abs(enc(ry.x) - 1) < 1e-9 && abs(enc(ry.z)) < 1e-9, "\(enc(ry.x)) \(enc(ry.y)) \(enc(ry.z))")
+    var redK = zeros
+    redK[3] = 1      // reds, black +1
+    let darkRed = SIMD3(lin(0.5), lin(0.05), lin(0.05)), dk = SelectiveColor.apply(darkRed, adjust: redK)
+    check("SLC4 reds black +1 darkens a dark red (all channels fall)", dk.x < darkRed.x && dk.y <= darkRed.y && dk.z <= darkRed.z, "\(dk) vs \(darkRed)")
+    var allC = zeros
+    for f in 0..<6 { allC[f * 4] = 0.3 }
+    let anyHue = SIMD3(lin(0.9), lin(0.5), lin(0.4)), ah = SelectiveColor.apply(anyHue, adjust: allC)
+    check("SLC5 the family weights sum to 1: cyan +0.3 in every family is cyan x 1.3 at any hue (red 0.9 -> 1 - 0.1 x 1.3, within 1e-9)", abs(enc(ah.x) - (1 - 0.1 * 1.3)) < 1e-9, "\(enc(ah.x))")
+
+    // RTC
+    var ramp = [SIMD3<Double>](repeating: .zero, count: w * h)
+    for y in 0..<h { for x in 0..<w { ramp[y * w + x] = SIMD3(0.1 + 0.8 * Double(x) / Double(w - 1), 0.3, 0.2 + 0.1 * Double(y) / Double(h - 1)) } }
+    var spot = CloneSpot.Spot(); spot.srcX = 0.2; spot.srcY = 0.5; spot.dstX = 0.7; spot.dstY = 0.5; spot.radius = 0.2; spot.feather = 0.5; spot.heal = 0; spot.amount = 1
+    var off = spot; off.amount = 0
+    check("RTC1 amount 0 is the identity", CloneSpot.apply(ramp, width: w, height: h, spot: off) == ramp)
+    let cl = CloneSpot.apply(ramp, width: w, height: h, spot: spot)
+    let g = spot.geometry(width: w, height: h)
+    let cxp = Int(g.centre.x.rounded()), cyp = Int(g.centre.y.rounded())
+    check("RTC2 a clone puts the source pixel at the spot centre (within 1e-9)", gap(cl[cyp * w + cxp], ramp[min(max(cyp + g.offset.y, 0), h - 1) * w + min(max(cxp + g.offset.x, 0), w - 1)]) < 1e-9)
+    check("RTC3 pixels outside the spot radius are untouched (exactly)", (0..<(w * h)).allSatisfy { i in hypot(Double(i % w) - g.centre.x, Double(i / w) - g.centre.y) < g.radius || cl[i] == ramp[i] })
+    var patch = [SIMD3<Double>](repeating: SIMD3(repeating: 0.2), count: w * h)
+    for y in 0..<h { for x in 0..<14 { patch[y * w + x] = SIMD3(repeating: 0.8) } }        // a bright source area on the left
+    var heal = spot; heal.heal = 1; heal.srcX = 0.15; heal.dstX = 0.75; heal.radius = 0.15
+    var cloneOnly = heal; cloneOnly.heal = 0
+    let hp = CloneSpot.apply(patch, width: w, height: h, spot: heal), cp = CloneSpot.apply(patch, width: w, height: h, spot: cloneOnly)
+    let hg = heal.geometry(width: w, height: h)
+    let hx = Int(hg.centre.x.rounded()), hy = Int(hg.centre.y.rounded())
+    check("RTC4 heal keeps the destination's light where the source is brighter: the clone brings 0.8 to the spot, the heal leaves it at 0.2 (within 1e-9)",
+          abs(cp[hy * w + hx].x - 0.8) < 0.05 && abs(hp[hy * w + hx].x - 0.2) < 1e-9, "clone \(cp[hy * w + hx].x), heal \(hp[hy * w + hx].x)")
+    check("RTC5 the edge of the spot is feathered to nothing: a pixel at the radius is unchanged and the weight falls monotonically outward",
+          (0..<30).allSatisfy { i in let r1 = Double(i) / 30 * g.radius, r2 = Double(i + 1) / 30 * g.radius
+              return (1 - ColorCommon.smoothstep(g.radius * 0.5, g.radius, r2)) <= (1 - ColorCommon.smoothstep(g.radius * 0.5, g.radius, r1)) + 1e-12 })
+
+    // LQF
+    let wk = Remap.Kind.warp(centreX: 0.5, centreY: 0.5, radius: 0.4, strength: 0)
+    check("LQF1 strength 0 is the exact identity", Remap.apply(ramp, width: w, height: h, kind: wk) == ramp)
+    let bulge = Remap.Kind.warp(centreX: 0.5, centreY: 0.5, radius: 0.4, strength: 0.6), pinch = Remap.Kind.warp(centreX: 0.5, centreY: 0.5, radius: 0.4, strength: -0.6)
+    let pc = SIMD2(0.5 * Double(w - 1), 0.5 * Double(h - 1))
+    let near = Remap.source(bulge, x: pc.x + 5, y: pc.y, width: w, height: h, channel: 0), far = Remap.source(pinch, x: pc.x + 5, y: pc.y, width: w, height: h, channel: 0)
+    check("LQF2 a bulge reads nearer the centre than the pixel (magnifies), a pinch farther", near.x - pc.x < 5 && far.x - pc.x > 5, "\(near.x - pc.x) \(far.x - pc.x)")
+    let outside = Remap.source(bulge, x: pc.x + 0.45 * Double(h), y: pc.y, width: w, height: h, channel: 0)
+    check("LQF3 outside the radius the source is the pixel itself (within 1e-12)", abs(outside.x - (pc.x + 0.45 * Double(h))) < 1e-12)
+    let atC = Remap.source(bulge, x: pc.x, y: pc.y, width: w, height: h, channel: 0)
+    check("LQF4 the centre is fixed and a flat picture stays flat", abs(atC.x - pc.x) < 1e-12 && allGap(Remap.apply(flat, width: w, height: h, kind: bulge), flat) < 1e-12)
+}
+
 print(failures == 0 ? "\nall checks passed" : "\n\(failures) failed")
 exit(failures == 0 ? 0 : 1)

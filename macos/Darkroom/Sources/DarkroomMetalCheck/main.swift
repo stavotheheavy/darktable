@@ -800,5 +800,15 @@ do {
                        oracle: { ColorHarmony.apply($0, hues: hF, halfGap: Double(Float(sch.halfGap)), amount: Double(Float(0.8))) })
 }
 
+// B&W mixer and selective colour on Metal against their oracles
+do {
+    metalPerPixelCheck("BWM-M B&W mixer", source: MetalBWMixer.source, function: "bwmixerBuf", uniforms: [0.5, 0.4, 0.1, 0.8], tolerance: 1e-4,
+                       oracle: { BWMixer.apply($0, weights: SIMD3(Double(Float(0.5)), Double(Float(0.4)), Double(Float(0.1))), amount: Double(Float(0.8))) })
+    var slc = [Double](repeating: 0, count: 24)
+    for k in 0..<24 { slc[k] = sin(Double(k) * 1.3 + 0.2) * 0.8 }
+    metalPerPixelCheck("SLC-M selective colour", source: MetalSelectiveColor.source, function: "selectivecolorBuf", uniforms: slc.map { Float($0) }, tolerance: 1e-3,
+                       oracle: { SelectiveColor.apply($0, adjust: slc.map { Double(Float($0)) }) })
+}
+
 print(failures == 0 ? "\nall Metal checks passed" : "\n\(failures) failed")
 exit(failures == 0 ? 0 : 1)

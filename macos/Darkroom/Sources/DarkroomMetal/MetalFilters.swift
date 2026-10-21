@@ -181,7 +181,14 @@ final class PerPixelManyProcessor: CIImageProcessorKernel {
     /// A gather kernel (a mosaic) names how far it reads past its output as `reach`; the others read only their own pixel.
     override class func roi(forInput input: Int32, arguments: [String: Any]?, outputRect: CGRect) -> CGRect {
         let reach = CGFloat((arguments?["reach"] as? Int) ?? 0)
-        return outputRect.insetBy(dx: -reach, dy: -reach)
+        let grown = outputRect.insetBy(dx: -reach, dy: -reach)
+        // a kernel that clamps its own read positions into the frame (`clampToFrame`) never needs a pixel from outside it, so it asks for none: Core Image
+        // supplies only a thin ring past the frame to a processor whose input is another processor's output, and a gather that asked for more got black
+        if arguments?["clampToFrame"] as? Bool == true, let e = arguments?["extent"] as? [Double], e.count == 4 {
+            let inFrame = grown.intersection(CGRect(x: e[0], y: e[1], width: e[2], height: e[3]))
+            return inFrame.isNull ? outputRect : inFrame.union(outputRect)
+        }
+        return grown
     }
 
     override class func process(with inputs: [CIImageProcessorInput]?, arguments: [String: Any]?,

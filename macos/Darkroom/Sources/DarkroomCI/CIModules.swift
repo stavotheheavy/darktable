@@ -21,7 +21,7 @@ struct CIModule: Sendable {
     static let fusableOperations: Set<String> = [
         "temperature", "exposure", "colorbalancergb", "channelmixer", "tonecurve", "monochrome", "rgblevels", "splittoning", "display", "invert", "colisa", "velvia", "colorzones", "satcurvergb", "colorbalance", "rgbcurve", "colorcontrast", "colorcorrection", "basecurve", "dither", "colorize", "solarize", "negadoctor", "lowlight", "channelmixerrgb",
         "gradientmap", "crossprocess", "bleachbypass", "photofilter", "channelcurves", "chromalimit", "huerotate", "warmth",
-        "highlightrolloff", "lumabands", "fadelook", "lumacurve", "reinhard", "scurve", "colorharmonizer",
+        "highlightrolloff", "lumabands", "fadelook", "lumacurve", "reinhard", "scurve", "colorharmonizer", "bwmixer", "selectivecolor",
     ]
 
     /// The fused op a fusable module stands for with these values, or nil when the module does nothing at them. This is the one place the
@@ -166,6 +166,12 @@ struct CIModule: Sendable {
             let sch = ColorHarmony.scheme(Int((v["scheme"] ?? 0).rounded()), baseDegrees: v["base"] ?? 0)
             let hues = (sch.hues + [0, 0, 0, 0]).prefix(4).map { Float($0) }
             return FusedOp(.colorHarmony, [Float(sch.hues.count)] + hues + [Float(sch.halfGap), Float(amount)])
+        case "bwmixer":
+            let amount = v["amount"] ?? 0
+            return amount == 0 ? nil : FusedOp(.bwMixer, [Float(v["red"] ?? 0.263), Float(v["green"] ?? 0.678), Float(v["blue"] ?? 0.059), Float(amount)])
+        case "selectivecolor":
+            let u: [Float] = SelectiveColor.families.flatMap { f in SelectiveColor.inks.map { Float(v["\(f)_\($0)"] ?? 0) } }
+            return u.allSatisfy { $0 == 0 } ? nil : FusedOp(.selectiveColor, u)
         case "rgblevels":
             let black = v["black"] ?? 0
             let white = max(v["white"] ?? 1, black + 0.01)
@@ -197,7 +203,7 @@ struct CIModule: Sendable {
     /// Modules that read a neighbourhood (a blur radius, a guided filter, wavelet levels): the expensive ones. The segment cache keeps
     /// the picture after each of them, so a slider moved further down the stack does not run them again.
     static let neighbourhoodOperations: Set<String> = [
-        "sharpen", "denoiseprofile", "bilat", "atrous", "hazeremoval", "zones", "clahe", "soften", "blurs", "lowpass", "censorize", "highpass", "hdrtone", "deconvsharp", "chromadenoise", "mediandenoise", "deband", "skinsmooth", "texturebands", "halation", "caradial", "distortion", "perspective", "tiltshift", "defringe", "surfaceblur", "lensblur", "motionblur", "radialblur", "diffuse", "kuwahara", "bloom", "highlights",
+        "sharpen", "denoiseprofile", "bilat", "atrous", "hazeremoval", "zones", "clahe", "soften", "blurs", "lowpass", "censorize", "highpass", "hdrtone", "deconvsharp", "chromadenoise", "mediandenoise", "deband", "skinsmooth", "texturebands", "halation", "caradial", "distortion", "perspective", "tiltshift", "defringe", "surfaceblur", "lensblur", "motionblur", "radialblur", "diffuse", "kuwahara", "nlmeans", "bilateral", "emboss", "sketch", "halftone", "retouch", "bloom", "highlights",
     ]
 
     /// The display-referred modules: they assume 0...1 values (a curve, levels, a contrast about 0.5, a lift of the shadows) and are
@@ -796,6 +802,68 @@ extension CIModule {
             operation: "kuwahara", name: "painterly (Kuwahara)", iopOrder: 79, defaultEnabled: false,
             fields: [field("amount", 0, 1, 0), field("radius", 1, 8, 3)],
             apply: { image, v in try CIBridge.kuwahara(image, radius: max(Int(((v["radius"] ?? 3) * (v["_scale"] ?? 1)).rounded()), 1), amount: v["amount"] ?? 0) }),
+
+        // B&W mixer: the grey is a weighted sum of the scene-linear channels (a colour filter on the lens). BWMixer in DarkroomCore is the oracle (BWM1-BWM4, E-BWM).
+        CIModule(
+            operation: "bwmixer", name: "black and white mixer", iopOrder: 46, defaultEnabled: false,
+            fields: [field("amount", 0, 1, 0), field("red", -1, 2, 0.263), field("green", -1, 2, 0.678), field("blue", -1, 2, 0.059)],
+            apply: { image, v in try CIModule.applyFused("bwmixer", image, v) }),
+
+        // Selective colour: cyan, magenta, yellow and black sliders for each of six colour families, relative, on the encoded value. SelectiveColor in DarkroomCore is the oracle
+        // (SLC1-SLC5, E-SLC).
+        CIModule(
+            operation: "selectivecolor", name: "selective colour", iopOrder: 30, defaultEnabled: false,
+            fields: SelectiveColor.families.flatMap { f in SelectiveColor.inks.map { field("\(f)_\($0)", -1, 1, 0) } },
+            apply: { image, v in try CIModule.applyFused("selectivecolor", image, v) }),
+
+        // Non-local means: the weighted mean of similar patches in a 7 x 7 window (Buades, Coll, Morel). NonLocalMeans in DarkroomCore is the oracle (NLM1-NLM5, E-NLM).
+        CIModule(
+            operation: "nlmeans", name: "non-local means denoise", iopOrder: 80, defaultEnabled: false,
+            fields: [field("amount", 0, 1, 0), field("strength", 0.01, 0.3, 0.06)],
+            apply: { image, v in try CIBridge.nonLocalMeans(image, h: v["strength"] ?? 0.06, amount: v["amount"] ?? 0) }),
+
+        // Bilateral filter: spatial and colour-range Gaussians (Tomasi and Manduchi). BilateralFilter in DarkroomCore is the oracle (BIL1-BIL5, E-BIL).
+        CIModule(
+            operation: "bilateral", name: "bilateral filter", iopOrder: 81, defaultEnabled: false,
+            fields: [field("amount", 0, 1, 0), field("radius", 1, 10, 4), field("range", 0.01, 0.5, 0.1)],
+            apply: { image, v in
+                try CIBridge.bilateral(image, radius: max(Int(((v["radius"] ?? 4) * (v["_scale"] ?? 1)).rounded()), 1), range: v["range"] ?? 0.1, amount: v["amount"] ?? 0)
+            }),
+
+        // Emboss: the directional derivative of the encoded luminance on mid-grey. Emboss in DarkroomCore is the oracle (EMB1-EMB5, E-EMB).
+        CIModule(
+            operation: "emboss", name: "emboss", iopOrder: 82, defaultEnabled: false,
+            fields: [field("amount", 0, 1, 0), field("angle", -180, 180, 135), field("strength", 0.5, 8, 3)],
+            apply: { image, v in try CIBridge.emboss(image, angleDegrees: v["angle"] ?? 135, strength: v["strength"] ?? 3, amount: v["amount"] ?? 0) }),
+
+        // Sketch: Sobel edges of the encoded luminance as dark lines on white. Sketch in DarkroomCore is the oracle (SKT1-SKT5, E-SKT).
+        CIModule(
+            operation: "sketch", name: "pencil sketch", iopOrder: 83, defaultEnabled: false,
+            fields: [field("amount", 0, 1, 0), field("strength", 1, 20, 6)],
+            apply: { image, v in try CIBridge.sketch(image, strength: v["strength"] ?? 6, amount: v["amount"] ?? 0) }),
+
+        // Halftone: ink dots on a turned grid, the area following the darkness. Halftone in DarkroomCore is the oracle (HLF1-HLF5, E-HLF).
+        CIModule(
+            operation: "halftone", name: "halftone", iopOrder: 84, defaultEnabled: false,
+            fields: [field("amount", 0, 1, 0), field("size", 3, 40, 10), field("angle", -45, 45, 15), field("colour", 0, 1, 0)],
+            apply: { image, v in
+                try CIBridge.halftone(image, size: max(((v["size"] ?? 10) * (v["_scale"] ?? 1)).rounded(), 1), angleDegrees: v["angle"] ?? 15, colour: (v["colour"] ?? 0) >= 0.5, amount: v["amount"] ?? 0)
+            }),
+
+        // Retouch: one spot, cloned or healed (the destination's low frequencies with the source's detail). CloneSpot in DarkroomCore is the oracle (RTC1-RTC5, E-RTC).
+        CIModule(
+            operation: "retouch", name: "retouch spot (clone or heal)", iopOrder: 85, defaultEnabled: false,
+            fields: [field("amount", 0, 1, 0), field("src_x", 0, 1, 0.3), field("src_y", 0, 1, 0.5), field("dst_x", 0, 1, 0.6), field("dst_y", 0, 1, 0.5),
+                     field("radius", 0.005, 0.3, 0.06), field("feather", 0, 1, 0.5), field("heal", 0, 1, 1)],
+            apply: { image, v in try CIBridge.cloneSpot(image, spot: CloneSpot.Spot(values: v)) }),
+
+        // Liquify: a bulge or pinch warp about a point, bilinear. Remap in DarkroomCore is the oracle (LQF1-LQF4, E-LQF).
+        CIModule(
+            operation: "liquify", name: "liquify (bulge or pinch)", iopOrder: 92, defaultEnabled: false,
+            fields: [field("strength", -1, 1, 0), field("centre_x", 0, 1, 0.5), field("centre_y", 0, 1, 0.5), field("radius", 0.05, 1, 0.25)],
+            apply: { image, v in
+                try CIBridge.remap(image, kind: .warp(centreX: v["centre_x"] ?? 0.5, centreY: v["centre_y"] ?? 0.5, radius: v["radius"] ?? 0.25, strength: v["strength"] ?? 0))
+            }),
 
         // Split toning: a shadows tint and a highlights tint in OkLab, each with its own hue and saturation,
         // split at a balance pivot. Checked by ST1-ST7 (darkroom-core-check), splitBuf (darkroom-metal-check)

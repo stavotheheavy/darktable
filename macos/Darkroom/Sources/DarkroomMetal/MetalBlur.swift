@@ -54,10 +54,10 @@ extension CIBridge {
         guard block > 1 else { return image }
         let ext = image.extent
         // a pixel reads at most one block away, so the input is asked for that much more
-        let out = try PerPixelManyProcessor.apply(withExtent: ext, inputs: [image.clampedToExtent()],
+        let out = try PerPixelManyProcessor.apply(withExtent: ext, inputs: [image],
                                                   arguments: ["function": "mosaicTex", "uniforms": [Float(block)], "source": mosaicSource,
-                                                              "reach": block,
+                                                              "reach": block, "clampToFrame": true,
                                                               "extent": [Double(ext.minX), Double(ext.minY), Double(ext.width), Double(ext.height)]])
-        return out.cropped(to: ext)
+        return out
     }
 }

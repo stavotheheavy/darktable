@@ -4,6 +4,8 @@
 //    r the distance from the centre in units of the half diagonal; k1 > 0 pulls the edges in (corrects barrel distortion), k1 < 0 pushes them out (pincushion);
 //  - lateral chromatic aberration: the red and blue channels are scaled about the centre, source = c + (p - c) s with s = 1 + red or 1 + blue, green fixed, which
 //    undoes the colour fringing a lens makes by magnifying each colour a little differently;
+//  - a local warp (bulge or pinch about a point, the liquify tool's simplest brush): source = c0 + (p - c0) (1 - strength (1 - d^2)^2) with d the distance from the warp centre c0 over its
+//    radius inside the circle and the pixel itself outside;
 //  - keystone (a plane projective map): with u = (x - cx) / cx and v = (y - cy) / cy, w = 1 + kx u + ky v, source = c + (u / w, v / w) (cx, cy), the vertical and
 //    horizontal perspective sliders.
 // All three are the identity at zero settings (the source position is then exactly the output position, and the bilinear sample of an integer position is the pixel).
@@ -15,6 +17,8 @@ public enum Remap {
         case distortion(k1: Double, k2: Double)
         case chromaticAberration(red: Double, blue: Double)
         case perspective(horizontal: Double, vertical: Double)
+        /// A local bulge (strength above 0) or pinch (below 0): centre as fractions of the frame, radius a fraction of the frame height.
+        case warp(centreX: Double, centreY: Double, radius: Double, strength: Double)
     }
 
     /// Where output pixel (x, y) reads channel `channel` (0 red, 1 green, 2 blue) from.
@@ -35,6 +39,13 @@ public enum Remap {
             let w = 1 + kx * u + ky * v
             let d = abs(w) < 1e-6 ? 1e-6 : w
             return SIMD2(cx + (u / d) * cx, cy + (v / d) * cy)
+        case .warp(let fx, let fy, let radius, let strength):
+            // bulge / pinch: inside the radius the source is pulled toward (strength > 0) or pushed from (< 0) the centre, with a smooth (1 - d^2)^2 falloff to the edge of the circle
+            let px = fx * Double(width - 1), py = fy * Double(height - 1)
+            let r = max(radius * Double(height), 1e-6)
+            let d = hypot(x - px, y - py) / r
+            let f = d < 1 ? 1 - strength * (1 - d * d) * (1 - d * d) : 1
+            return SIMD2(px + (x - px) * f, py + (y - py) * f)
         }
     }
 
