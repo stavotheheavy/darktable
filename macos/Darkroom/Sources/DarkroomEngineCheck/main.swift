@@ -1041,6 +1041,68 @@ do {
                                          StackEntry(operation: "tonecurve", params: [:])]) == [1, 2])
 }
 
+// E-HR highlight reconstruction on the GPU against HighlightRebuild: the oracle's own A2 and A3 pictures, a patch that touches the picture's corner
+// (the windows run off it: zero padding), seams, and strength
+do {
+    let n = 41
+    func field(_ f: SIMD3<Double>, patch: [SIMD3<Double>: ClosedRange<Int>] = [:]) -> [SIMD3<Double>] { [SIMD3<Double>](repeating: f, count: n * n) }
+    func withPatch(_ f: SIMD3<Double>, value: SIMD3<Double>, x: ClosedRange<Int>, y: ClosedRange<Int>) -> [SIMD3<Double>] {
+        var img = field(f)
+        for yy in y { for xx in x { img[yy * n + xx] = value } }
+        return img
+    }
+    let cases: [(String, [SIMD3<Double>])] = [
+        ("clipped patch on a warm field (A2)", withPatch(SIMD3(0.7, 0.4, 0.25), value: SIMD3(repeating: 1), x: 12...28, y: 12...28)),
+        ("clipped patch on dark branches (A2)", withPatch(SIMD3(repeating: 0.05), value: SIMD3(repeating: 1), x: 12...28, y: 12...28)),
+        ("blown red in a warm field (A3)", withPatch(SIMD3(0.7, 0.4, 0.25), value: SIMD3(1.0, 0.9, 0.5), x: 19...21, y: 19...21)),
+        ("a patch touching the corner (windows run off the picture: the nearest edge pixel is read)", withPatch(SIMD3(0.7, 0.4, 0.25), value: SIMD3(repeating: 1), x: 0...8, y: 0...8)),
+        ("a patch touching the far edge", withPatch(SIMD3(0.6, 0.5, 0.3), value: SIMD3(1.0, 1.0, 0.8), x: 33...40, y: 15...25)),
+    ]
+    var allOK = true
+    for (label, img) in cases {
+        let px = img.map { SIMD4(Float($0.x), Float($0.y), Float($0.z), 1) }
+        let want = HighlightRebuild.apply(img, width: n, height: n, clip: 1, strength: 1)
+        let stack = [StackEntry(operation: "highlights", params: ["clip": .number(1), "strength": .number(1)])]
+        let got = (try? CIEngineProbe.renderSized(stack: stack, pixels: px, width: n, height: n).pixels) ?? []
+        let e = worstLinear(got, want)
+        let changed = worstLinear(px, want) > 0.05
+        // the clipped patch among dark branches is already neutral white: the rebuild has nothing to change, and the GPU must agree on that
+        let ok = got.count == n * n && e < 2e-4 && (changed || label.contains("dark branches"))
+        allOK = allOK && ok
+        check("E-HR \(label): the GPU matches the oracle unclamped within 2e-4 (and the oracle changes the picture)", ok, "\(e), changed \(changed)")
+    }
+    // seams: a region renders what the full frame has there (the windows reach 16 px)
+    let seamImg = cases[3].1
+    let seamPx = seamImg.map { SIMD4(Float($0.x), Float($0.y), Float($0.z), 1) }
+    let seamStack = [StackEntry(operation: "highlights", params: ["clip": .number(1), "strength": .number(1)])]
+    if let full = try? CIEngineProbe.renderSized(stack: seamStack, pixels: seamPx, width: n, height: n).pixels {
+        var worstSeam = 0.0
+        for reg in [(x: 3, y: 2, w: 20, h: 18), (x: 0, y: 0, w: 15, h: 15), (x: 25, y: 20, w: 16, h: 21)] {
+            guard let part = try? CIEngineProbe.renderRegion(stack: seamStack, pixels: seamPx, width: n, height: n, region: reg), part.count == reg.w * reg.h else { worstSeam = .infinity; continue }
+            for yy in 0..<reg.h { for xx in 0..<reg.w {
+                let a = part[yy * reg.w + xx], b = full[(reg.y + yy) * n + reg.x + xx]
+                for c in 0..<3 { worstSeam = max(worstSeam, abs(Double(a[c]) - Double(b[c]))) }
+            } }
+        }
+        check("E-HR-seam regions render the same as the full frame (the 16 px windows cross the tile edge)", worstSeam < 1e-6, "\(worstSeam)")
+    }
+    let src = cases[0].1.map { SIMD4(Float($0.x), Float($0.y), Float($0.z), 1) }
+    let off = (try? CIEngineProbe.renderSized(stack: [StackEntry(operation: "highlights", params: ["strength": .number(0)])], pixels: src, width: n, height: n).pixels) ?? []
+    check("E-HR strength 0 returns the picture untouched", off == src)
+    let half = (try? CIEngineProbe.renderSized(stack: [StackEntry(operation: "highlights", params: ["clip": .number(1), "strength": .number(0.5)])], pixels: src, width: n, height: n).pixels) ?? []
+    let wantHalf = HighlightRebuild.apply(cases[0].1, width: n, height: n, clip: 1, strength: 0.5)
+    check("E-HR strength 0.5 is halfway between the picture and the rebuild", worstLinear(half, wantHalf) < 2e-4, "\(worstLinear(half, wantHalf))")
+    check("E-HR the highlight module is on the scene side of the display transform", !CIEngineProbe.displayReferredOperations.contains("highlights"))
+}
+
+
+
+
+
+
+
+
+
 // T10 HDR: a ramp from deep shadow to 4 stops over white through the display transform; the SDR render, the HDR
 // render and the exported file (an SDR JPEG carrying a gain map) must agree with each other and with SceneTone
 do {

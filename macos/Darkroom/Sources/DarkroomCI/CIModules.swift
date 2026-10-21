@@ -86,7 +86,7 @@ struct CIModule: Sendable {
     /// Modules that read a neighbourhood (a blur radius, a guided filter, wavelet levels): the expensive ones. The segment cache keeps
     /// the picture after each of them, so a slider moved further down the stack does not run them again.
     static let neighbourhoodOperations: Set<String> = [
-        "sharpen", "denoiseprofile", "bilat", "atrous", "hazeremoval", "zones", "clahe", "soften", "blurs", "lowpass", "bloom",
+        "sharpen", "denoiseprofile", "bilat", "atrous", "hazeremoval", "zones", "clahe", "soften", "blurs", "lowpass", "bloom", "highlights",
     ]
 
     /// The display-referred modules: they assume 0...1 values (a curve, levels, a contrast about 0.5, a lift of the shadows) and are
@@ -449,6 +449,15 @@ extension CIModule {
                 let after = try CIBridge.gain(image, scale: SIMD3(g, g, g))
                 return try CIBridge.blendMasked(before: image, after: after, mask: try CIBridge.localMask(image, spec: spec), opacity: 1)
             }),
+
+        // Highlight reconstruction: a fully clipped pixel takes its colour from nearby reliable pixels (neutral where there are none), a partly
+        // clipped one rebuilds its lost channels from the colour of its surroundings. `clip` is the level the data clips at, in scene units
+        // (about 3.0 on the camera files measured); `strength` 0 is off. Off by default: Apple's decoder already leaves clipped highlights
+        // neutral (dtb-selftest --highlight-probe), so this is for the files where it does not. Checked by A1-A3 (darkroom-core-check) and E-HR.
+        CIModule(
+            operation: "highlights", name: "highlight reconstruction", iopOrder: 4, defaultEnabled: false,
+            fields: [field("clip", 0.5, 8, 3), field("strength", 0, 1, 1)],
+            apply: { image, v in try CIBridge.highlightRebuild(image, clip: v["clip"] ?? 3, strength: v["strength"] ?? 1) }),
 
         // Haze removal: the dark channel prior with a guided-filter-refined transmission. Strength 0 is the identity.
         // Checked by DH1-DH7 (darkroom-core-check) and E-DH (darkroom-engine-check).

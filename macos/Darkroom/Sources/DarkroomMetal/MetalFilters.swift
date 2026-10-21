@@ -144,6 +144,9 @@ final class SeparableProcessor: CIImageProcessorKernel {
         // the input covers at least the output grown by `reach` (it can be larger when the image is shared)
         let grown = output.region.insetBy(dx: CGFloat(-reach), dy: CGFloat(-reach))
         guard input.region.contains(grown) else {
+            if ProcessInfo.processInfo.environment["DARKROOM_TRACE_REGIONS"] != nil {
+                FileHandle.standardError.write(Data("separable reach \(reach): input \(input.region) does not cover \(grown) (output \(output.region))\n".utf8))
+            }
             throw CIBridgeError.regionMismatch(input: input.region, output: output.region)
         }
         // offset of the grown rectangle inside the input texture; pass 1 starts there, pass 2 reads pass 1 as is
@@ -182,10 +185,16 @@ final class PerPixelManyProcessor: CIImageProcessorKernel {
         else { throw CIBridgeError.badArguments }
         let kernels = try BridgeKernels.shared.get()
         let p = try kernels.pipeline(function, source: (arguments?["source"] as? String) ?? FilterKernels.source)
+        if ProcessInfo.processInfo.environment["DARKROOM_TRACE_REGIONS"] != nil {
+            FileHandle.standardError.write(Data("many \(function): output \(output.region) inputs \(inputs.map { "\($0.region)" })\n".utf8))
+        }
         // check every input before an encoder exists: an encoder dropped without endEncoding is a crash
         var textures: [MTLTexture] = [], offsets: [SIMD2<Int32>] = []
         for input in inputs {
             guard let t = input.metalTexture, input.region.contains(output.region) else {
+                if ProcessInfo.processInfo.environment["DARKROOM_TRACE_REGIONS"] != nil {
+                    FileHandle.standardError.write(Data("many \(function): input \(input.region) does not cover output \(output.region)\n".utf8))
+                }
                 throw CIBridgeError.regionMismatch(input: input.region, output: output.region)
             }
             textures.append(t)
