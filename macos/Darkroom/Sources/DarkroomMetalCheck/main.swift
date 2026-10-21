@@ -486,6 +486,32 @@ do {
     check("MO-M monochrome on Metal ran", false, "\(error)")
 }
 
+// invert on Metal (invertBuf) against Invert.apply: a ramp from below black to past white on all three channels (shifted so the channels
+// differ), plus a NaN, which the kernel must send to black before inverting, as the oracle does
+do {
+    let ivRamp = (0..<4096).map { i -> SIMD3<Double> in
+        let t = -0.25 + 1.5 * Double(i) / 4095
+        return SIMD3(t, -0.25 + 1.5 * Double((i * 7) % 4096) / 4095, -0.25 + 1.5 * Double((i * 13) % 4096) / 4095)
+    }
+    let ivFloat = ivRamp.map { SIMD4<Float>(Float($0.x), Float($0.y), Float($0.z), 1) } + [SIMD4<Float>(.nan, 0.5, 0.2, 1)]
+    let ivOut = try MetalPerPixel.run(source: MetalInvert.source, function: "invertBuf", pixels: ivFloat, uniforms: [0])
+    var ivFinite = ivOut.count == ivFloat.count
+    var ivWorst = 0.0
+    for (px, g) in zip(ivRamp, ivOut) {
+        let cpu = Invert.apply(px)
+        let gpu = SIMD3(Double(g.x), Double(g.y), Double(g.z))
+        ivFinite = ivFinite && gpu.x.isFinite && gpu.y.isFinite && gpu.z.isFinite
+        for k in 0..<3 { ivWorst = max(ivWorst, abs(gpu[k] - cpu[k]) / max(1, abs(cpu[k]))) }
+    }
+    check("IV-M invert on Metal is finite and within 1e-4 of Invert.apply", ivFinite && ivWorst < 1e-4,
+          "finite \(ivFinite), worst relative error \(ivWorst)")
+    if let nanOut = ivOut.last {
+        check("IV-M a NaN pixel goes to white (black in, inverted), not NaN", nanOut.x == 1 && nanOut.y.isFinite, "\(nanOut)")
+    }
+} catch {
+    check("IV-M invert kernel ran", false, "\(error)")
+}
+
 // split toning on Metal against SplitToning.apply (unclamped): every hue, deep shadow to past white
 do {
     let count = 4096

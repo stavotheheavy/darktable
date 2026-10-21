@@ -368,6 +368,14 @@ check("E-MO monochrome matches the oracle within 1/255", eMO < tol, "\(eMO)")
 let eMOLinear = worstLinear(run(monoStack), monoOracle)
 check("E-MO monochrome matches the oracle unclamped (relative 1e-4)", eMOLinear < 1e-4, "\(eMOLinear)")
 
+// E-IV invert: the per-pixel kernel through the engine against Invert in DarkroomCore (the module has no parameters)
+let invertStack = [StackEntry(operation: "invert", params: [:])]
+let invertOracle = scene.map { Invert.apply($0) }
+let eIV = worst(run(invertStack), invertOracle)
+check("E-IV invert matches the oracle within 1/255", eIV < tol, "\(eIV)")
+let eIVLinear = worstLinear(run(invertStack), invertOracle)
+check("E-IV invert matches the oracle unclamped (relative 1e-4)", eIVLinear < 1e-4, "\(eIVLinear)")
+
 // E-ST split toning: the same settings through the engine (CIBridge.perPixel, splitTex) against SplitToning in DarkroomCore
 let eSTEngine = run([StackEntry(operation: "splittoning", params: [
     "shadows_hue": .number(220), "shadows_saturation": .number(0.8),

@@ -19,7 +19,7 @@ struct CIModule: Sendable {
     /// The modules whose work is one pixel in, one pixel out, on our own Metal functions: a run of them is one pass over the frame
     /// (see MetalFused). The engine fuses them when they are unmasked and at full opacity.
     static let fusableOperations: Set<String> = [
-        "temperature", "exposure", "colorbalancergb", "channelmixer", "tonecurve", "monochrome", "rgblevels", "splittoning", "display",
+        "temperature", "exposure", "colorbalancergb", "channelmixer", "tonecurve", "monochrome", "rgblevels", "splittoning", "display", "invert",
     ]
 
     /// The fused op a fusable module stands for with these values, or nil when the module does nothing at them. This is the one place the
@@ -55,6 +55,8 @@ struct CIModule: Sendable {
             guard intensity > 0 else { return nil }
             let hue = (v["filter_hue"] ?? 30) * .pi / 180
             return FusedOp(.monochrome, [Float(intensity), Float(v["filter_strength"] ?? 0), Float(cos(hue)), Float(sin(hue))])
+        case "invert":
+            return FusedOp(.invert, [])
         case "rgblevels":
             let black = v["black"] ?? 0
             let white = max(v["white"] ?? 1, black + 0.01)
@@ -295,11 +297,12 @@ extension CIModule {
                 ])
             }),
 
-        // Invert: a negative of the image. No parameters.
+        // Invert: a negative of the image, the complement of each channel's display-encoded value. No parameters.
         CIModule(
             operation: "invert", name: "invert", iopOrder: 3, defaultEnabled: false,
             fields: [],
-            apply: { image, _ in image.applyingFilter("CIColorInvert") }),
+            // DarkroomCore's Invert on the oracle-checked per-pixel kernel (darkroom-engine-check E-IV)
+            apply: { image, v in try CIModule.applyFused("invert", image, v) }),
 
         // Gamma, approximate basecurve: a power curve on the image. 1.0 is the identity.
         CIModule(
@@ -667,6 +670,8 @@ extension CIModule {
     static let workingSpaceVersions: [String: Int] = [
         "display": 3, "colorbalancergb": 2, "monochrome": 2, "splittoning": 2, "sharpen": 2, "bilat": 2, "atrous": 2,
         "denoiseprofile": 2, "hazeremoval": 2, "zones": 2, "colorize": 2,
+        // not the working space: invert was Core Image's complement of the linear value and is now the complement of the encoded one
+        "invert": 2,
     ]
 
     static let all: [CIModule] = (catalogue + [display] + geometryModules).map { module in

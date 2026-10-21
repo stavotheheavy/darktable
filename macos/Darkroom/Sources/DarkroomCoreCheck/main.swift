@@ -600,6 +600,29 @@ let fadeColdRatio = Monochrome.apply(moFadeCold, intensity: 1, filterHueDegrees:
 check("MO7 half chroma: the filter's own hue is lighter by 1.25", abs(fadeHotRatio - 1.25) < 1e-9, "\(fadeHotRatio)")
 check("MO7 half chroma: the opposite hue is darker by 0.75", abs(fadeColdRatio - 0.75) < 1e-9, "\(fadeColdRatio)")
 
+// IV invert: the complement of each channel's display-encoded value. Black and white swap, applying it twice gives the input back,
+// middle grey (0.5 encoded) stays put, and past the ends it saturates to the opposite end
+check("IV1 black becomes white and white becomes black",
+      near(Invert.apply(SIMD3(0, 0, 0)), SIMD3(1, 1, 1), 1e-12) && near(Invert.apply(SIMD3(1, 1, 1)), SIMD3(0, 0, 0), 1e-12))
+let ivGrid = (0...255).map { Transfer.srgbToLinear(Double($0) / 255) }
+let ivInvolution = ivGrid.allSatisfy { x in
+    near(Invert.apply(Invert.apply(SIMD3(x, 1 - x, x * x))), SIMD3(x, 1 - x, x * x), 1e-9)
+}
+check("IV2 applying it twice gives the input back on 256 steps of 0...1", ivInvolution)
+let ivMid = Transfer.srgbToLinear(0.5)
+let ivMidOut = Invert.apply(SIMD3(repeating: ivMid))
+check("IV3 middle grey (0.5 encoded, \(String(format: "%.4f", ivMid)) linear) is a fixed point", near(ivMidOut, SIMD3(repeating: ivMid), 1e-12), "\(ivMidOut)")
+// the wrong rule, 1 - x on the linear value, must be told apart by IV3: it would send middle grey to 0.786
+check("IV3 the linear complement is not this module (1 - 0.214 is far from 0.214)", abs((1 - ivMid) - ivMid) > 0.5)
+check("IV4 past white is black and below black is white", near(Invert.apply(SIMD3(4, -0.5, 1.0)), SIMD3(0, 1, 0), 1e-12),
+      "\(Invert.apply(SIMD3(4, -0.5, 1.0)))")
+let ivBad = Invert.apply(SIMD3(.infinity, -.infinity, .nan))
+check("IV5 infinities saturate and a NaN is black, so the output is finite", near(ivBad, SIMD3(0, 1, 1), 1e-12), "\(ivBad)")
+let ivMonotone = zip(ivGrid, ivGrid.dropFirst()).allSatisfy { Invert.apply(SIMD3(repeating: $0)).x >= Invert.apply(SIMD3(repeating: $1)).x }
+check("IV6 a lighter input never gives a lighter output", ivMonotone)
+check("IV7 each channel is its own", Invert.apply(SIMD3(0.2, 0.5, 0.8)).x == Invert.apply(SIMD3(0.2, 0, 0)).x
+      && Invert.apply(SIMD3(0.2, 0.5, 0.8)).z == Invert.apply(SIMD3(0, 0, 0.8)).z)
+
 // ST split toning: greys are built in OkLab (a = b = 0) so their chroma is exactly zero before the tint
 func splitGrey(_ L: Double) -> SIMD3<Double> { OkLab.toWorking(SIMD3(L, 0, 0)) }
 func splitRun(_ c: SIMD3<Double>, shH: Double = 0, shS: Double = 0, hiH: Double = 0, hiS: Double = 0, balance: Double = 0) -> SIMD3<Double> {
