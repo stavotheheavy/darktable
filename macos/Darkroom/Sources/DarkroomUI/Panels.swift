@@ -854,6 +854,7 @@ public struct DarkroomRoot: View {
     @State private var library: LibraryModel
     @State private var screen: Screen
     @State private var welcomed: Bool
+    @State private var sendingGallery = false
 
     @MainActor public init() {
         let engine = EngineChoice.make()
@@ -868,7 +869,7 @@ public struct DarkroomRoot: View {
     public var body: some View {
         ZStack {
             switch screen {
-            case .library: LibraryView(library: library, open: openPhoto)
+            case .library: LibraryView(library: library, open: openPhoto, send: { sendingGallery = true })
             case .darkroom: DarkroomView(model: model)
             }
             // the app is Vantage; Darkroom is the editing view, as Develop is in other editors
@@ -896,6 +897,10 @@ public struct DarkroomRoot: View {
         .onOpenURL { url in
             if url.isFileURL { openPhoto(url.path) }
         }
+        .sheet(isPresented: $sendingGallery) {
+            SendToGallerySheet(cloud: model, library: library) { sendingGallery = false }
+        }
+        .onChange(of: model.galleryRequest) { _, _ in sendingGallery = true }
     }
 
     private func openPhoto(_ path: String) {

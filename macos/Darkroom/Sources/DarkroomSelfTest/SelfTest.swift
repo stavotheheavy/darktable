@@ -2065,6 +2065,110 @@ struct SelfTest {
             let kc = KeychainTokenStore(service: "com.databitdev.vantage.selftest")
             kc.delete(); kc.write("abc"); let kcRead = kc.read(); kc.write("def"); let kcRead2 = kc.read(); kc.delete()
             check(kcRead == "abc" && kcRead2 == "def" && kc.read() == nil, "CL8 the Keychain store writes, replaces and deletes a token")
+            // GL send to gallery: the owner flow against the stand-in, the failure messages, a resumed send, and a real exported JPEG
+            nonisolated(unsafe) var calls: [String] = []
+            nonisolated(unsafe) var puts: [(path: String, type: String?, auth: String?, bytes: Int)] = []
+            nonisolated(unsafe) var uploadsAnswer: (Int, [String: Any])? = nil
+            nonisolated(unsafe) var failPutOn: Set<Int> = []
+            nonisolated(unsafe) var putCount = 0
+            nonisolated(unsafe) var createCount = 0
+            MockCloud.handler = { req, body in
+                let path = req.url!.path
+                let json = (try? JSONSerialization.jsonObject(with: body)) as? [String: Any] ?? [:]
+                if req.url!.host == "r2.test" {
+                    putCount += 1
+                    puts.append((path, req.value(forHTTPHeaderField: "Content-Type"), req.value(forHTTPHeaderField: "Authorization"), body.count))
+                    return failPutOn.contains(putCount) ? (403, ["error": "SignatureDoesNotMatch"]) : (200, [:])
+                }
+                guard req.value(forHTTPHeaderField: "Authorization") == "Bearer T-GOOD" else { return (401, ["error": "Unauthorized"]) }
+                calls.append("\(req.httpMethod ?? "") \(path)\(req.url!.query.map { "?" + $0 } ?? "")")
+                switch path {
+                case "/api/portal/sites":
+                    return (200, ["sites": [["siteId": "s-none", "businessName": "No plan", "slug": "n", "status": "live", "galleries": "none"], ["siteId": "s1", "businessName": "Gus Photo", "slug": "gus", "status": "live", "galleries": "full"], ["siteId": "s-old", "businessName": "Old", "slug": "o", "status": "live", "galleries": "ended"]]])
+                case "/api/portal/galleries": createCount += 1; return (201, ["id": "g1"])
+                case "/api/portal/galleries/g1/uploads":
+                    if let a = uploadsAnswer { return a }
+                    let files = json["files"] as? [[String: Any]] ?? []
+                    return (200, ["uploads": files.enumerated().map { ["photoId": "p-\($0.element["filename"] as? String ?? "")", "url": "https://r2.test/put/\($0.offset)", "filename": $0.element["filename"] as? String ?? "", "contentType": "image/jpeg"] }, "skipped": [], "refused": []])
+                case "/api/portal/galleries/g1/uploads/complete": return (200, ["moved": (json["photoIds"] as? [Any])?.count ?? 0])
+                case "/api/portal/galleries/g1/share": return (200, ["code": "CODE-ONCE", "link": "https://gus.example.test/g/gus#c=CODE-ONCE", "stage": "proofing"])
+                default: return (404, [:])
+                }
+            }
+            model.cloudStore.write("T-GOOD")
+            let fakePhotos: [(path: String, name: String)] = [("/x/IMG_1.NEF", "IMG_1.NEF"), ("/x/IMG_2.NEF", "IMG_2.NEF"), ("/x/IMG_2.ARW", "IMG_2.ARW")]
+            func sender(_ exporter: @escaping (String, URL) async -> Bool = { _, url in (try? Data(repeating: 7, count: 1234).write(to: url)) != nil }) -> GallerySendModel {
+                let m = GallerySendModel(client: GalleryClient(base: URL(string: "https://cloud.test")!, session: URLSession(configuration: cfg)), token: { "T-GOOD" }, exporter: exporter)
+                m.title = "Wedding"; m.clientName = "Pat"; m.siteID = "s1"
+                m.selection = Set(fakePhotos.map(\.path))
+                return m
+            }
+            let g = sender()
+            await g.loadSites()
+            check(g.sites.count == 3 && g.usableSites.map(\.id) == ["s1"] && g.siteID == "s1" && g.canSend, "GL1 only the site whose plan has galleries can be picked (\(g.usableSites.map(\.name)))")
+            await g.send(photos: fakePhotos)
+            var linkOK = false
+            if case .done(let share) = g.phase { linkOK = share.code == "CODE-ONCE" && share.link.contains("/g/") }
+            check(linkOK && calls == ["GET /api/portal/sites", "POST /api/portal/galleries?site=s1", "POST /api/portal/galleries/g1/uploads?site=s1",
+                                      "POST /api/portal/galleries/g1/uploads/complete?site=s1", "POST /api/portal/galleries/g1/share?site=s1"],
+                  "GL2 a send creates the gallery, asks for links, completes and shares, in that order, for the chosen site (\(calls))")
+            check(puts.count == 3 && puts.allSatisfy { $0.type == "image/jpeg" && $0.auth == nil && $0.bytes == 1234 },
+                  "GL3 each file is PUT to storage as image/jpeg with its exact length and without the Databit token (\(puts.map { "\($0.type ?? "-"),\($0.auth ?? "no auth"),\($0.bytes)" }))")
+            // the second photo called IMG_2 twice: the names sent must differ
+            nonisolated(unsafe) var sentNames: [String] = []
+            let oldHandler = MockCloud.handler
+            MockCloud.handler = { req, body in
+                if req.url!.path.hasSuffix("/uploads"), let o = (try? JSONSerialization.jsonObject(with: body)) as? [String: Any] { sentNames = (o["files"] as? [[String: Any]] ?? []).compactMap { $0["filename"] as? String } }
+                return oldHandler!(req, body)
+            }
+            await sender().send(photos: fakePhotos)
+            check(Set(sentNames).count == 3 && sentNames.allSatisfy { $0.hasSuffix(".jpg") }, "GL4 two photos with the same name stay two files (\(sentNames))")
+            MockCloud.handler = oldHandler
+            for (status, body, expect) in [(409, ["error": "Storage full", "code": "over_quota"], "storage"), (409, ["error": "x", "code": "gallery_full"], "full"),
+                                           (403, ["error": "Your plan has ended", "code": "plan_ended"], "plan has ended"), (404, ["error": "not_found"], "no gallery plan"), (409, ["error": "x", "code": "delivered"], "delivered"), (401, ["error": "Unauthorized"], "Sign in")] as [(Int, [String: Any], String)] {
+                uploadsAnswer = (status, body)
+                let f = sender()
+                await f.send(photos: fakePhotos)
+                var msg = ""
+                if case .failed(let m) = f.phase { msg = m }
+                check(msg.contains(expect), "GL5 a \(status) \(body["code"] as? String ?? "") from the server says so plainly (\(msg))")
+            }
+            uploadsAnswer = nil
+            // a failed upload to storage, then a resume: the gallery is made once and only the photos not completed go again
+            calls = []; puts = []; putCount = 0; createCount = 0; failPutOn = [2]
+            let r = sender()
+            await r.send(photos: fakePhotos)
+            var failedText = ""
+            if case .failed(let m) = r.phase { failedText = m }
+            check(failedText.contains("refused"), "GL6 a refused upload stops the send with a clear message (\(failedText))")
+            failPutOn = []
+            puts = []
+            await r.send(photos: fakePhotos)
+            var resumed = false
+            if case .done = r.phase { resumed = true }
+            check(resumed && createCount == 1 && puts.count == 3, "GL7 sending again resumes in the same gallery and sends the files that never completed (gallery made \(createCount) time, \(puts.count) uploads)")
+            // too large and a failed export are named
+            let big = sender { _, url in (try? Data(repeating: 1, count: 50_000_001).write(to: url)) != nil }
+            await big.send(photos: fakePhotos)
+            var bigMsg = ""; if case .failed(let m) = big.phase { bigMsg = m }
+            let broken = sender { _, _ in false }
+            await broken.send(photos: fakePhotos)
+            var brokenMsg = ""; if case .failed(let m) = broken.phase { brokenMsg = m }
+            check(bigMsg.contains("50 MB") && brokenMsg.contains("could not make a JPEG"), "GL8 a file over 50 MB and a photo that will not export are named (\(bigMsg) / \(brokenMsg))")
+            // a real photo through a second engine, with edits: a JPEG within the limits, and the open photo untouched
+            let exportDir = FileManager.default.temporaryDirectory.appending(path: "gl-test-\(UUID().uuidString)")
+            try? FileManager.default.createDirectory(at: exportDir, withIntermediateDirectories: true)
+            let out = exportDir.appending(path: "one.jpg")
+            let exporterModel = DarkroomModel(engine: CIEngine())
+            let ok = await GalleryExporter(model: exporterModel).jpeg(for: path, to: out)
+            let data = (try? Data(contentsOf: out)) ?? Data()
+            var longSide = 0
+            if let src = CGImageSourceCreateWithURL(out as CFURL, nil), let props = CGImageSourceCopyPropertiesAtIndex(src, 0, nil) as? [CFString: Any] {
+                longSide = max(props[kCGImagePropertyPixelWidth] as? Int ?? 0, props[kCGImagePropertyPixelHeight] as? Int ?? 0)
+            }
+            check(ok && data.prefix(2) == Data([0xFF, 0xD8]) && data.count < 50_000_000 && longSide > 0 && longSide <= GalleryExporter.maxSide,
+                  "GL9 a photo exports through its own engine to a JPEG within the gallery limits (\(data.count / 1024) KB, \(longSide) px)")
+            try? FileManager.default.removeItem(at: exportDir)
             MockCloud.handler = nil
             model.cloudClient = CloudClient(base: DarkroomModel.defaultCloudBase)
 
@@ -2882,7 +2986,7 @@ struct SelfTest {
 
 /// A stand-in for Databit Dev's /api/vantage routes, in process: the handler sees each request and answers it.
 final class MockCloud: URLProtocol, @unchecked Sendable {
-    nonisolated(unsafe) static var handler: ((URLRequest, Data) -> (Int, [String: Any]))?
+    nonisolated(unsafe) static var handler: (@Sendable (URLRequest, Data) -> (Int, [String: Any]))?
     override class func canInit(with request: URLRequest) -> Bool { true }
     override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
     override func startLoading() {
