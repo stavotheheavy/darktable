@@ -38,6 +38,22 @@ extension CIBridge {
 
     private static let mixSource = MetalColorCommon.source + #"""
 
+    kernel void sbSqrtTex(texture2d<float, access::read> src [[texture(0)]], texture2d<float, access::write> dst [[texture(1)]],
+                          constant float *u [[buffer(0)]], constant int2 *off [[buffer(1)]], uint2 gid [[thread_position_in_grid]]) {
+        if (gid.x >= dst.get_width() || gid.y >= dst.get_height()) { return; }
+        float4 c = src.read(uint2(int2(gid) + off[0]));
+        float3 e = sqrt(max(c.rgb, float3(0.0f)));
+        dst.write(float4(isfinite(e.x) ? e.x : 0.0f, isfinite(e.y) ? e.y : 0.0f, isfinite(e.z) ? e.z : 0.0f, c.a), gid);
+    }
+
+    kernel void sbSquareTex(texture2d<float, access::read> src [[texture(0)]], texture2d<float, access::write> dst [[texture(1)]],
+                            constant float *u [[buffer(0)]], constant int2 *off [[buffer(1)]], uint2 gid [[thread_position_in_grid]]) {
+        if (gid.x >= dst.get_width() || gid.y >= dst.get_height()) { return; }
+        float4 c = src.read(uint2(int2(gid) + off[0]));
+        float3 e = max(c.rgb, float3(0.0f));
+        dst.write(float4(e * e, c.a), gid);
+    }
+
     kernel void mixTowardTex(texture2d<float, access::read> src [[texture(0)]], texture2d<float, access::read> other [[texture(1)]],
                              texture2d<float, access::write> dst [[texture(2)]],
                              constant float *u [[buffer(0)]], constant int2 *off [[buffer(1)]], uint2 gid [[thread_position_in_grid]]) {
@@ -51,7 +67,10 @@ extension CIBridge {
     /// DarkroomCore.SurfaceBlur.apply on the GPU.
     public static func surfaceBlur(_ image: CIImage, radius: Double, eps: Double, amount: Double) throws -> CIImage {
         guard amount != 0, radius > 0 else { return image }
-        return try combine([image, try guided(image, radius: radius, eps: eps)], source: mixSource, function: "mixTowardTex", uniforms: [Float(amount)])
+        // the guided filter runs on the square root of the channels and is squared back before the mix
+        let encoded = try combine([image], source: mixSource, function: "sbSqrtTex", uniforms: [])
+        let smooth = try combine([try guided(encoded, radius: radius, eps: eps)], source: mixSource, function: "sbSquareTex", uniforms: [])
+        return try combine([image, smooth], source: mixSource, function: "mixTowardTex", uniforms: [Float(amount)])
     }
 
     // MARK: lens blur
