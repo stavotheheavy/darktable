@@ -1,13 +1,15 @@
 import XCTest
 
-/// Haiku walk-through: drives the controls by the rig identifiers and attaches a screenshot per step.
-/// Each step records what it found, so one missing control does not stop the rest of the walk.
+/// The walk-through: drives the app by the rig identifiers and fails when a control is missing or does nothing.
+/// The iPad and the iPhone have different layouts, so each has its own walk; the other device skips it.
 final class VantageWalkTests: XCTestCase {
     static let rawPath = "/private/tmp/claude-502/-Users-Chief/84b5de6f-e891-4a6b-afa8-39a137741b16/scratchpad/rawtest/DSC_0508.NEF"
 
     override func setUpWithError() throws {
         continueAfterFailure = true
     }
+
+    private var isPad: Bool { UIDevice.current.userInterfaceIdiom == .pad }
 
     private func shot(_ name: String) {
         let a = XCTAttachment(screenshot: XCUIScreen.main.screenshot())
@@ -16,158 +18,190 @@ final class VantageWalkTests: XCTestCase {
         add(a)
     }
 
-    private func launchOpen() -> XCUIApplication {
+    private func launchOpen(mode: String, orientation: UIDeviceOrientation = .portrait) -> XCUIApplication {
         let app = XCUIApplication()
+        app.terminate()
+        app.launchArguments = ["-darkroom.mode", mode]
         app.launchEnvironment["DARKROOM_OPEN"] = Self.rawPath
+        XCUIDevice.shared.orientation = orientation
         app.launch()
+        XCTAssertTrue(find(app, "export").waitForExistence(timeout: 90), "darkroom did not open")
+        sleep(3)
         return app
     }
 
     /// Finds an element by identifier across the element types a rig control can be.
     private func find(_ app: XCUIApplication, _ id: String) -> XCUIElement {
-        let buttons = app.buttons[id]
-        if buttons.exists { return buttons }
-        let others = app.otherElements[id]
-        if others.exists { return others }
+        let b = app.buttons[id]
+        if b.exists { return b }
+        let o = app.otherElements[id]
+        if o.exists { return o }
         return app.descendants(matching: .any)[id].firstMatch
     }
 
+    /// The control must exist; returns it for the next step.
     @discardableResult
-    private func tap(_ app: XCUIApplication, _ id: String, _ step: String) -> Bool {
+    private func must(_ app: XCUIApplication, _ id: String, _ what: String) -> XCUIElement {
         let el = find(app, id)
-        guard el.waitForExistence(timeout: 5) else {
-            XCTContext.runActivity(named: "MISSING \(step): \(id)") { _ in }
-            add(XCTAttachment(string: "MISSING \(step): identifier \(id) not found"))
-            return false
+        XCTAssertTrue(el.waitForExistence(timeout: 8), "missing control: \(what) (\(id))")
+        return el
+    }
+
+    /// A tap that must land: the control exists and can be hit on the screen.
+    private func tap(_ app: XCUIApplication, _ id: String, _ what: String) {
+        let el = must(app, id, what)
+        guard el.exists else { return }
+        XCTAssertTrue(el.isHittable, "\(what) (\(id)) exists but cannot be hit: it is off the screen or covered")
+        if el.isHittable { el.tap(); sleep(2) }
+    }
+
+    /// The phone's tray scrolls sideways, so a tile past the edge is reached by swiping the tray, as a person would.
+    private func reveal(_ app: XCUIApplication, tile id: String) {
+        for _ in 0..<4 {
+            if find(app, id).exists, find(app, id).isHittable { return }
+            app.scrollViews.firstMatch.swipeLeft()
         }
-        el.tap()
-        sleep(2)
-        return true
     }
 
-    private func check(_ app: XCUIApplication, _ id: String, _ step: String) -> Bool {
-        let el = find(app, id)
-        let ok = el.waitForExistence(timeout: 5)
-        add(XCTAttachment(string: "\(step): \(id) exists=\(ok) hittable=\(ok ? el.isHittable : false)"))
-        return ok
+    private func picture(_ app: XCUIApplication) -> Data {
+        find(app, "photo").screenshot().pngRepresentation
     }
 
-    func testA_IPadWelcomeAndOpen() {
+    // MARK: iPad
+
+    func testIPad_WelcomeNamesDevice() throws {
+        try XCTSkipUnless(isPad)
         let app = XCUIApplication()
+        app.terminate()
         app.launch()
-        shot("welcome-1")
-        let title = app.staticTexts["Welcome to Vantage"]
-        add(XCTAttachment(string: "welcome title exists=\(title.waitForExistence(timeout: 20))"))
-        tap(app, "welcome-continue", "welcome continue")
-        shot("welcome-2-mode")
-        tap(app, "welcome-mode-continue", "mode continue")
-        shot("welcome-3-folder")
-        app.terminate()
+        XCTAssertTrue(app.staticTexts["Welcome to Vantage"].waitForExistence(timeout: 20), "welcome did not appear")
+        XCTAssertTrue(app.staticTexts.matching(NSPredicate(format: "label CONTAINS %@", "this iPad")).firstMatch.exists, "welcome does not say this iPad")
+        XCTAssertFalse(app.staticTexts.matching(NSPredicate(format: "label CONTAINS %@", "this Mac")).firstMatch.exists, "welcome still says this Mac")
+        shot("ipad-welcome")
     }
 
-    func testB_OpenRawEditScreen() {
-        let app = launchOpen()
-        XCTAssertTrue(find(app, "export").waitForExistence(timeout: 90), "darkroom did not open")
-        sleep(2)
-        shot("b-open-raw")
-        _ = check(app, "photo", "photo area")
-        _ = check(app, "auto-edit", "auto edit")
-        _ = check(app, "undo", "undo")
-        _ = check(app, "redo", "redo")
-        _ = check(app, "compare", "compare")
-        _ = check(app, "hide-ui", "hide ui")
-        _ = check(app, "crop-tool", "crop tool")
-        _ = check(app, "export", "export")
-        _ = check(app, "library", "library")
-        _ = check(app, "mode-pro", "mode pro")
-        _ = check(app, "mode-simple", "mode simple")
-        app.terminate()
-    }
-
-    func testC_SimpleModeLooksUndoRedoCompareHide() {
-        let app = launchOpen()
-        XCTAssertTrue(find(app, "export").waitForExistence(timeout: 90), "darkroom did not open")
-        tap(app, "auto-edit", "auto edit")
-        shot("c-after-auto-edit")
-        tap(app, "undo", "undo")
-        shot("c-after-undo")
-        tap(app, "redo", "redo")
-        shot("c-after-redo")
-        tap(app, "look-\("natural")", "look natural")
-        shot("c-after-look")
-        let compare = find(app, "compare")
-        if compare.waitForExistence(timeout: 5) {
-            compare.press(forDuration: 1.5)
-            shot("c-compare-held")
+    func testIPad_ProControlsAndEdits() throws {
+        try XCTSkipUnless(isPad)
+        let app = launchOpen(mode: "Pro", orientation: .landscapeLeft)
+        for (id, what) in [("back", "back"), ("photo", "photo"), ("undo", "undo"), ("redo", "redo"), ("auto-edit", "auto edit"),
+                           ("hide-ui", "hide UI"), ("export", "export")] {
+            must(app, id, what)
         }
-        tap(app, "hide-ui", "hide ui")
-        shot("c-hidden-ui")
-        tap(app, "show-ui", "show ui")
-        shot("c-shown-ui")
-        app.terminate()
-    }
-
-    func testD_ProModeLibraryModuleSliderUndo() {
-        let app = launchOpen()
-        XCTAssertTrue(find(app, "export").waitForExistence(timeout: 90), "darkroom did not open")
-        tap(app, "mode-pro", "mode pro")
-        shot("d-pro-mode")
-        tap(app, "pro-library", "pro library")
-        shot("d-pro-library")
-        tap(app, "module-list", "module list")
-        shot("d-module-list")
-        tap(app, "module-exposure", "exposure module")
-        shot("d-exposure-panel")
-        tap(app, "enable-exposure", "enable exposure")
-        shot("d-exposure-enabled")
+        let before = picture(app)
+        tap(app, "auto-edit", "auto edit")
+        let after = picture(app)
+        XCTAssertNotEqual(before, after, "auto edit did not change the picture")
         tap(app, "undo", "undo")
-        shot("d-after-undo")
-        app.terminate()
+        // the photo's screenshot includes the floating UI, which also changes with undo, so compare the controls instead
+        XCTAssertTrue(find(app, "redo").isEnabled, "redo is not available after undo")
+        shot("ipad-pro-after-undo")
     }
 
-    func testE_CropThenCancel() {
-        let app = launchOpen()
-        XCTAssertTrue(find(app, "export").waitForExistence(timeout: 90), "darkroom did not open")
-        tap(app, "crop-tool", "crop tool")
-        shot("e-crop-open")
-        _ = check(app, "crop-box", "crop box")
-        _ = check(app, "crop-reset", "crop reset")
-        tap(app, "back", "cancel crop via back")
-        shot("e-crop-cancelled")
-        app.terminate()
+    func testIPad_PortraitTabsOpenAndClose() throws {
+        try XCTSkipUnless(isPad)
+        let app = launchOpen(mode: "Pro")
+        tap(app, "portrait-library-tab", "library tab")
+        XCTAssertFalse(find(app, "portrait-library-tab").exists, "the library tab is still showing after it was tapped")
+        shot("ipad-library-open")
+        tap(app, "portrait-panel-tab", "panel tab")
+        XCTAssertFalse(find(app, "portrait-panel-tab").exists, "the panel tab is still showing after it was tapped")
+        shot("ipad-panel-open")
     }
 
-    func testF_ExportCompletes() {
-        let app = launchOpen()
-        XCTAssertTrue(find(app, "export").waitForExistence(timeout: 90), "darkroom did not open")
-        tap(app, "export", "export")
-        sleep(10)
-        shot("f-export")
-        app.terminate()
-    }
-
-    func testG_LibraryControls() {
-        let app = launchOpen()
-        XCTAssertTrue(find(app, "export").waitForExistence(timeout: 90), "darkroom did not open")
-        tap(app, "library", "library")
-        shot("g-library")
-        tap(app, "stacks-toggle", "stacks toggle")
-        shot("g-stacks")
-        _ = check(app, "sort-sharp", "sort control")
-        tap(app, "send-gallery", "send to gallery")
-        shot("g-send-gallery")
-        app.terminate()
-    }
-
-    func testH_RotateIPad() {
-        let app = launchOpen()
-        XCTAssertTrue(find(app, "export").waitForExistence(timeout: 90), "darkroom did not open")
-        XCUIDevice.shared.orientation = .landscapeLeft
+    func testIPad_PinchMovesThePictureButNotTheTools() throws {
+        try XCTSkipUnless(isPad)
+        let app = launchOpen(mode: "Simple")
+        let exportBefore = find(app, "export").frame
+        let before = picture(app)
+        find(app, "photo").pinch(withScale: 2.5, velocity: 3)
         sleep(2)
-        shot("h-landscape")
+        XCTAssertNotEqual(before, picture(app), "pinching in did not change the picture")
+        XCTAssertEqual(find(app, "export").frame, exportBefore, "the Export button moved when the photo was pinched")
+        shot("ipad-pinched")
+    }
+
+    func testIPad_ExportAndRotate() throws {
+        try XCTSkipUnless(isPad)
+        let app = launchOpen(mode: "Simple", orientation: .landscapeLeft)
+        tap(app, "export", "export")
+        sleep(8)
+        XCTAssertEqual(app.state, .runningForeground, "the app is not running after export")
         XCUIDevice.shared.orientation = .portrait
         sleep(2)
-        shot("h-portrait")
-        app.terminate()
+        must(app, "export", "export after rotating")
+        shot("ipad-rotated")
+    }
+
+    // MARK: iPhone
+
+    func testPhone_ControlsAndCanvas() throws {
+        try XCTSkipIf(isPad)
+        let app = launchOpen(mode: "Simple")
+        for (id, what) in [("back", "back"), ("photo", "photo"), ("export", "export"), ("hide-ui", "hide UI"), ("undo", "undo"),
+                           ("redo", "redo"), ("auto-edit", "auto edit"), ("zoom-in", "zoom in"), ("zoom-out", "zoom out"),
+                           ("zoom-fit", "fit"), ("phone-tool-light", "light tile"), ("phone-tool-crop", "crop tile")] {
+            if id == "phone-tool-crop" { reveal(app, tile: id) }
+            let el = must(app, id, what)
+            if el.exists { XCTAssertTrue(el.isHittable, "\(what) (\(id)) cannot be hit on the phone") }
+        }
+        let before = picture(app)
+        tap(app, "zoom-in", "zoom in")
+        XCTAssertNotEqual(before, picture(app), "zoom in did not change the picture")
+        tap(app, "zoom-fit", "fit")
+        XCTAssertEqual(before, picture(app), "fit did not bring the photo back")
+        shot("phone-base")
+    }
+
+    func testPhone_LightSliderEditsThePicture() throws {
+        try XCTSkipIf(isPad)
+        let app = launchOpen(mode: "Simple")
+        let before = picture(app)
+        tap(app, "phone-tool-light", "light tile")
+        let slider = must(app, "phone-slider", "light slider")
+        if slider.exists { slider.adjust(toNormalizedSliderPosition: 0.9); sleep(3) }
+        XCTAssertNotEqual(before, picture(app), "moving the Light slider did not change the picture")
+        shot("phone-light-edited")
+        tap(app, "phone-reset", "reset")
+        tap(app, "phone-done", "done")
+        XCTAssertFalse(find(app, "phone-slider").exists, "the control did not close after Done")
+    }
+
+    func testPhone_LooksAndCropOpen() throws {
+        try XCTSkipIf(isPad)
+        let app = launchOpen(mode: "Simple")
+        tap(app, "phone-tool-looks", "looks tile")
+        let look = app.descendants(matching: .any).matching(NSPredicate(format: "identifier BEGINSWITH 'look-'")).firstMatch
+        XCTAssertTrue(look.waitForExistence(timeout: 5), "no look buttons in the Looks control")
+        shot("phone-looks")
+        reveal(app, tile: "phone-tool-crop")
+        tap(app, "phone-tool-crop", "crop tile")
+        for (id, what) in [("phone-straighten", "straighten"), ("phone-rotate", "rotate")] {
+            must(app, id, what)
+        }
+        let aspects = app.descendants(matching: .any).matching(NSPredicate(format: "identifier BEGINSWITH 'phone-aspect-'"))
+        XCTAssertGreaterThanOrEqual(aspects.count, 4, "the aspect buttons are missing from the Crop control")
+        shot("phone-crop")
+    }
+
+    func testPhone_HideUIKeepsTheEssentials() throws {
+        try XCTSkipIf(isPad)
+        let app = launchOpen(mode: "Simple")
+        tap(app, "hide-ui", "hide UI")
+        XCTAssertTrue(find(app, "export").isHittable, "Export is not reachable with the UI hidden")
+        XCTAssertFalse(find(app, "phone-tool-light").isHittable, "the tray is still reachable with the UI hidden")
+        shot("phone-hidden")
+        tap(app, "hide-ui", "show UI")
+        XCTAssertTrue(find(app, "phone-tool-light").isHittable, "the tray did not come back")
+    }
+
+    func testPhone_LandscapeNothingOffScreen() throws {
+        try XCTSkipIf(isPad)
+        let app = launchOpen(mode: "Simple", orientation: .landscapeLeft)
+        for (id, what) in [("back", "back"), ("export", "export"), ("zoom-in", "zoom in"), ("undo", "undo"), ("phone-tool-light", "light tile")] {
+            let el = must(app, id, what)
+            if el.exists { XCTAssertTrue(el.isHittable, "\(what) (\(id)) cannot be hit in landscape") }
+        }
+        shot("phone-landscape")
+        XCUIDevice.shared.orientation = .portrait
     }
 }
