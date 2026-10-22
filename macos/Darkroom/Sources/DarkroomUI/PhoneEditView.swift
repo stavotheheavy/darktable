@@ -59,7 +59,7 @@ struct PhoneEditView: View {
         GeometryReader { geo in
             let landscape = geo.size.width > geo.size.height
             ZStack {
-                PhotoView(model: model, portrait: false, phone: true)
+                PhotoView(model: model)
 
                 VStack(spacing: 0) {
                     topBar
@@ -136,9 +136,9 @@ struct PhoneEditView: View {
         let size: CGFloat = landscape ? 40 : 44
         return HStack(alignment: .top) {
             layout {
-                railButton("plus", label: "Zoom in", id: "zoom-in", size: size) { zoom(by: 1) }
-                railButton("minus", label: "Zoom out", id: "zoom-out", size: size) { zoom(by: -1) }
-                railButton("arrow.up.left.and.arrow.down.right", label: "Fit the photo", id: "zoom-fit", size: size) { model.zoom = .fit }
+                railButton("plus", label: "Zoom in", id: "zoom-in", size: size) { withAnimation(.snappy) { model.zoomCanvas(by: 1.5) } }
+                railButton("minus", label: "Zoom out", id: "zoom-out", size: size) { withAnimation(.snappy) { model.zoomCanvas(by: 1 / 1.5) } }
+                railButton("arrow.up.left.and.arrow.down.right", label: "Fit the photo", id: "zoom-fit", size: size) { withAnimation(.snappy) { model.resetCanvas() } }
             }
             .padding(6)
             .glassEffect(.regular, in: .capsule)
@@ -170,13 +170,6 @@ struct PhoneEditView: View {
         .buttonStyle(.plain)
         .accessibilityLabel(label)
         .rig(id)
-    }
-
-    /// Fit, 100%, 200%: a step up or down the same ladder the Mac's zoom group uses.
-    private func zoom(by step: Int) {
-        let ladder = ZoomMode.allCases
-        guard let i = ladder.firstIndex(of: model.zoom) else { return }
-        model.zoom = ladder[min(max(i + step, 0), ladder.count - 1)]
     }
 
     // MARK: tray

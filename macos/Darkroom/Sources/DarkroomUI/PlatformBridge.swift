@@ -61,6 +61,15 @@ public enum Platform {
         #endif
     }
 
+    /// A touch screen: the photo is a full-screen canvas you pinch, and the panels float over it.
+    public static var isTouch: Bool {
+        #if os(macOS)
+        false
+        #else
+        true
+        #endif
+    }
+
     /// An iPhone: the one device the phone layout is for. The iPad, even held upright, keeps the wider layout.
     public static var isPhone: Bool {
         #if os(macOS)

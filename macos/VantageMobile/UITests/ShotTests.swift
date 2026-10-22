@@ -26,6 +26,16 @@ final class ShotTests: XCTestCase {
         return app
     }
 
+    /// Pinches the photo in, then out, saving each state: the photo should scale in place about the fingers.
+    private func pinchShots(_ app: XCUIApplication, prefix: String) {
+        let photo = app.descendants(matching: .any)["photo"]
+        guard photo.waitForExistence(timeout: 10) else { XCTFail("photo element missing"); return }
+        photo.pinch(withScale: 2.5, velocity: 3); sleep(2)
+        save("\(prefix)-pinch-in")
+        photo.pinch(withScale: 0.4, velocity: -3); sleep(2)
+        save("\(prefix)-pinch-out")
+    }
+
     func testScreens() throws {
         try XCTSkipIf(device == "iphone", "the phone has its own layout; see testPhoneScreens")
         // portrait: the base screen, then each tab opened
@@ -40,6 +50,9 @@ final class ShotTests: XCTestCase {
             app.buttons["portrait-panel-tab"].tap(); sleep(2)
             save("portrait-panel-open")
         }
+        // pinch the photo on a fresh portrait launch
+        app = launch(library: false, orientation: .portrait)
+        pinchShots(app, prefix: "portrait")
         // landscape
         _ = launch(library: true, orientation: .landscapeLeft)
         save("landscape-pro")
@@ -56,6 +69,8 @@ final class ShotTests: XCTestCase {
         try XCTSkipIf(device == "ipad", "iPad has its own layout; see testScreens")
         var app = launch(library: false, orientation: .portrait, mode: "Simple")
         save("portrait")
+        pinchShots(app, prefix: "portrait")
+        app = launch(library: false, orientation: .portrait, mode: "Simple")
         for tool in ["light", "looks", "crop"] {
             let tile = app.buttons["phone-tool-\(tool)"]
             XCTAssertTrue(tile.waitForExistence(timeout: 10), "tray tool \(tool) missing")

@@ -189,9 +189,10 @@ extension View {
 struct PhotoView: View {
     @Bindable var model: DarkroomModel
     var portrait = false
-    /// An iPhone: the photo takes the area between the floating top bar and the tray, with no side panels.
-    var phone = false
     @State private var lastDrag: CGSize = .zero
+    /// A pinch in progress: its scale so far and where the fingers started. It is baked into the model when the fingers lift.
+    private struct Pinch { var scale: CGFloat = 1; var anchor: CGPoint = .zero }
+    @GestureState private var pinch = Pinch()
     /// The stroke being painted, in view points, until the finger lifts.
     @State private var live: [CGPoint] = []
 
@@ -205,11 +206,15 @@ struct PhotoView: View {
                 BackdropView(style: model.backdrop)
                 if let frame = model.frame {
                     let r = imageRect(frame: frame, in: size)
+                    let t = canvasTransform(pinch, in: r, size: size)
                     canvasPicture(frame)
                         .frame(width: r.width, height: r.height)
                         .overlay(Rectangle().strokeBorder(Color.white.opacity(0.07), lineWidth: 1))
                         .shadow(color: .black.opacity(0.5), radius: 26, y: 10)
                         .overlay { liveStroke(r) }
+                        // touch: the photo scales and moves in place; the panels float over it and never move it
+                        .scaleEffect(t.scale)
+                        .offset(t.offset)
                         .position(x: r.midX, y: r.midY)
                         .accessibilityLabel("Photo")
                         .rig("photo")
@@ -242,6 +247,14 @@ struct PhotoView: View {
             .gesture(
                 DragGesture(minimumDistance: 2)
                     .onChanged { v in
+                        if Platform.isTouch {
+                            // a drag moves the canvas once it is bigger than the screen; at fit it does nothing
+                            guard model.canvasScale > 1.001 else { return }
+                            let d = CGSize(width: v.translation.width - lastDrag.width, height: v.translation.height - lastDrag.height)
+                            lastDrag = v.translation
+                            model.canvasOffset = CGSize(width: model.canvasOffset.width + d.width, height: model.canvasOffset.height + d.height)
+                            return
+                        }
                         guard model.zoom != .fit, let image = model.imageSize else { return }
                         let d = CGSize(width: v.translation.width - lastDrag.width,
                                        height: v.translation.height - lastDrag.height)
@@ -253,12 +266,45 @@ struct PhotoView: View {
                     }
                     .onEnded { _ in lastDrag = .zero }
             )
+            .simultaneousGesture(magnify(in: size), including: Platform.isTouch ? .all : .none)
             .onAppear { model.viewport = size }
             .onChange(of: size) { _, new in
                 model.viewport = new
                 if model.zoom != .fit { model.requestRender() }
             }
         }
+    }
+
+    /// The canvas scale and offset to draw now: the model's, with a pinch in progress folded in. A pinch scales about the
+    /// point between the fingers, so that point stays under them: with the photo's centre c, the scale about an anchor a moves
+    /// the offset to k * offset + (1 - k) * (a - c).
+    private func canvasTransform(_ p: Pinch, in r: CGRect, size: CGSize) -> (scale: CGFloat, offset: CGSize) {
+        guard Platform.isTouch else { return (1, .zero) }
+        let range = DarkroomModel.canvasScaleRange
+        let s = CGFloat(model.canvasScale)
+        var o = model.canvasOffset
+        var out = s
+        if p.scale != 1 {
+            out = min(max(s * p.scale, CGFloat(range.lowerBound)), CGFloat(range.upperBound))
+            let k = out / s
+            o = CGSize(width: k * o.width + (1 - k) * (p.anchor.x - r.midX), height: k * o.height + (1 - k) * (p.anchor.y - r.midY))
+        }
+        // smaller than the screen it returns to the middle; bigger, it can be moved until 60 points of it remain
+        guard out > 1.001 else { return (out, .zero) }
+        let lx = max(0, (out * r.width + size.width) / 2 - 60), ly = max(0, (out * r.height + size.height) / 2 - 60)
+        return (out, CGSize(width: min(max(o.width, -lx), lx), height: min(max(o.height, -ly), ly)))
+    }
+
+    private func magnify(in size: CGSize) -> some Gesture {
+        MagnifyGesture()
+            .updating($pinch) { v, state, _ in state = Pinch(scale: v.magnification, anchor: v.startLocation) }
+            .onEnded { v in
+                guard let f = model.frame else { return }
+                let r = imageRect(frame: f, in: size)
+                let t = canvasTransform(Pinch(scale: v.magnification, anchor: v.startLocation), in: r, size: size)
+                model.canvasScale = Double(t.scale)
+                model.canvasOffset = t.offset
+            }
     }
 
     /// What is being drawn under the finger until it is committed: the brush stroke (white, soft), or the shape's outline.
@@ -323,16 +369,6 @@ struct PhotoView: View {
         }
     }
 
-    /// Between the top bar and the tool tray; the rails float over its edges.
-    static func phoneArea(in size: CGSize) -> CGRect {
-        let landscape = size.width > size.height
-        // portrait: below the top bar and the row of tools; landscape: between the two upright clusters
-        let top: CGFloat = landscape ? 76 : 148
-        let bottom: CGFloat = landscape ? 124 : 130
-        let inset: CGFloat = landscape ? 88 : 12
-        return CGRect(x: inset, y: top, width: max(100, size.width - inset * 2), height: max(100, size.height - top - bottom))
-    }
-
     func imageRect(frame: CGImage, in size: CGSize) -> CGRect {
         // a presented frame's CGImage is a thumbnail: the picture's own size lays it out
         let fw = model.frameSize?.width ?? CGFloat(frame.width), fh = model.frameSize?.height ?? CGFloat(frame.height)
@@ -347,7 +383,9 @@ struct PhotoView: View {
             // portrait: the panels open over the photo, so the photo keeps the full width
             let left = simple || portrait || !model.libraryShown ? DarkroomView.margin * 2 : ToolLibrary.width + DarkroomView.margin * 2
             let bottom: CGFloat = simple ? 140 : 72
-            let area = phone ? Self.phoneArea(in: size)
+            // touch: the photo fills the screen and the panels float over it; the Mac keeps the photo clear of its panels
+            let area = Platform.isTouch
+                ? CGRect(x: 6, y: 6, width: max(100, size.width - 12), height: max(100, size.height - 12))
                 : CGRect(x: left, y: 84, width: max(100, size.width - left - side), height: max(100, size.height - 84 - bottom))
             let s = min(area.width / fw, area.height / fh)
             let w = fw * s, h = fh * s

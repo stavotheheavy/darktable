@@ -237,7 +237,21 @@ public final class DarkroomModel {
     }
     public var leftTab: LeftTab = .modules
     public var scopeMode: ScopeMode = .histogram
-    public var zoom: ZoomMode = .fit { didSet { if zoom != oldValue { requestRender() } } }
+    public var zoom: ZoomMode = .fit { didSet { if zoom != oldValue { resetCanvas(); requestRender() } } }
+    /// Touch devices: the photo is a canvas that fills the screen and stays where it is. A pinch scales it in place about the
+    /// point between the fingers, a drag moves it when it is bigger than the screen, and the panels float over it without
+    /// moving it. The scale is 1 at fit; the offset is in points from where the photo sits at fit.
+    public var canvasScale: Double = 1
+    public var canvasOffset: CGSize = .zero
+    public static let canvasScaleRange: ClosedRange<Double> = 0.4...8
+    public func resetCanvas() { canvasScale = 1; canvasOffset = .zero }
+    /// One step of the + and - buttons; a pinch sets the scale directly.
+    public func zoomCanvas(by factor: Double) {
+        let s = min(max(canvasScale * factor, Self.canvasScaleRange.lowerBound), Self.canvasScaleRange.upperBound)
+        let k = s / canvasScale
+        canvasOffset = CGSize(width: canvasOffset.width * k, height: canvasOffset.height * k)
+        canvasScale = s
+    }
     public var showingOriginal = false { didSet { if showingOriginal != oldValue { requestRender() } } }
     public var showingSnapshot = false { didSet { if showingSnapshot != oldValue { requestRender() } } }
     public var viewport = CGSize(width: 1000, height: 700)
@@ -354,6 +368,7 @@ public final class DarkroomModel {
         scopes = nil
         center = CGPoint(x: 0.5, y: 0.5)
         zoom = .fit
+        resetCanvas()
         showingOriginal = false
         showingSnapshot = false
         snapshotEdits = nil
