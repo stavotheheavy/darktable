@@ -51,7 +51,19 @@ optional), and press Send.
 - If it stops half way (no network, storage full, the plan ended), the sheet says why. Press Send again: photos already up are
   not sent twice.
 - Galleries need a Databit Dev plan with galleries. If you own several sites, the sheet asks which one.
-- The client picks on the web; seeing their picks inside Vantage comes next.
+- The client picks on the web; their picks come back to the library (next section).
+
+## Client picks in the library (signed in)
+
+When a client sends their picks, Vantage shows them on your thumbnails: a check for picked, a star for a favourite, a cross for
+declined, with the client's note when you hold the mouse over it. The **Client picks** button in the library header filters to
+All photos, Client picked, Client favourites or Client declined, and **Refresh client picks** (or **⌥⌘R**) asks Databit Dev
+again. Vantage also asks when you open it, at most every five minutes.
+
+- Only photos sent from this Mac are matched, by the file name they were uploaded under.
+- Your own stars and rejects are never changed by a client's picks. They sit side by side.
+- The last answer is kept, so the badges are there offline.
+- Picks need the gallery to have been sent from Vantage; a gallery made on the web has nothing to match.
 
 ## Auto edit (both modes)
 
@@ -218,3 +230,4 @@ The app's shortcuts live in one table (`Sources/DarkroomUI/Shortcuts.swift`). Th
 | A | Auto edit: white balance, exposure, highlights, shadows (`auto-edit`) |
 | ⌥⌘U | Sign in to Databit Dev (`sign-in`) |
 | ⌥⌘G | Send photos to a client gallery (`send-gallery`) |
+| ⌥⌘R | Refresh what clients picked in the galleries you sent (`refresh-picks`) |

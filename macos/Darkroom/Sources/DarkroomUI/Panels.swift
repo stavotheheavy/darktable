@@ -869,7 +869,9 @@ public struct DarkroomRoot: View {
     public var body: some View {
         ZStack {
             switch screen {
-            case .library: LibraryView(library: library, open: openPhoto, send: { sendingGallery = true })
+            case .library: LibraryView(library: library, open: openPhoto, send: { sendingGallery = true },
+                                       refreshPicks: model.cloudSignedIn ? { Task { await model.refreshClientPicks(force: true) } } : nil,
+                                       picksMessage: model.clientPicksBusy ? "Refreshing\u{2026}" : model.clientPicksMessage)
             case .darkroom: DarkroomView(model: model)
             }
             // the app is Vantage; Darkroom is the editing view, as Develop is in other editors
@@ -892,6 +894,9 @@ public struct DarkroomRoot: View {
             Rig.startIfRequested(model: model, library: library, screen: { screen }, go: { screen = $0; library.paused = ($0 == .darkroom) },
                                  open: openPhoto)
             if screen == .library, welcomed, let f = library.restoredFolder { library.load(folder: f) }
+            library.clientPicks = model.clientPicks
+            await model.refreshCloud()
+            await model.refreshClientPicks()
             await AutoTest.runIfRequested(model: model)
         }
         .onOpenURL { url in
@@ -901,6 +906,9 @@ public struct DarkroomRoot: View {
             SendToGallerySheet(cloud: model, library: library) { sendingGallery = false }
         }
         .onChange(of: model.galleryRequest) { _, _ in sendingGallery = true }
+        .onChange(of: model.clientPicks) { _, new in library.clientPicks = new }
+        .onChange(of: model.picksRequest) { _, _ in Task { await model.refreshClientPicks(force: true) } }
+        .onChange(of: model.cloudUser) { _, user in if user != nil { Task { await model.refreshClientPicks() } } }
     }
 
     private func openPhoto(_ path: String) {

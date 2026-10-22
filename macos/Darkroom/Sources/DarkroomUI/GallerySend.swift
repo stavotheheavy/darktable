@@ -91,6 +91,11 @@ public struct GalleryClient: Sendable {
         } catch let e as GalleryError { throw e } catch { throw GalleryError.offline }
     }
 
+    /// The owner's read of one gallery (GET api/portal/galleries/:id): its photos with the client's choices.
+    func callForPicks(token: String, site: String, gallery: String) async throws -> [String: Any] {
+        try await call("api/portal/galleries/\(gallery)", method: "GET", token: token, site: site)
+    }
+
     public func complete(token: String, site: String, gallery: String, photoIDs: [String]) async throws {
         _ = try await call("api/portal/galleries/\(gallery)/uploads/complete", method: "POST", token: token, site: site, body: ["photoIds": photoIDs])
     }
@@ -170,9 +175,11 @@ public final class GallerySendModel {
     private var client: GalleryClient
     private let token: () -> String?
     private let exporter: (String, URL) async -> Bool
+    private let store: ClientPickStore
+    private var sentNames: [String: String] = [:]
 
-    public init(client: GalleryClient, token: @escaping () -> String?, exporter: @escaping (String, URL) async -> Bool) {
-        self.client = client; self.token = token; self.exporter = exporter
+    public init(client: GalleryClient, token: @escaping () -> String?, exporter: @escaping (String, URL) async -> Bool, store: ClientPickStore = .standard) {
+        self.client = client; self.token = token; self.exporter = exporter; self.store = store
     }
 
     public var usableSites: [GallerySite] { sites.filter(\.usable) }
@@ -233,16 +240,18 @@ public final class GallerySendModel {
                     phase = .working("Uploading \(done + 1) of \(files.count)", 0.45 + Double(done) / Double(max(files.count, 1)) * 0.5)
                     guard let data = try? Data(contentsOf: f.url) else { throw GalleryError.exportFailed(f.name) }
                     try await client.put(link, data: data)
-                    ids.append(link.photoID); paths.append(f.path); done += 1
+                    ids.append(link.photoID); paths.append(f.path); sentNames[f.name] = f.path; done += 1
                 }
                 if !ids.isEmpty { try await client.complete(token: t, site: site, gallery: gallery, photoIDs: ids) }
                 // only now are they safe: a failure before this point sends them again (the server reuses the pending rows)
                 for path in paths { uploaded.insert(path) }
-                for f in batch where r.skipped.contains(f.name) { uploaded.insert(f.path); done += 1 }
+                for f in batch where r.skipped.contains(f.name) { uploaded.insert(f.path); sentNames[f.name] = f.path; done += 1 }
             }
             // 4 the client link
             phase = .working("Making the client link", 0.97)
-            phase = .done(try await client.share(token: t, site: site, gallery: gallery))
+            let share = try await client.share(token: t, site: site, gallery: gallery)
+            store.record(gallery: gallery, site: site, title: title.trimmingCharacters(in: .whitespaces), files: sentNames)
+            phase = .done(share)
         } catch {
             phase = .failed((error as? GalleryError)?.errorDescription ?? error.localizedDescription)
         }

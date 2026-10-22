@@ -83,8 +83,13 @@ public final class LibraryModel {
         self.engine = engine
     }
 
+    /// What clients picked in galleries sent from here, by path (ClientPicks.swift), and the filter on it.
+    public var clientPicks: [String: ClientPick] = [:]
+    public var pickFilter: PickFilter = .all
+
     public var shown: [LibraryItem] {
-        sharpestFirst ? items.sorted { ($0.sharpness ?? -1) > ($1.sharpness ?? -1) } : items
+        let base = pickFilter == .all ? items : items.filter { pickFilter.allows(clientPicks[$0.path]) }
+        return sharpestFirst ? base.sorted { ($0.sharpness ?? -1) > ($1.sharpness ?? -1) } : base
     }
 
     public var restoredFolder: URL? {
@@ -254,14 +259,20 @@ public struct LibraryView: View {
     @Bindable var library: LibraryModel
     let open: (String) -> Void
     var send: (() -> Void)?
+    /// Asks for the client picks again (the account menu's twin); nil while signed out.
+    var refreshPicks: (() -> Void)?
+    var picksMessage: String?
     @State private var choosing = false
     @State private var comparing: String? { didSet { Rig.comparing = comparing != nil } }
     @FocusState private var focused: Bool
 
-    public init(library: LibraryModel, open: @escaping (String) -> Void, send: (() -> Void)? = nil) {
+    public init(library: LibraryModel, open: @escaping (String) -> Void, send: (() -> Void)? = nil,
+                refreshPicks: (() -> Void)? = nil, picksMessage: String? = nil) {
         self.library = library
         self.open = open
         self.send = send
+        self.refreshPicks = refreshPicks
+        self.picksMessage = picksMessage
     }
 
     public var body: some View {
@@ -360,6 +371,23 @@ public struct LibraryView: View {
                         .help("Send photos to a client gallery on Databit Dev (\u{2325}\u{2318}G)")
                         .rig("send-gallery")
                 }
+                if refreshPicks != nil || !library.clientPicks.isEmpty {
+                    Menu {
+                        Picker("Show", selection: $library.pickFilter) {
+                            ForEach(PickFilter.allCases, id: \.self) { Text($0.rawValue).tag($0) }
+                        }
+                        if let refreshPicks {
+                            Divider()
+                            Button("Refresh client picks") { refreshPicks() }
+                        }
+                        if let picksMessage { Divider(); Text(picksMessage) }
+                    } label: {
+                        Label(library.pickFilter == .all ? "Client picks" : library.pickFilter.rawValue, systemImage: "person.2.fill")
+                    }
+                    .menuStyle(.button).buttonStyle(FlatCapsuleStyle(on: library.pickFilter != .all))
+                    .help("Filter by what clients picked, or refresh them (\u{2325}\u{2318}R)")
+                    .rig("client-picks-menu")
+                }
                 Button { library.groupStacks.toggle() } label: { Label("Stacks", systemImage: "square.stack") }
                     .buttonStyle(FlatCapsuleStyle(on: library.groupStacks))
                     .rig("stacks-toggle")
@@ -452,6 +480,17 @@ private struct Cell: View {
             .overlay(alignment: .topLeading) {
                 if let s = item.sharpness { badge { Circle().fill(dot(s)).frame(width: 7, height: 7); Text("\(Int(s))").font(.caption.monospacedDigit()) } }
             }
+            .overlay(alignment: .top) {
+                if let pick = library.clientPicks[item.path] {
+                    badge {
+                        Image(systemName: pick.choice == .super ? "star.fill" : pick.choice == .yes ? "checkmark" : "xmark").font(.caption)
+                        Text(pick.choice.title).font(.caption)
+                    }
+                    .foregroundStyle(pick.choice == .no ? Color.secondary : Theme.accent)
+                    .help(pick.note.map { "\(pick.gallery): \($0)" } ?? pick.gallery)
+                    .rig("client-pick-\(item.name)")
+                }
+            }
             .overlay(alignment: .topTrailing) {
                 if library.groupStacks, item.stack != nil { badge { Text("\(item.stackPosition) of \(item.stackSize)").font(.caption) } }
             }
@@ -471,7 +510,7 @@ private struct Cell: View {
         .onTapGesture(count: 2) { open(item.path) }
         .simultaneousGesture(TapGesture().onEnded { library.selected = item.path })
         .accessibilityElement(children: .combine)
-        .accessibilityLabel(item.name)
+        .accessibilityLabel(library.clientPicks[item.path].map { "\(item.name), client \($0.choice.title.lowercased())" } ?? item.name)
         .rig("cell-\(item.name)")
     }
 
