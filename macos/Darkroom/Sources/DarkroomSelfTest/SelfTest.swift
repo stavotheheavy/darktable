@@ -2549,6 +2549,87 @@ struct SelfTest {
             check(reread?.history.last?.edits.keys.contains("zones#0") == true && reread?.history.last?.edits.keys.contains("shadhi#0") == false, "the saved sidecar carries the survivors' ids")
         }
 
+        if clean {
+            print("library")
+            // its own copy and model: the picks this block makes reach no other check
+            let copy4 = work.appending(path: "lib-" + URL(fileURLWithPath: path).lastPathComponent)
+            try FileManager.default.copyItem(atPath: path, toPath: copy4.path)
+            let lm = DarkroomModel(engine: engine)
+            await lm.open(path: copy4.path)
+            lm.mode = .pro
+            await lm.settle()
+            // LB1 the categories: every one has rows, and the module categories list every menu entry exactly once
+            let cats = lm.libraryCategories
+            check(cats.contains(.masks) && cats.contains(.presets) && cats.contains(.looks), "LB1 the library has looks, presets and masks (\(cats.map(\.title).joined(separator: ", ")))")
+            check(cats.allSatisfy { !lm.libraryEntries($0).isEmpty }, "LB1 every category has rows")
+            let moduleRows = cats.filter { $0.menuGroup != nil }.flatMap { lm.libraryEntries($0) }.map(\.id)
+            let menuIDs = lm.proMenu.flatMap(\.entries).map { "module-\($0.id)" }
+            check(moduleRows.count == menuIDs.count && Set(moduleRows) == Set(menuIDs), "LB1 the module categories hold the \(menuIDs.count) menu entries once each (\(moduleRows.count) rows)")
+            check(lm.libraryEntries(.presets).count == CIEngineProbe.aliases.count, "LB1 the presets are the \(CIEngineProbe.aliases.count) folded modules (\(lm.libraryEntries(.presets).count))")
+            check(lm.libraryEntries(.masks).count == MaskLayerKind.allCases.count, "LB1 the masks are the \(MaskLayerKind.allCases.count) kinds")
+            // LB2 search runs over every category at once
+            let curve = lm.librarySearch("curve")
+            check(curve.contains { g in g.entries.contains { $0.id == "module-tonecurve#0" } }, "LB2 a search for curve finds the tone curve (\(curve.flatMap(\.entries).map(\.name)))")
+            check(lm.librarySearch("velvia").first?.category == .presets, "LB2 a search for velvia finds the preset")
+            check(lm.librarySearch("face").contains { $0.category == .masks }, "LB2 a search for face finds the mask")
+            check(lm.librarySearch("qzxv").isEmpty && lm.librarySearch("").isEmpty, "LB2 a nonsense or empty search finds nothing")
+            // LB3 a module row's switch is the Modules menu's: into the panel and out
+            if case .module(let sharpen)? = lm.libraryEntries(.common).first(where: { $0.id == "module-sharpen#0" })?.kind {
+                lm.toggleInPanel(sharpen)
+                check(lm.inProPanel(sharpen), "LB3 the sharpen row's switch puts it in the panel")
+                lm.toggleInPanel(sharpen)
+                check(!lm.inProPanel(sharpen), "LB3 and takes it out")
+            } else { check(false, "LB3 sharpen is a Common row") }
+            // LB4 a preset: the halation preset sets bloom up as film halation, in the panel, on, unfolded, one step
+            if let hal = lm.libraryPresets.first(where: { $0.id == "halation" }), let bloom = module(lm, "bloom") {
+                let steps = lm.history.count
+                await lm.applyLibraryPreset(hal)
+                await lm.settle()
+                let glow = field(lm, bloom, "glow").map { lm.value(bloom, $0) }
+                let hue = field(lm, bloom, "hue").map { lm.value(bloom, $0).double }
+                check(lm.inProPanel(bloom) && lm.isEnabled(bloom), "LB4 the halation preset puts bloom in the panel and on")
+                check(glow == .option("film") && hue == 25, "LB4 bloom is set to film halation with the old hue (\(String(describing: glow)), \(String(describing: hue)))")
+                check(lm.history.count == steps + 1 && lm.proOpen.contains(bloom.id) && lm.libraryPicked == "preset-halation",
+                      "LB4 one history step, the section unfolded, the pick shown at the top (\(lm.history.count - steps) steps)")
+                // LB5 the section shows the chosen method's controls only
+                if let schema = lm.schema(for: bloom) {
+                    let shown = lm.shownFields(bloom, schema.fields).map(\.name)
+                    check(shown.contains("hue") && shown.contains("size"), "LB5 film halation shows hue (\(shown))")
+                    if let g = field(lm, bloom, "glow") {
+                        lm.setParam(bloom, g, to: .option("soft"))
+                        let soft = lm.shownFields(bloom, schema.fields).map(\.name)
+                        check(!soft.contains("hue") && soft.contains("size"), "LB5 soft bloom hides hue, keeps size (\(soft))")
+                    }
+                }
+                if let sb = module(lm, "surfaceblur") {
+                    await lm.loadSchema(for: sb)
+                    if let schema = lm.schema(for: sb), let m = field(lm, sb, "method") {
+                        let guided = lm.shownFields(sb, schema.fields).map(\.name)
+                        check(guided == ["method", "amount", "radius", "threshold"], "LB5 surface blur (guided) shows four controls (\(guided))")
+                        lm.setParam(sb, m, to: .option("skin"))
+                        let skin = lm.shownFields(sb, schema.fields).map(\.name)
+                        check(skin == ["method", "amount", "radius", "hue", "width"], "LB5 skin shows its own (\(skin))")
+                        lm.undo()
+                    }
+                }
+                // LB6 a mask from the library goes on the open section: bloom is unfolded, so the brush starts on it
+                check(lm.libraryMaskTarget?.id == bloom.id, "LB6 the mask target is the open section, bloom (\(lm.libraryMaskTarget?.id ?? "none"))")
+                await lm.applyLibraryMask(.brush)
+                check(lm.paintModuleID == bloom.id && lm.maskLayer(for: bloom)?.kind == .brush && lm.blendOpen,
+                      "LB6 the brush from the library paints on bloom and opens its Blend (\(lm.paintModuleID ?? "none"))")
+                lm.paintModuleID = nil
+            } else { check(false, "LB4 the halation preset and bloom exist") }
+            // LB7 shown or hidden, by its shortcut and the find shortcut
+            let shown0 = lm.libraryShown
+            Shortcuts.all.first { $0.id == "library" }?.action(lm)
+            check(lm.libraryShown == !shown0, "LB7 the library shortcut flips it (\(shown0) -> \(lm.libraryShown))")
+            lm.setLibraryShown(false)
+            let serial = lm.libraryFindSerial
+            Shortcuts.all.first { $0.id == "library-find" }?.action(lm)
+            check(lm.libraryShown && lm.libraryFindSerial == serial + 1, "LB7 the find shortcut opens the library and asks for its search field")
+            lm.setLibraryShown(shown0)
+        }
+
         if !notApplicable.isEmpty { print("\n\(notApplicable.count) check(s) n/a on this engine: \(notApplicable.joined(separator: "; "))") }
         print(failures.isEmpty ? "\nALL CHECKS PASSED" : "\n\(failures.count) CHECK(S) FAILED")
         if !failures.isEmpty { exit(1) }

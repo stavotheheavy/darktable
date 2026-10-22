@@ -4,6 +4,26 @@ What each part of the app does, in plain words, and every keyboard shortcut. Thi
 that adds a control or a shortcut updates it in the same change, and `dtb-selftest --manual` fails when a shortcut in the
 app is missing here.
 
+## The library (left panel, Pro)
+
+The library is where you find things, like the Sounds library in Logic. A search box at the top; categories down the left;
+the category's rows on the right. The top shows what you picked last.
+
+- **Common, Tone, Color, Detail, Geometry, Effects, Other:** the modules by kind. A row's switch puts the module in the right
+  panel or takes it out, the same as the Modules menu.
+- **Looks:** the six looks. A row applies the look.
+- **Presets:** the modules that were folded into another (the table below), by their old names. A row puts the module that
+  replaced it in the panel, chooses that method and sets the old module's starting values; the section unfolds so you can raise
+  its strength.
+- **Masks:** brush, and the finders (subject, person, face, eyes, lips). A row puts the mask on the *open* section of the right
+  panel: the unfolded one nearest the top. The note under the rows says which. Switch a module on and unfold it first.
+- **Search:** type, and every category is searched at once; the hits appear under their category names. Clear it to get the
+  columns back.
+- **Show or hide:** the Library button in the header, or ⌘⇧L. ⌘F opens it and puts the cursor in its search.
+
+A merged module (one with a *method*, *mode*, *glow* or *curve* switch) shows the controls of the chosen method only. Pick
+another method and its own controls appear.
+
 ## The right panel (Pro)
 
 The right panel holds the modules you are using. Each one is a section with a power button, a name and a fold arrow.
@@ -82,3 +102,5 @@ The app's shortcuts live in one table (`Sources/DarkroomUI/Shortcuts.swift`). Th
 | ⌥⌘A | Switch every section in the panel on (`all-on`) |
 | ⌥⌘0 | Switch every section in the panel off; settings stay (`all-off`) |
 | ⌥⌘O | Flip the panel between Newest and Pipeline order (`panel-order`) |
+| ⌘⇧L | Show or hide the library (`library`) |
+| ⌘F | Search the library; opens it if hidden (`library-find`) |

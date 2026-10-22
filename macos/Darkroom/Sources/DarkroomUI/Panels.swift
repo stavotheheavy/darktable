@@ -387,15 +387,17 @@ struct ParamList: View {
 
     var body: some View {
         if let schema = model.schema(for: module) {
-            let primary = schema.fields.filter { !isTechnical($0) }
-            let fields = showAll ? schema.fields : Array(primary.prefix(12))
+            // a merged module shows the controls of its chosen method only (DarkroomModel.methodFields)
+            let usable = model.shownFields(module, schema.fields)
+            let primary = usable.filter { !isTechnical($0) }
+            let fields = showAll ? usable : Array(primary.prefix(12))
             VStack(alignment: .leading, spacing: 2) {
                 ForEach(fields) { f in
                     ParamRow(model: model, module: module, field: f)
                 }
-                if schema.fields.count > fields.count {
+                if usable.count > fields.count {
                     Button(showAll ? "Show fewer parameters"
-                                   : "Show \(schema.fields.count - fields.count) more parameters") {
+                                   : "Show \(usable.count - fields.count) more parameters") {
                         showAll.toggle()
                     }
                     .buttonStyle(.glass)

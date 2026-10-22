@@ -476,6 +476,12 @@ struct ProMenus: View {
 
     var body: some View {
         HStack(spacing: 2) {
+            Button { model.setLibraryShown(!model.libraryShown) } label: { menuLabel("Library", "books.vertical", chevron: false) }
+                .buttonStyle(.plain)
+                .background(model.libraryShown ? Color.white.opacity(0.14) : .clear, in: Capsule())
+                .accessibilityAddTraits(model.libraryShown ? .isSelected : [])
+                .help("Show or hide the library (\u{2318}\u{21E7}L)")
+                .rig("pro-library")
             menuButton(.modules, "Modules", "slider.horizontal.3").rig("pro-modules")
             menuButton(.presets, "Presets", "square.stack").rig("pro-presets")
             menuButton(.history, "History", "clock.arrow.circlepath").rig("pro-history")
@@ -495,12 +501,12 @@ struct ProMenus: View {
             .accessibilityAddTraits(open ? .isSelected : [])
     }
 
-    private func menuLabel(_ title: String, _ symbol: String) -> some View {
+    private func menuLabel(_ title: String, _ symbol: String, chevron: Bool = true) -> some View {
         HStack(spacing: 6) {
             Image(systemName: symbol)
             // words keep their size, so the header's wide layout is only chosen when they fit
             if !compact { Text(title).font(.callout.weight(.medium)).lineLimit(1).fixedSize() }
-            Image(systemName: "chevron.down").font(.caption2.weight(.semibold)).foregroundStyle(.secondary)
+            if chevron { Image(systemName: "chevron.down").font(.caption2.weight(.semibold)).foregroundStyle(.secondary) }
         }
         .padding(.horizontal, compact ? 6 : 10)
         .frame(height: 40)

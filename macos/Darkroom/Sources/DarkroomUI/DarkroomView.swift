@@ -25,6 +25,7 @@ public struct DarkroomView: View {
                 if model.mode == .pro {
                     // modules come from the header's Modules menu; the panel holds the ones in use
                     HStack(alignment: .top, spacing: 0) {
+                        if model.libraryShown { ToolLibrary(model: model) }
                         Spacer(minLength: 0)
                         ProPanel(model: model)
                             .frame(width: Self.panelWidth)
@@ -225,7 +226,7 @@ struct PhotoView: View {
             let side = DarkroomView.panelWidth + DarkroomView.margin * 2
             // Simple has one panel on the right and a row of looks along the bottom
             let simple = model.mode == .simple
-            let left = simple ? DarkroomView.margin * 2 : side
+            let left = simple || !model.libraryShown ? DarkroomView.margin * 2 : ToolLibrary.width + DarkroomView.margin * 2
             let bottom: CGFloat = simple ? 140 : 72
             let area = CGRect(x: left, y: 84, width: max(100, size.width - left - side),
                               height: max(100, size.height - 84 - bottom))

@@ -29,6 +29,10 @@ public enum Shortcuts {
                  shortcut: KeyboardShortcut("0", modifiers: [.option, .command])) { $0.setAllProEffects(false) },
         Shortcut(id: "panel-order", title: "Flip the panel between Newest and Pipeline order", keys: "\u{2325}\u{2318}O",
                  shortcut: KeyboardShortcut("o", modifiers: [.option, .command])) { $0.setProPanelOrder($0.proPanelOrder == .newest ? .pipeline : .newest) },
+        Shortcut(id: "library", title: "Show or hide the library", keys: "\u{2318}\u{21E7}L",
+                 shortcut: KeyboardShortcut("l", modifiers: [.command, .shift])) { $0.setLibraryShown(!$0.libraryShown) },
+        Shortcut(id: "library-find", title: "Search the library (opens it if hidden)", keys: "\u{2318}F",
+                 shortcut: KeyboardShortcut("f", modifiers: [.command])) { $0.setLibraryShown(true); $0.libraryFindSerial += 1 },
     ]
 
     /// Ids and keys, for the manual check: each must appear in docs/manual.md.

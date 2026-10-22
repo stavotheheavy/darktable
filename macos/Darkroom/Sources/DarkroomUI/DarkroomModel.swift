@@ -132,6 +132,18 @@ public final class DarkroomModel {
         proPanelOrder = o
         UserDefaults.standard.set(o.rawValue, forKey: "darkroom.proPanelOrder")
     }
+    /// Pro's library (the left panel, ToolLibrary.swift): shown or hidden, remembered across launches; the category it is on;
+    /// its search; the id of what was picked last (shown at its top).
+    public private(set) var libraryShown = UserDefaults.standard.object(forKey: "darkroom.libraryShown") as? Bool ?? true
+    public func setLibraryShown(_ on: Bool) {
+        libraryShown = on
+        UserDefaults.standard.set(on, forKey: "darkroom.libraryShown")
+    }
+    public var libraryCategory: LibraryCategory = .common
+    public var libraryQuery = ""
+    public var libraryPicked: String?
+    /// Bumped by the find shortcut, so the library's search field takes the keyboard.
+    public var libraryFindSerial = 0
     /// The sensor frame at scale 1 and the camera's orientation, for Simple's geometry controls; nil when
     /// the engine cannot report them (see `simpleGeometryReady`).
     var geometryBase: (sensor: SIMD2<Double>, camera: Orientation)?

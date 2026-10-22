@@ -178,6 +178,8 @@ struct DropdownRow<Content: View>: View {
 struct DropdownModuleRow: View {
     @Bindable var model: DarkroomModel
     let entry: DarkroomModel.ProEntry
+    /// The rig id's first word: `menu` in the Modules dropdown, `lib` in the library.
+    var rigPrefix = "menu"
 
     var body: some View {
         let inside = model.inProPanel(entry)
@@ -195,7 +197,7 @@ struct DropdownModuleRow: View {
         .accessibilityLabel(entry.name)
         .accessibilityValue(inside ? "in the panel" : "not in the panel")
         .accessibilityAddTraits(.isButton)
-        .rig("menu-module-\(entry.id)")
+        .rig("\(rigPrefix)-module-\(entry.id)")
     }
 }
 
