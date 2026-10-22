@@ -83,7 +83,7 @@ public enum CIEngineProbe {
     }
 
     /// The neighbourhood filters the detail modules use, for darkroom-engine-check's F-E series.
-    public enum Filter: Sendable { case box(Int), atrous(Int), guided(Int, Double), sqrtLuminance, sqrtLuminanceRoundTrip, mask(MaskSpec), min(Int), clipping }
+    public enum Filter: Sendable { case box(Int), boxFraction(Double), atrous(Int), guided(Int, Double), sqrtLuminance, sqrtLuminanceRoundTrip, mask(MaskSpec), min(Int), clipping }
 
     /// Like `render`, but renders only `region` (x, y, width, height, top-left origin) of the output, so a module's
     /// tile seams can be compared with the full frame (darkroom-engine-check F-E4 does this for the bare filters).
@@ -116,6 +116,7 @@ public enum CIEngineProbe {
         let output: CIImage
         switch filter {
         case .box(let r): output = try CIBridge.boxMean(input, radius: r)
+        case .boxFraction(let r): output = try CIBridge.boxMean(input, radius: r)
         case .atrous(let level): output = try CIBridge.atrousSmooth(input, level: level)
         case .guided(let r, let eps): output = try CIBridge.guided(input, radius: r, eps: eps)
         case .sqrtLuminance: output = try CIBridge.sqrtLuminance(input)

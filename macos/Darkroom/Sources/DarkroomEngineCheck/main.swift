@@ -98,6 +98,10 @@ func maskedExposureOracle(_ spec: MaskSpec) -> [SIMD3<Double>] {
     Mask.apply(spec, to: detailImg, width: detailW, height: detailH) { $0.map { $0 * 2 } }
 }
 
+/// The most a region may differ from the full frame at the same pixel. A box mean slides a running sum along each line, so a tile's window starts elsewhere and its float32
+/// sum rounds differently: a few millionths (measured 4e-6), a quarter of one 16-bit code (1.5e-5) and a thousandth of an 8-bit one.
+let seamTolerance = 1e-5
+
 /// Tile seams for a detail module: three regions rendered alone must equal the same pixels of the full frame, and
 /// the full frame must be the oracle's (so two blank renders cannot match each other).
 func detailSeams(_ stack: [StackEntry], oracle: [SIMD3<Double>], rasters: [MaskPicture] = []) -> (seam: Double, fullVsOracle: Double, ok: Bool) {
@@ -115,7 +119,7 @@ func detailSeams(_ stack: [StackEntry], oracle: [SIMD3<Double>], rasters: [MaskP
             }
         } }
     }
-    return (seam, fullErr, ok && seam < 1e-6)
+    return (seam, fullErr, ok && seam < seamTolerance)
 }
 
 // E0 an empty stack is the identity
@@ -427,9 +431,16 @@ do {
     func run(_ f: CIEngineProbe.Filter, region: (x: Int, y: Int, w: Int, h: Int)? = nil) -> [SIMD4<Float>] {
         (try? CIEngineProbe.filter(f, pixels: px, width: fw, height: fh, region: region)) ?? []
     }
-    for r in [1, 3, 20] {
+    // radius 3 and up run the running-sum kernels, 60 is wider than the frame (every window reads clamped edge)
+    for r in [1, 3, 20, 60] {
         let e = worstAgainst(run(.box(r)), (0..<3).map { Filters.boxMean(plane($0), radius: r) })
-        check("F-E1 box mean radius \(r) on the GPU matches the oracle within 2e-6", e < 2e-6, "\(e)")
+        // a window wider than the frame sums 121 clamped taps in float32: 2.1e-6 measured
+        let tolerance = r >= 60 ? 5e-6 : 2e-6
+        check("F-E1 box mean radius \(r) on the GPU matches the oracle within \(tolerance)", e < tolerance, "\(e)")
+    }
+    for r in [0.4, 2.5, 3.25, 17.75] {
+        let e = worstAgainst(run(.boxFraction(r)), (0..<3).map { Filters.boxMean(plane($0), radius: r) })
+        check("F-E1 fractional box mean radius \(r) on the GPU matches the oracle within 2e-6", e < 2e-6, "\(e)")
     }
     for level in 0...3 {
         let e = worstAgainst(run(.atrous(level)), (0..<3).map { Filters.atrousSmooth(plane($0), level: level) })
@@ -458,7 +469,7 @@ do {
             } }
         }
         check("F-E4 \(name) renders the same in a region as in the full frame (inside and at the edges), and the full frame is the oracle's",
-              ok && worstSeam < 1e-6, "seam \(worstSeam), full vs oracle \(fullErr)")
+              ok && worstSeam < seamTolerance, "seam \(worstSeam), full vs oracle \(fullErr)")
     }
 }
 

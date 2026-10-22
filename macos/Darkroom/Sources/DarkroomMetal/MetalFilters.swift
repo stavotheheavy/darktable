@@ -46,6 +46,54 @@ enum FilterKernels {
         dst.write(sum, gid);
     }
 
+
+    // Compensated (Kahan-Neumaier) float4 sums for the running-window box mean below: a window slid along 6000 pixels in plain float would drift.
+    struct KSum { float4 s; float4 c; };
+    static void kadd(thread KSum &a, float4 v) {
+        float4 t = a.s + v;
+        a.c += select((v - t) + a.s, (a.s - t) + v, abs(a.s) >= abs(v));
+        a.s = t;
+    }
+
+    // box mean by a running sum, one thread per row (pass 1, along x) or per column (pass 2, along y): constant cost per pixel at any radius.
+    // u = reach, n (whole taps each side), f (weight of the two outer taps), norm (2 r + 1). Same indexing and padding as filtersRowTex / filtersColTex.
+    kernel void boxRowRunTex(texture2d<float, access::read> src [[texture(0)]],
+                             texture2d<float, access::write> dst [[texture(1)]],
+                             constant float *u [[buffer(0)]], constant int2 *off [[buffer(1)]],
+                             uint line [[thread_position_in_grid]]) {
+        if (line >= dst.get_height()) { return; }
+        int reach = int(u[0]), n = int(u[1]), W = int(dst.get_width());
+        float f = u[2], inv = 1.0f / u[3];
+        int y = int(line) + off[0].y, x0 = off[0].x + reach;
+        KSum a = { float4(0), float4(0) };
+        for (int k = -n; k <= n; k++) { kadd(a, src.read(uint2(x0 + k, y))); }
+        for (int x = 0; x < W; x++) {
+            float4 r = a.s + a.c;
+            if (f > 0.0f) { r += f * (src.read(uint2(x0 + x - n - 1, y)) + src.read(uint2(x0 + x + n + 1, y))); }
+            dst.write(r * inv, uint2(x, line));
+            kadd(a, src.read(uint2(x0 + x + n + 1, y)));
+            kadd(a, -src.read(uint2(x0 + x - n, y)));
+        }
+    }
+
+    kernel void boxColRunTex(texture2d<float, access::read> src [[texture(0)]],
+                             texture2d<float, access::write> dst [[texture(1)]],
+                             constant float *u [[buffer(0)]], constant int2 *off [[buffer(1)]],
+                             uint col [[thread_position_in_grid]]) {
+        if (col >= dst.get_width()) { return; }
+        int reach = int(u[0]), n = int(u[1]), H = int(dst.get_height());
+        float f = u[2], inv = 1.0f / u[3];
+        KSum a = { float4(0), float4(0) };
+        for (int k = -n; k <= n; k++) { kadd(a, src.read(uint2(col, reach + k))); }
+        for (int y = 0; y < H; y++) {
+            float4 r = a.s + a.c;
+            if (f > 0.0f) { r += f * (src.read(uint2(col, reach + y - n - 1)) + src.read(uint2(col, reach + y + n + 1))); }
+            dst.write(r * inv, uint2(col, y));
+            kadd(a, src.read(uint2(col, reach + y + n + 1)));
+            kadd(a, -src.read(uint2(col, reach + y - n)));
+        }
+    }
+
     // the minimum over the same window shape (u[0] = reach); the dark channel's patch minimum
     kernel void filtersMinRowTex(texture2d<float, access::read> src [[texture(0)]],
                                  texture2d<float, access::write> dst [[texture(1)]],
@@ -158,6 +206,7 @@ final class SeparableProcessor: CIImageProcessorKernel {
         guard let mid = kernels.device.makeTexture(descriptor: desc) else { throw CIBridgeError.badArguments }
         let names = (arguments?["kernels"] as? [String]) ?? ["filtersRowTex", "filtersColTex"]
         guard names.count == 2 else { throw CIBridgeError.badArguments }
+        let lines = (arguments?["lines"] as? Bool) ?? false
         for (name, from, to) in [(names[0], src, mid), (names[1], mid, dst)] {
             let p = try kernels.pipeline(name, source: FilterKernels.source)
             guard let enc = cmd.makeComputeCommandEncoder() else { throw CIBridgeError.badArguments }
@@ -166,8 +215,14 @@ final class SeparableProcessor: CIImageProcessorKernel {
             enc.setTexture(to, index: 1)
             enc.setBytes(&u, length: u.count * MemoryLayout<Float>.stride, index: 0)
             enc.setBytes(&off, length: off.count * MemoryLayout<SIMD2<Int32>>.stride, index: 1)
-            let w = p.threadExecutionWidth, h = max(1, p.maxTotalThreadsPerThreadgroup / w)
-            enc.dispatchThreads(MTLSize(width: to.width, height: to.height, depth: 1), threadsPerThreadgroup: MTLSize(width: w, height: h, depth: 1))
+            if lines {
+                // one thread per row (pass 1: `to` is the grown-height texture) or per column (pass 2)
+                let count = from === src ? to.height : to.width
+                enc.dispatchThreads(MTLSize(width: count, height: 1, depth: 1), threadsPerThreadgroup: MTLSize(width: min(count, 64), height: 1, depth: 1))
+            } else {
+                let w = p.threadExecutionWidth, h = max(1, p.maxTotalThreadsPerThreadgroup / w)
+                enc.dispatchThreads(MTLSize(width: to.width, height: to.height, depth: 1), threadsPerThreadgroup: MTLSize(width: w, height: h, depth: 1))
+            }
             enc.endEncoding()
         }
     }
@@ -268,7 +323,19 @@ extension CIBridge {
     /// DarkroomCore.Filters.boxMean on every channel.
     public static func boxMean(_ image: CIImage, radius r: Int) throws -> CIImage {
         guard r > 0 else { return image }
+        if r >= runningRadius { return try boxRunning(image, reach: r, n: r, f: 0, norm: Double(2 * r + 1)) }
         return try separable(image, reach: r, taps: [Float](repeating: 1 / Float(2 * r + 1), count: 2 * r + 1), step: 1)
+    }
+
+    /// From this radius a box mean slides a running sum along each line (constant cost per pixel); below it the tap kernels read the few taps directly.
+    private static let runningRadius = 3
+
+    private static func boxRunning(_ image: CIImage, reach: Int, n: Int, f: Double, norm: Double) throws -> CIImage {
+        let ext = image.extent
+        let u: [Float] = [Float(reach), Float(n), Float(f), Float(norm)]
+        let out = try SeparableProcessor.apply(withExtent: ext, inputs: [image.clampedToExtent()],
+                                               arguments: ["reach": reach, "uniforms": u, "kernels": ["boxRowRunTex", "boxColRunTex"], "lines": true])
+        return out.cropped(to: ext)
     }
 
     /// DarkroomCore.Filters.boxMean at a fractional radius r = n + f: the 2n + 1 whole taps plus the two outer taps weighted f, over 2r + 1.
@@ -277,6 +344,7 @@ extension CIBridge {
         let n = Int(r.rounded(.down)), f = r - Double(n)
         guard f > 1e-12 else { return try boxMean(image, radius: n) }
         let reach = n + 1, norm = 2 * r + 1
+        if r >= Double(runningRadius) { return try boxRunning(image, reach: reach, n: n, f: f, norm: norm) }
         let taps: [Float] = (-reach...reach).map { k in Float((abs(k) <= n ? 1 : f) / norm) }
         return try separable(image, reach: reach, taps: taps, step: 1)
     }
