@@ -223,3 +223,36 @@ extension DarkroomModel {
         } catch { /* offline: keep what we have */ }
     }
 }
+
+extension DarkroomModel {
+    /// Asks Databit Dev for the picks of every gallery sent from this Mac and keeps them by photo. Quiet unless `force` when it ran in
+    /// the last five minutes; a failure keeps the picks already known and says why.
+    public func refreshClientPicks(force: Bool = false) async {
+        guard !clientPicksBusy, let token = cloudStore.read() else { return }
+        if !force, let at = clientPicksFetchedAt, Date().timeIntervalSince(at) < 300 { return }
+        let galleries = clientPickStore.galleries()
+        guard !galleries.isEmpty else { return }
+        clientPicksBusy = true
+        defer { clientPicksBusy = false }
+        let client = GalleryClient(base: cloudClient.base, session: cloudClient.session)
+        var found: [String: ClientPick] = [:]
+        var problem: String?
+        for g in galleries {
+            do {
+                let r = try await client.picks(token: token, site: g.siteID, gallery: g.id)
+                for (name, choice) in r.choices {
+                    guard let path = g.files[name] else { continue }
+                    let pick = ClientPick(choice: choice, gallery: g.title, sentAt: r.picksSentAt, note: r.note)
+                    // a photo in two galleries keeps the newest answer
+                    if let old = found[path], (old.sentAt ?? .distantPast) >= (pick.sentAt ?? .distantPast) { continue }
+                    found[path] = pick
+                }
+            } catch { problem = (error as? GalleryError)?.errorDescription ?? error.localizedDescription }
+        }
+        if let problem { clientPicksMessage = problem; return }
+        clientPicksFetchedAt = Date()
+        clientPicks = found
+        clientPickStore.savePicks(found)
+        clientPicksMessage = found.isEmpty ? "No client picks yet" : "\(found.count) client picks"
+    }
+}

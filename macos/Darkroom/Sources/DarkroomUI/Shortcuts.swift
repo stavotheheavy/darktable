@@ -30,6 +30,8 @@ public enum Shortcuts {
                  shortcut: KeyboardShortcut("u", modifiers: [.option, .command])) { m in if !m.cloudSignedIn { Task { await m.signInToCloud() } } },
         Shortcut(id: "send-gallery", title: "Send photos to a client gallery", keys: "\u{2325}\u{2318}G",
                  shortcut: KeyboardShortcut("g", modifiers: [.option, .command])) { $0.galleryRequest += 1 },
+        Shortcut(id: "refresh-picks", title: "Refresh what clients picked in the galleries you sent", keys: "\u{2325}\u{2318}R",
+                 shortcut: KeyboardShortcut("r", modifiers: [.option, .command])) { $0.picksRequest += 1 },
         Shortcut(id: "hide-ui", title: "Hide or show the panels", keys: "\u{2318}\u{21E7}H",
                  shortcut: KeyboardShortcut("h", modifiers: [.command, .shift])) { $0.uiHidden.toggle() },
         Shortcut(id: "original", title: "Hold to compare with the original (press again to return)", keys: "\u{2318}\\",
@@ -103,7 +105,7 @@ public enum Shortcuts {
                              "nudge-down-big", "nudge-up-big", "nudge-down-fine", "nudge-up-fine", "slider-reset",
                              "section-power", "section-fold", "all-on", "all-off", "panel-order"]),
         ("Menus and library", ["menu-modules", "menu-presets", "menu-history", "library", "library-find", "close-menu"]),
-        ("Account", ["sign-in", "send-gallery"]),
+        ("Account", ["sign-in", "send-gallery", "refresh-picks"]),
         ("View", ["zoom-fit", "zoom-100", "zoom-200", "clipping", "test-card", "hide-ui", "help", "help-cmd"]),
     ]
     public static var groups: [(title: String, shortcuts: [Shortcut])] {

@@ -138,6 +138,13 @@ public final class DarkroomModel {
     public var cloudMessage: String?
     /// Bumped when something asks for the Send to gallery sheet (the key, the account menu); the window's root opens it.
     public var galleryRequest = 0
+    /// What clients picked in galleries sent from here, by the photo's path (ClientPicks.swift).
+    public var clientPicks: [String: ClientPick] = ClientPickStore.standard.picks()
+    public var clientPicksBusy = false
+    public var clientPicksMessage: String?
+    var clientPicksFetchedAt: Date?
+    public var clientPickStore = ClientPickStore.standard
+    public var picksRequest = 0
     public var cloudStore: any CloudTokenStore = KeychainTokenStore()
     public var cloudClient = CloudClient(base: DarkroomModel.defaultCloudBase)
     /// How Pro's panel stacks its sections: the one switched on last at the top (the owner's history view), or in the

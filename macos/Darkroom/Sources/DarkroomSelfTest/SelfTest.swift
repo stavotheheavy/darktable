@@ -2066,6 +2066,7 @@ struct SelfTest {
             kc.delete(); kc.write("abc"); let kcRead = kc.read(); kc.write("def"); let kcRead2 = kc.read(); kc.delete()
             check(kcRead == "abc" && kcRead2 == "def" && kc.read() == nil, "CL8 the Keychain store writes, replaces and deletes a token")
             // GL send to gallery: the owner flow against the stand-in, the failure messages, a resumed send, and a real exported JPEG
+            nonisolated(unsafe) var picksAnswer: (Int, [String: Any]) = (200, [:])
             nonisolated(unsafe) var calls: [String] = []
             nonisolated(unsafe) var puts: [(path: String, type: String?, auth: String?, bytes: Int)] = []
             nonisolated(unsafe) var uploadsAnswer: (Int, [String: Any])? = nil
@@ -2091,14 +2092,17 @@ struct SelfTest {
                     let files = json["files"] as? [[String: Any]] ?? []
                     return (200, ["uploads": files.enumerated().map { ["photoId": "p-\($0.element["filename"] as? String ?? "")", "url": "https://r2.test/put/\($0.offset)", "filename": $0.element["filename"] as? String ?? "", "contentType": "image/jpeg"] }, "skipped": [], "refused": []])
                 case "/api/portal/galleries/g1/uploads/complete": return (200, ["moved": (json["photoIds"] as? [Any])?.count ?? 0])
+                case "/api/portal/galleries/g1" where req.httpMethod == "GET": return picksAnswer
                 case "/api/portal/galleries/g1/share": return (200, ["code": "CODE-ONCE", "link": "https://gus.example.test/g/gus#c=CODE-ONCE", "stage": "proofing"])
                 default: return (404, [:])
                 }
             }
             model.cloudStore.write("T-GOOD")
+            let pickDir = FileManager.default.temporaryDirectory.appending(path: "pk-test-\(UUID().uuidString)")
+            let pickStore = ClientPickStore(directory: pickDir)
             let fakePhotos: [(path: String, name: String)] = [("/x/IMG_1.NEF", "IMG_1.NEF"), ("/x/IMG_2.NEF", "IMG_2.NEF"), ("/x/IMG_2.ARW", "IMG_2.ARW")]
             func sender(_ exporter: @escaping (String, URL) async -> Bool = { _, url in (try? Data(repeating: 7, count: 1234).write(to: url)) != nil }) -> GallerySendModel {
-                let m = GallerySendModel(client: GalleryClient(base: URL(string: "https://cloud.test")!, session: URLSession(configuration: cfg)), token: { "T-GOOD" }, exporter: exporter)
+                let m = GallerySendModel(client: GalleryClient(base: URL(string: "https://cloud.test")!, session: URLSession(configuration: cfg)), token: { "T-GOOD" }, exporter: exporter, store: pickStore)
                 m.title = "Wedding"; m.clientName = "Pat"; m.siteID = "s1"
                 m.selection = Set(fakePhotos.map(\.path))
                 return m
@@ -2169,6 +2173,44 @@ struct SelfTest {
             check(ok && data.prefix(2) == Data([0xFF, 0xD8]) && data.count < 50_000_000 && longSide > 0 && longSide <= GalleryExporter.maxSide,
                   "GL9 a photo exports through its own engine to a JPEG within the gallery limits (\(data.count / 1024) KB, \(longSide) px)")
             try? FileManager.default.removeItem(at: exportDir)
+            // PK client picks: sent galleries are remembered, picks map back to the right photos, and the library filter reads them
+            let sentRecord = pickStore.galleries()
+            check(sentRecord.count == 1 && sentRecord[0].id == "g1" && sentRecord[0].siteID == "s1"
+                  && sentRecord[0].files == ["IMG_1.jpg": "/x/IMG_1.NEF", "IMG_2.jpg": "/x/IMG_2.NEF", "IMG_2-2.jpg": "/x/IMG_2.ARW"],
+                  "PK1 a finished send is remembered as one gallery, with which uploaded file is which photo (\(sentRecord.map { "\($0.id) \($0.files.count) files" }))")
+            picksAnswer = (200, ["gallery": ["picksSentAt": "2026-10-22T10:00:00Z", "clientNote": "love the second"],
+                                 "photos": [["id": "a", "filename": "IMG_1.jpg", "choice": "yes"], ["id": "b", "filename": "IMG_2.jpg", "choice": "super"],
+                                            ["id": "c", "filename": "IMG_2-2.jpg", "choice": "no"], ["id": "d", "filename": "IMG_9.jpg", "choice": NSNull()]]])
+            model.clientPickStore = pickStore
+            model.clientPicks = [:]
+            calls = []
+            await model.refreshClientPicks(force: true)
+            check(model.clientPicks["/x/IMG_1.NEF"]?.choice == .yes && model.clientPicks["/x/IMG_2.NEF"]?.choice == .super
+                  && model.clientPicks["/x/IMG_2.ARW"]?.choice == .no && model.clientPicks.count == 3
+                  && model.clientPicks["/x/IMG_2.NEF"]?.note == "love the second" && model.clientPicks["/x/IMG_1.NEF"]?.gallery == "Wedding",
+                  "PK2 each pick lands on the photo it was uploaded from, including the renamed duplicate (\(model.clientPicks.count) picks)")
+            check(pickStore.picks() == model.clientPicks, "PK3 the last answer is kept on disk for the next launch")
+            calls = []
+            await model.refreshClientPicks()
+            check(calls.isEmpty, "PK4 a refresh within five minutes asks nothing; a forced one does (\(calls))")
+            await model.refreshClientPicks(force: true)
+            check(calls == ["GET /api/portal/galleries/g1?site=s1"], "PK5 a forced refresh reads each sent gallery once (\(calls))")
+            picksAnswer = (401, ["error": "Unauthorized"])
+            let knownPicks = model.clientPicks
+            await model.refreshClientPicks(force: true)
+            check(model.clientPicks == knownPicks && (model.clientPicksMessage ?? "").contains("Sign in"), "PK6 a refused token keeps the picks already known and says to sign in (\(model.clientPicksMessage ?? "none"))")
+            let emptyModelStore = ClientPickStore(directory: pickDir.appending(path: "empty"))
+            model.clientPickStore = emptyModelStore
+            calls = []
+            await model.refreshClientPicks(force: true)
+            check(calls.isEmpty, "PK7 with nothing sent from this Mac no request is made")
+            let yes = ClientPick(choice: .yes, gallery: "g", sentAt: nil, note: nil), fav = ClientPick(choice: .super, gallery: "g", sentAt: nil, note: nil), no = ClientPick(choice: .no, gallery: "g", sentAt: nil, note: nil)
+            check(PickFilter.all.allows(nil) && !PickFilter.picked.allows(nil) && PickFilter.picked.allows(yes) && PickFilter.picked.allows(fav) && !PickFilter.picked.allows(no)
+                  && PickFilter.favourites.allows(fav) && !PickFilter.favourites.allows(yes) && PickFilter.declined.allows(no) && !PickFilter.declined.allows(yes),
+                  "PK8 the library filter keeps picked (yes and favourite), favourites and declined apart")
+            try? FileManager.default.removeItem(at: pickDir)
+            model.clientPicks = [:]
+            model.clientPickStore = .standard
             MockCloud.handler = nil
             model.cloudClient = CloudClient(base: DarkroomModel.defaultCloudBase)
 
