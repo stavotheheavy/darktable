@@ -322,6 +322,13 @@ struct TopBar: View {
             .accessibilityLabel("Snapshot")
             .rig("snapshot")
 
+            Button { Task { await model.autoEdit() } } label: {
+                Image(systemName: "wand.and.stars").frame(width: 44, height: 44).contentShape(Rectangle())
+            }
+            .buttonStyle(.plain).disabled(model.autoEditing || model.filePath == nil)
+            .help("Auto edit: white balance, exposure, highlights, shadows (A)")
+            .accessibilityLabel("Auto edit").rig("auto-edit")
+
             Button { model.undo() } label: { Image(systemName: "arrow.uturn.backward").frame(width: 44, height: 44).contentShape(Rectangle()) }
                 .buttonStyle(.plain).disabled(!model.canUndo)
                 .accessibilityLabel("Undo").rig("undo")

@@ -345,6 +345,7 @@ public final class Rig {
                 }
             case "activate": NSApp.activate(ignoringOtherApps: true); window?.makeKeyAndOrderFront(nil)
             case "awb": Task { await model.autoWhiteBalance() }
+            case "autoedit": Task { await model.autoEdit() }
             case "testcard:on": model.setTestCard(true)
             case "testcard:off": model.setTestCard(false)
             case "hdr:on": model.setHDRPreview(true)
@@ -406,7 +407,7 @@ public final class Rig {
                 }
                 return ["ok": true, "layers": model.maskLayers.map { "\($0.name):\($0.strokes.count)" }]
             case "detect":
-                guard parts.count > 2, let k = VisionMasks.Kind(rawValue: parts[1]), let m = model.modules.first(where: { $0.operation == parts[2] }) else { return ["ok": false, "error": "detect subject|person|face|eyes|lips <op>"] }
+                guard parts.count > 2, let k = VisionMasks.Kind(rawValue: parts[1]), let m = model.modules.first(where: { $0.operation == parts[2] }) else { return ["ok": false, "error": "detect subject|person|face|eyes|lips|animal|object <op>"] }
                 await model.detect(k, for: m)
                 return ["ok": true, "layers": model.maskLayers.map { "\($0.name):\($0.kind.rawValue)" }, "status": model.status]
             case "curve": guard parts.count > 2, let i = Int(parts[1]), let y = Double(parts[2]) else { return ["ok": false, "error": "curve <node> <0..1>"] }; model.setCurveNode(i, y)
