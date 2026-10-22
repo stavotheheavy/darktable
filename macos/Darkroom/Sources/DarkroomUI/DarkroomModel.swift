@@ -161,7 +161,16 @@ public final class DarkroomModel {
     public var showDeprecated = false
     public var blendOpen = false { didSet { if !blendOpen { maskShowID = nil; paintModuleID = nil } } }
     /// Which of Pro's header menus is open (the popover under its button), or nil.
-    public var proMenuOpen: ProMenuKind? { didSet { if proMenuOpen != oldValue { proMenuQuery = "" } } }
+    public var proMenuOpen: ProMenuKind? {
+        didSet {
+            guard proMenuOpen != oldValue else { return }
+            proMenuQuery = ""
+            // the crop tool shows the uncropped frame to draw the box on, and the cropped one again when it closes
+            if (proMenuOpen == .crop) != (oldValue == .crop), filePath != nil { requestRender() }
+        }
+    }
+    /// True while the crop tool is open: the canvas shows the frame before the crop, with the crop box over it.
+    public var cropEditing: Bool { proMenuOpen == .crop && mode == .pro }
     /// What the Modules dropdown's search field holds.
     public var proMenuQuery = ""
     /// Which drag on the tone curve is running (one history step per drag).
@@ -878,6 +887,7 @@ public final class DarkroomModel {
     private var shownEdits: EditMap {
         if showingOriginal { return [:] }
         if showingSnapshot, let s = snapshotEdits { return s }
+        if cropEditing, let m = module("crop") { var e = edits; e[m.id] = nil; return e }
         return edits
     }
 

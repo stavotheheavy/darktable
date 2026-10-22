@@ -27,7 +27,13 @@ another method and its own controls appear.
 ## The crop tool (Pro)
 
 Crop is a tool, not a module. It has its own button in the header, next to Undo and Redo, and a key: **C**. It opens a
-dropdown with:
+dropdown, and the photo shows the whole frame with a **crop box** over it:
+
+- **On the photo:** drag a corner or an edge of the box to resize it, drag inside it to move it. The cut-away part is
+  dimmed and a third-lines grid helps with composition. A whole drag is one step in History. Close the tool to see the crop.
+  The box and the Edges sliders below are the same four numbers.
+
+The dropdown has:
 
 - **Straighten:** a slider, -45 to 45 degrees. The picture is cropped to the largest clean rectangle.
 - **Turn and flip:** turn left, turn right, flip horizontally, flip vertically. Each press is one step in History.
