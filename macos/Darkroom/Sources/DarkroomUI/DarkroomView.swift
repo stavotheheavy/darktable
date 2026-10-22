@@ -10,6 +10,14 @@ import UniformTypeIdentifiers
 public struct DarkroomView: View {
     @Bindable var model: DarkroomModel
     @State private var choosing = false
+    /// Portrait (an iPad held upright, or an iPhone): the panels collapse to edge tabs and open over the photo.
+    @State private var portrait = false
+    @State private var panelOpen = false
+    /// Portrait only: whether the library is open over the photo. It always starts closed in portrait, whatever the
+    /// Mac-style setting remembers, because the panels open on demand there.
+    @State private var libraryOpen = false
+    /// A phone-width screen: the top bar and readout shrink to what fits (the iPad in portrait is wider).
+    @State private var phone = false
 
     static let panelWidth: CGFloat = 296
     static let margin: CGFloat = 12
@@ -18,28 +26,100 @@ public struct DarkroomView: View {
         self.model = model
     }
 
+    /// Portrait tabs: a small glass tab on each edge opens its panel over the photo.
+    private var edgeTabs: some View {
+        HStack {
+            VStack {
+                Spacer()
+                if !libraryOpen {
+                    edgeTab("Library") { libraryOpen = true; model.setLibraryShown(true) }
+                        .accessibilityIdentifier("portrait-library-tab")
+                }
+                Spacer()
+            }
+            Spacer()
+            VStack {
+                Spacer()
+                if !panelOpen {
+                    edgeTab("Panel") { panelOpen = true }
+                        .accessibilityIdentifier("portrait-panel-tab")
+                }
+                Spacer()
+            }
+        }
+        .padding(.horizontal, 4)
+        .chrome(hidden: model.uiHidden)
+    }
+
+    private func edgeTab(_ title: String, _ open: @escaping () -> Void) -> some View {
+        Button(action: open) {
+            // rotating a view does not change its layout frame, so the tab has its own tall, narrow frame:
+            // otherwise the tap target stays as wide as the text and runs off the screen edge on a phone
+            Text(title)
+                .font(.callout.weight(.medium))
+                .fixedSize()
+                .rotationEffect(.degrees(-90))
+                .frame(width: 40, height: 96)
+                .glassEffect(.regular, in: .capsule)
+        }
+        .buttonStyle(.plain)
+    }
+
+    private func closeTab(_ close: @escaping () -> Void) -> some View {
+        Button(action: close) {
+            Image(systemName: "xmark").font(.caption.weight(.semibold)).frame(width: 36, height: 36)
+                .glassEffect(.regular, in: .circle)
+        }
+        .buttonStyle(.plain)
+        .padding(10)
+    }
+
     public var body: some View {
+        if Platform.isPhone { phoneBody } else { desktopBody }
+    }
+
+    /// The iPhone has its own layout (PhoneEditView): the photo centered, a tray of tools, and one control that pops up.
+    private var phoneBody: some View {
+        PhoneEditView(model: model, choosing: $choosing)
+            .background(model.backdrop.color)
+            .preferredColorScheme(.dark)
+            .fileImporter(isPresented: $choosing, allowedContentTypes: [.rawImage, .image]) { result in
+                if case .success(let url) = result { Task { await model.open(path: url.path) } }
+            }
+    }
+
+    private var desktopBody: some View {
         ZStack {
-            PhotoView(model: model)
+            PhotoView(model: model, portrait: portrait)
 
             VStack(spacing: 0) {
-                TopBar(model: model, choosing: $choosing)
+                TopBar(model: model, choosing: $choosing, portrait: portrait, phone: phone)
                 if model.mode == .pro {
                     // modules come from the header's Modules menu; the panel holds the ones in use
                     HStack(alignment: .top, spacing: 0) {
-                        if model.libraryShown { ToolLibrary(model: model) }
+                        if portrait ? libraryOpen : model.libraryShown { ToolLibrary(model: model) }
                         Spacer(minLength: 0)
-                        ProPanel(model: model)
-                            .frame(width: Self.panelWidth)
+                        if !portrait || panelOpen {
+                            ProPanel(model: model)
+                                .frame(width: Self.panelWidth)
+                                .overlay(alignment: .topTrailing) {
+                                    if portrait { closeTab { panelOpen = false } }
+                                }
+                        }
                     }
                     .padding(.top, 12)
                     .chrome(hidden: model.uiHidden)
+                    if portrait { edgeTabs }
                 }
                 Spacer(minLength: 0)
             }
             .padding(Self.margin)
+            .onGeometryChange(for: Bool.self, of: { $0.size.height > $0.size.width }) { portrait = $0 }
+            .onGeometryChange(for: Bool.self, of: { $0.size.width < 600 }) { phone = $0 }
+            // the library's own hide button turns the remembered setting off; portrait follows it
+            .onChange(of: model.libraryShown) { _, now in if !now { libraryOpen = false } }
 
-            if model.mode == .pro {
+            if model.mode == .pro && !phone {
                 VStack {
                     Spacer()
                     ReadoutBar(model: model)
@@ -108,6 +188,9 @@ extension View {
 
 struct PhotoView: View {
     @Bindable var model: DarkroomModel
+    var portrait = false
+    /// An iPhone: the photo takes the area between the floating top bar and the tray, with no side panels.
+    var phone = false
     @State private var lastDrag: CGSize = .zero
     /// The stroke being painted, in view points, until the finger lifts.
     @State private var live: [CGPoint] = []
@@ -240,18 +323,32 @@ struct PhotoView: View {
         }
     }
 
+    /// Between the top bar and the tool tray; the rails float over its edges.
+    static func phoneArea(in size: CGSize) -> CGRect {
+        let landscape = size.width > size.height
+        // portrait: below the top bar and the row of tools; landscape: between the two upright clusters
+        let top: CGFloat = landscape ? 76 : 148
+        let bottom: CGFloat = landscape ? 124 : 130
+        let inset: CGFloat = landscape ? 88 : 12
+        return CGRect(x: inset, y: top, width: max(100, size.width - inset * 2), height: max(100, size.height - top - bottom))
+    }
+
     func imageRect(frame: CGImage, in size: CGSize) -> CGRect {
         // a presented frame's CGImage is a thumbnail: the picture's own size lays it out
         let fw = model.frameSize?.width ?? CGFloat(frame.width), fh = model.frameSize?.height ?? CGFloat(frame.height)
         if model.zoom == .fit {
             // keep clear of the floating panels
-            let side = DarkroomView.panelWidth + DarkroomView.margin * 2
+            // portrait Pro: the panels are tabs that open over the photo; Simple's panel stays beside it
+            // Simple's panel is a little wider than Pro's; the photo stops short of whichever panel is showing
+            let panel = model.mode == .simple ? SimpleChrome.panelWidth : DarkroomView.panelWidth
+            let side = portrait && model.mode == .pro ? DarkroomView.margin * 2 : panel + DarkroomView.margin * 2 + 8
             // Simple has one panel on the right and a row of looks along the bottom
             let simple = model.mode == .simple
-            let left = simple || !model.libraryShown ? DarkroomView.margin * 2 : ToolLibrary.width + DarkroomView.margin * 2
+            // portrait: the panels open over the photo, so the photo keeps the full width
+            let left = simple || portrait || !model.libraryShown ? DarkroomView.margin * 2 : ToolLibrary.width + DarkroomView.margin * 2
             let bottom: CGFloat = simple ? 140 : 72
-            let area = CGRect(x: left, y: 84, width: max(100, size.width - left - side),
-                              height: max(100, size.height - 84 - bottom))
+            let area = phone ? Self.phoneArea(in: size)
+                : CGRect(x: left, y: 84, width: max(100, size.width - left - side), height: max(100, size.height - 84 - bottom))
             let s = min(area.width / fw, area.height / fh)
             let w = fw * s, h = fh * s
             return CGRect(x: area.midX - w / 2, y: area.midY - h / 2, width: w, height: h)
@@ -266,8 +363,93 @@ struct PhotoView: View {
 struct TopBar: View {
     @Bindable var model: DarkroomModel
     @Binding var choosing: Bool
+    var portrait = false
+    var phone = false
 
     var body: some View {
+        if phone {
+            phoneBar
+        } else if portrait {
+            portraitBar
+        } else {
+            landscapeBar
+        }
+    }
+
+    /// A phone: the back button and Export on the first row, everything else on a second row that scrolls sideways.
+    private var phoneBar: some View {
+        GlassEffectContainer(spacing: 12) {
+            VStack(spacing: 10) {
+                HStack(spacing: 12) {
+                    backCapsule.chrome(hidden: model.uiHidden)
+                    Spacer(minLength: 8)
+                    exportCapsule
+                }
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 12) {
+                        ModeSwitch(model: model).chrome(hidden: model.uiHidden)
+                        if model.mode == .pro { ProMenus(model: model, compact: true).chrome(hidden: model.uiHidden) }
+                        toolsCapsule(compact: true).chrome(hidden: model.uiHidden)
+                        rightGroup(compact: true, showExport: false)
+                    }
+                    .padding(.horizontal, 2)
+                }
+            }
+        }
+    }
+
+    private var backCapsule: some View {
+        HStack(spacing: 4) {
+            if let back = model.onBack {
+                Button(action: back) { Image(systemName: "chevron.left").frame(width: 44, height: 44).contentShape(Rectangle()) }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel("Back to the library")
+                    .rig("back")
+            }
+            Button { choosing = true } label: {
+                Image(systemName: "photo.on.rectangle").frame(width: 44, height: 44).contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Open image")
+            .rig("open")
+        }
+        .padding(.horizontal, 8)
+        .padding(.vertical, 8)
+        .glassEffect(.regular, in: .capsule)
+    }
+
+    private var exportCapsule: some View {
+        Button(action: export) { Text("Export").lineLimit(1).fixedSize() }
+            .buttonStyle(PrimaryCapsuleStyle())
+            .disabled(model.frame == nil)
+            .rig("export")
+            .padding(8)
+            .glassEffect(.regular, in: .capsule)
+    }
+
+    /// Portrait: the file, the mode and Export on the first row; the tools and Pro menus on a second row
+    /// that scrolls sideways if it still cannot fit the width. One row cannot hold all of it on an iPad held upright.
+    private var portraitBar: some View {
+        GlassEffectContainer(spacing: 12) {
+            VStack(spacing: 10) {
+                HStack(spacing: 12) {
+                    fileCapsule.chrome(hidden: model.uiHidden)
+                    ModeSwitch(model: model).chrome(hidden: model.uiHidden)
+                    Spacer(minLength: 8)
+                    rightGroup(compact: true)
+                }
+                ScrollView(.horizontal, showsIndicators: false) {
+                    HStack(spacing: 12) {
+                        if model.mode == .pro { ProMenus(model: model, compact: true).chrome(hidden: model.uiHidden) }
+                        toolsCapsule(compact: true).chrome(hidden: model.uiHidden)
+                    }
+                    .padding(.horizontal, 2)
+                }
+            }
+        }
+    }
+
+    private var landscapeBar: some View {
         GlassEffectContainer(spacing: 12) {
             // the first layout that fits wins; at the narrowest window the zoom group and the
             // button labels give way instead of wrapping or clipping
@@ -276,6 +458,11 @@ struct TopBar: View {
                 // the zoom group and side labels give way before the Pro menus lose their words
                 row(compact: true, menuWords: true)
                 row(compact: true, menuWords: false)
+                // iPad portrait and iPhone: the narrowest row still does not fit, so it scrolls sideways
+                // instead of pushing the whole screen wider than the device
+                ScrollView(.horizontal, showsIndicators: false) {
+                    row(compact: true, menuWords: false)
+                }
             }
         }
     }
@@ -436,7 +623,7 @@ struct TopBar: View {
 
     /// Hide UI, Original and Export. This group stays visible when the panels fade, so the
     /// way back is always on screen.
-    private func rightGroup(compact: Bool) -> some View {
+    private func rightGroup(compact: Bool, showExport: Bool = true) -> some View {
         HStack(spacing: 6) {
             Button {
                 model.uiHidden.toggle()
@@ -460,10 +647,12 @@ struct TopBar: View {
             if Rig.canary("smalltarget") {
                 Button { } label: { Image(systemName: "gearshape").font(.system(size: 9)) }.buttonStyle(.plain).frame(width: 14, height: 14).rig("canary-gear")
             }
-            Button(action: export) { Text("Export").lineLimit(1).fixedSize() }
-                .buttonStyle(PrimaryCapsuleStyle())
-                .disabled(model.frame == nil)
-                .rig("export")
+            if showExport {
+                Button(action: export) { Text("Export").lineLimit(1).fixedSize() }
+                    .buttonStyle(PrimaryCapsuleStyle())
+                    .disabled(model.frame == nil)
+                    .rig("export")
+            }
         }
         .padding(8)
         .glassEffect(.regular, in: .capsule)

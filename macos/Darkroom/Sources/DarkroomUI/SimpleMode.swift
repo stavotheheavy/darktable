@@ -241,6 +241,8 @@ struct SimplePanel: View {
             ScrollView(.vertical) { controls }.scrollIndicators(.visible)
         }
         .frame(maxHeight: maxHeight)
+        // hug the controls: a flexible frame alone would stretch the glass to the full height and leave it empty
+        .fixedSize(horizontal: false, vertical: true)
         .padding(14)
         .disabled(!model.simpleReady)
         .opacity(model.simpleReady ? 1 : 0.5)

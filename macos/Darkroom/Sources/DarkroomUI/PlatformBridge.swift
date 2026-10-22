@@ -61,6 +61,15 @@ public enum Platform {
         #endif
     }
 
+    /// An iPhone: the one device the phone layout is for. The iPad, even held upright, keeps the wider layout.
+    public static var isPhone: Bool {
+        #if os(macOS)
+        false
+        #else
+        UIDevice.current.userInterfaceIdiom == .phone
+        #endif
+    }
+
     /// Puts text on the system clipboard.
     public static func copy(_ text: String) {
         #if os(macOS)
