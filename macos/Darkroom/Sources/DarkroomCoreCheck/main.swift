@@ -859,7 +859,7 @@ do {
     // SH3 the method: s' = s + amount (s - base) with base from three à trous smoothings, on every pixel with Y > 1e-6
     let s = DetailCommon.sqrtLuminance(fx, width: fw, height: fh)
     let base = Filters.atrousSmooth(Filters.atrousSmooth(Filters.atrousSmooth(s, level: 0), level: 1), level: 2)
-    let out3 = Sharpen2D.apply(fx, width: fw, height: fh, amount: 0.7, radius: 3)
+    let out3 = Sharpen2D.apply(fx, width: fw, height: fh, amount: 0.7, radius: 4)   // radius 4 is cascade 2 exactly
     var m3 = 0.0
     for i in fx.indices where ColorCommon.luminance(fx[i]) > 1e-6 {
         let want = max(s.values[i] + 0.7 * (s.values[i] - base.values[i]), 0)
@@ -903,8 +903,13 @@ do {
     check("SH6 every channel gets the same gain (hue and chroma ratios stay) within 1e-9 (\(hue))", hue < 1e-9, "\(hue)")
 
     // SH7 the radius picks the blur level, and the blur reaches as far as its level says
-    let levels: [(Double, Int)] = [(0.5, 0), (1.0, 0), (1.4, 0), (1.5, 1), (2.8, 1), (2.9, 2), (5.6, 2), (5.7, 3), (8, 3)]
-    check("SH7 the level map is 0, 1, 2, 3 at the radii the card gives", levels.allSatisfy { Sharpen2D.level(radius: $0.0) == $0.1 })
+    let cas: [(Double, Int, Int, Double)] = [(0, -1, -1, 0), (0.5, -1, 0, 0.5), (1, 0, 1, 0), (2, 1, 2, 0), (4, 2, 3, 0), (8, 3, 3, 0), (100, 3, 3, 0), (-1, -1, -1, 0)]
+    let casOK = cas.allSatisfy { let c = Sharpen2D.cascades(radius: $0.0); return c.lo == $0.1 && c.hi == $0.2 && abs(c.weight - $0.3) < 1e-12 }
+    let mid = Sharpen2D.cascades(radius: 3)
+    check("SH7 the cascades are none, 0, 1, 2, 3 at radius 0, 1, 2, 4, 8, and in between blend the two nearest by log2", casOK && mid.lo == 1 && mid.hi == 2 && abs(mid.weight - (log2(3.0) - 1)) < 1e-12)
+    let sm = [0.2, 0.5, 0.8, 1.3, 2.5, 5.0, 8.0].map { Sharpen2D.apply(fx, width: fw, height: fh, amount: 1, radius: $0) }
+    let smDiffs = zip(sm, sm.dropFirst()).map { relErr($1, $0) }
+    check("SH7b every step of the radius slider changes the picture, below 1 px too (the preview's range)", smDiffs.allSatisfy { $0 > 1e-6 }, "\(smDiffs)")
     let near = Sharpen2D.apply(stepGrey, width: sw, height: sh, amount: 1, radius: 1)
     let nearErr = relErr([near[8 * sw + 10]], [stepGrey[8 * sw + 10]])
     check("SH7 at radius 1 the pixel ten from the edge is unchanged (\(nearErr))", nearErr < 1e-12, "\(nearErr)")

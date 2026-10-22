@@ -1121,7 +1121,7 @@ extension CIModule {
     /// in the working primaries): a saved edit made before shows the "maths changed" notice. The other modules (gains, curves, levels,
     /// the curves, levels) are per channel and did not move. `colorize` is a Core Image filter that weighs the channels, so it moved too (3: then Core Image's CIColorMonochrome became the OkLab tint mix).
     static let workingSpaceVersions: [String: Int] = [
-        "display": 3, "colorbalancergb": 2, "monochrome": 2, "splittoning": 2, "sharpen": 2, "bilat": 2, "atrous": 2,
+        "display": 3, "colorbalancergb": 2, "monochrome": 2, "splittoning": 2, "sharpen": 3, "bilat": 2, "atrous": 2,
         "denoiseprofile": 2, "hazeremoval": 2, "zones": 2, "colorize": 3,
         // not the working space: invert was Core Image's complement of the linear value and is now the complement of the encoded one
         "invert": 2,
