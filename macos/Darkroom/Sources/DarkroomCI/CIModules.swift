@@ -1150,7 +1150,9 @@ extension CIModule {
         // same: basecurve (CIGammaAdjust), dither (CIColorPosterize) and colorize (CIColorMonochrome) are now their own maths on the encoded value or in OkLab
         "basecurve": 2, "dither": 2,
         // same: blurs, lowpass, soften and censorize were Core Image filters (a Gaussian, a pixellate) and are now the box-cascade blur and the mosaic
-        "blurs": 2, "lowpass": 3, "soften": 2, "censorize": 2,
+        "blurs": 3, "lowpass": 4, "soften": 3, "censorize": 2,
+        // refine 5: the blur radius is fractional (it was rounded to whole box pixels, so every radius under about 4.5 px was 1 and the sliders were dead at preview scale)
+        "defringe": 2, "highpass": 2, "retouch": 2, "texturebands": 2,
     ]
 
     static let all: [CIModule] = (catalogue + [display] + geometryModules).map { module in

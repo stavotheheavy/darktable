@@ -75,7 +75,7 @@ extension CIBridge {
     }
 
     /// DarkroomCore.Highpass.apply: the encoded value minus its blur of `radius` per pass (0 is no blur), on mid-grey.
-    public static func highpass(_ image: CIImage, strength: Double, radius: Int) throws -> CIImage {
+    public static func highpass(_ image: CIImage, strength: Double, radius: Double) throws -> CIImage {
         let encoded = try combine([image], source: highpassSource, function: "hpEncodeTex", uniforms: [0])
         return try combine([image, try blur(encoded, radius: radius)], source: highpassSource, function: "hpMixTex", uniforms: [Float(strength)])
     }

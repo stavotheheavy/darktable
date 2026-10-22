@@ -19,7 +19,7 @@ public enum CloneSpot {
             let o = SIMD2(Int(((srcX - dstX) * Double(width - 1)).rounded()), Int(((srcY - dstY) * Double(height - 1)).rounded()))
             return (o, SIMD2(dstX * Double(width - 1), dstY * Double(height - 1)), max(radius * Double(height), 1))
         }
-        public func blurRadius(height: Int) -> Int { Blur.radius(px: radius * Double(height)) }
+        public func blurRadius(height: Int) -> Double { Blur.radius(px: radius * Double(height)) }
     }
 
     public static func apply(_ rgb: [SIMD3<Double>], width: Int, height: Int, spot: Spot) -> [SIMD3<Double>] {

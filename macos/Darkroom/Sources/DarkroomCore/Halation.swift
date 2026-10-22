@@ -13,7 +13,7 @@ public enum Halation {
         return m > 0 ? g / m : SIMD3(repeating: 1)
     }
 
-    public static func apply(_ rgb: [SIMD3<Double>], width: Int, height: Int, strength: Double, radius: Int, tint: SIMD3<Double>) -> [SIMD3<Double>] {
+    public static func apply(_ rgb: [SIMD3<Double>], width: Int, height: Int, strength: Double, radius: Double, tint: SIMD3<Double>) -> [SIMD3<Double>] {
         guard strength != 0 else { return rgb }
         let glow = Blur.apply(rgb.map { Bloom.bright($0) }, width: width, height: height, radius: radius)
         return rgb.indices.map { rgb[$0] + strength * tint * glow[$0] }

@@ -5,7 +5,7 @@
 import Foundation
 
 public enum LowPass {
-    public static func apply(_ rgb: [SIMD3<Double>], width: Int, height: Int, radius: Int) -> [SIMD3<Double>] {
+    public static func apply(_ rgb: [SIMD3<Double>], width: Int, height: Int, radius: Double) -> [SIMD3<Double>] {
         guard radius > 0 else { return rgb }
         let s = DetailCommon.sqrtLuminance(rgb, width: width, height: height)
         return DetailCommon.applying(sqrtLuminance: TextureBands.blurred(s, radius: radius), to: rgb)

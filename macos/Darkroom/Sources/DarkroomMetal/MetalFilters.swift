@@ -271,6 +271,16 @@ extension CIBridge {
         return try separable(image, reach: r, taps: [Float](repeating: 1 / Float(2 * r + 1), count: 2 * r + 1), step: 1)
     }
 
+    /// DarkroomCore.Filters.boxMean at a fractional radius r = n + f: the 2n + 1 whole taps plus the two outer taps weighted f, over 2r + 1.
+    public static func boxMean(_ image: CIImage, radius r: Double) throws -> CIImage {
+        guard r > 0 else { return image }
+        let n = Int(r.rounded(.down)), f = r - Double(n)
+        guard f > 1e-12 else { return try boxMean(image, radius: n) }
+        let reach = n + 1, norm = 2 * r + 1
+        let taps: [Float] = (-reach...reach).map { k in Float((abs(k) <= n ? 1 : f) / norm) }
+        return try separable(image, reach: reach, taps: taps, step: 1)
+    }
+
     /// DarkroomCore.Filters.atrousSmooth on every channel.
     public static func atrousSmooth(_ image: CIImage, level: Int) throws -> CIImage {
         let step = 1 << level

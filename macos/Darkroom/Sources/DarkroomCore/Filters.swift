@@ -59,6 +59,34 @@ public enum Filters {
         return out
     }
 
+    /// The mean over a window of fractional radius r = n + f: the (2n + 1) whole taps around each pixel plus the two taps at n + 1 weighted f, divided by 2r + 1.
+    /// A whole radius is exactly the integer overload, so a blur that was already whole keeps its picture.
+    public static func boxMean(_ p: Plane, radius r: Double) -> Plane {
+        guard r > 0 else { return p }
+        let n = Int(r.rounded(.down)), f = r - Double(n)
+        guard f > 1e-12 else { return boxMean(p, radius: n) }
+        let norm = 2 * r + 1
+        var rows = Plane(width: p.width, height: p.height, fill: 0)
+        for y in 0..<p.height {
+            for x in 0..<p.width {
+                var s = 0.0
+                for k in -n...n { s += p.at(x + k, y) }
+                s += f * (p.at(x - n - 1, y) + p.at(x + n + 1, y))
+                rows.values[y * p.width + x] = s / norm
+            }
+        }
+        var out = Plane(width: p.width, height: p.height, fill: 0)
+        for y in 0..<p.height {
+            for x in 0..<p.width {
+                var s = 0.0
+                for k in -n...n { s += rows.at(x, y + k) }
+                s += f * (rows.at(x, y - n - 1) + rows.at(x, y + n + 1))
+                out.values[y * p.width + x] = s / norm
+            }
+        }
+        return out
+    }
+
     /// The guided filter: smooths `input` while keeping the edges of `guide`. `eps` is the variance an edge needs to be kept
     /// (larger eps smooths across more). Self-guided (guide == input) it is edge-preserving smoothing.
     public static func guided(guide i: Plane, input p: Plane, radius r: Int, eps: Double) -> Plane {

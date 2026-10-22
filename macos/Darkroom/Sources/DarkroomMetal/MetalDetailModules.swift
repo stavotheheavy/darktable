@@ -40,7 +40,7 @@ extension CIBridge {
     """#
 
     /// DarkroomCore.Deconvolution.apply on the GPU.
-    public static func deconvolve(_ image: CIImage, radius: Int, iterations: Int, amount: Double) throws -> CIImage {
+    public static func deconvolve(_ image: CIImage, radius: Double, iterations: Int, amount: Double) throws -> CIImage {
         guard amount != 0, radius > 0, iterations > 0 else { return image }
         var estimate = image
         for _ in 0..<iterations {
@@ -145,7 +145,7 @@ extension CIBridge {
     """#
 
     /// DarkroomCore.Deband.apply on the GPU.
-    public static func deband(_ image: CIImage, radius: Int, threshold: Double, strength: Double) throws -> CIImage {
+    public static func deband(_ image: CIImage, radius: Double, threshold: Double, strength: Double) throws -> CIImage {
         guard strength != 0, radius > 0 else { return image }
         return try combine([image, try blur(image, radius: radius)], source: debandSource, function: "debandMixTex", uniforms: [Float(threshold), Float(strength)])
     }
@@ -201,7 +201,7 @@ extension CIBridge {
     // MARK: low-pass
 
     /// DarkroomCore.LowPass.apply on the GPU: the blurred square-root luminance given back as a gain.
-    public static func lowPass(_ image: CIImage, radius: Int) throws -> CIImage {
+    public static func lowPass(_ image: CIImage, radius: Double) throws -> CIImage {
         guard radius > 0 else { return image }
         return try applying(sqrtLuminance: try blur(try sqrtLuminance(image), radius: radius), to: image)
     }
@@ -228,7 +228,7 @@ extension CIBridge {
     """#
 
     /// DarkroomCore.Halation.apply on the GPU.
-    public static func halation(_ image: CIImage, strength: Double, radius: Int, tint: SIMD3<Double>) throws -> CIImage {
+    public static func halation(_ image: CIImage, strength: Double, radius: Double, tint: SIMD3<Double>) throws -> CIImage {
         guard strength != 0 else { return image }
         let bright = try combine([image], source: halationSource, function: "halBrightTex", uniforms: [Float(Bloom.kneeLow), Float(Bloom.kneeHigh)])
         let glow = try blur(bright, radius: radius)

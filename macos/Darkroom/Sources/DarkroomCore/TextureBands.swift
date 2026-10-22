@@ -7,7 +7,7 @@
 import Foundation
 
 public enum TextureBands {
-    public static func blurred(_ p: Plane, radius: Int) -> Plane {
+    public static func blurred(_ p: Plane, radius: Double) -> Plane {
         var out = p
         for _ in 0..<Blur.passes { out = Filters.boxMean(out, radius: radius) }
         return out

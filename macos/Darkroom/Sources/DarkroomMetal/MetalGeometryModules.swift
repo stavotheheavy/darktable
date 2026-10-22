@@ -105,7 +105,7 @@ extension CIBridge {
     """#
 
     /// DarkroomCore.TiltShift.apply on the GPU.
-    public static func tiltShift(_ image: CIImage, radius: Int, position: Double, angleDegrees: Double, bandWidth: Double, transition: Double, amount: Double) throws -> CIImage {
+    public static func tiltShift(_ image: CIImage, radius: Double, position: Double, angleDegrees: Double, bandWidth: Double, transition: Double, amount: Double) throws -> CIImage {
         guard amount != 0, radius > 0 else { return image }
         let ext = image.extent
         let blurred = try blur(image, radius: radius)
@@ -146,7 +146,7 @@ extension CIBridge {
     """#
 
     /// DarkroomCore.Defringe.apply on the GPU.
-    public static func defringe(_ image: CIImage, radius: Int, strength: Double, hueDegrees: Double, widthDegrees: Double) throws -> CIImage {
+    public static func defringe(_ image: CIImage, radius: Double, strength: Double, hueDegrees: Double, widthDegrees: Double) throws -> CIImage {
         guard strength != 0, radius > 0 else { return image }
         let luma = try combine([image], source: defringeSource, function: "defringeLumaTex", uniforms: [0])
         let p = Defringe.params(hueDegrees: hueDegrees, widthDegrees: widthDegrees).map { Float($0) }

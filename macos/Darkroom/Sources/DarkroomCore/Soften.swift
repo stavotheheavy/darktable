@@ -4,7 +4,7 @@
 import Foundation
 
 public enum Soften {
-    public static func apply(_ rgb: [SIMD3<Double>], width: Int, height: Int, strength: Double, radius: Int) -> [SIMD3<Double>] {
+    public static func apply(_ rgb: [SIMD3<Double>], width: Int, height: Int, strength: Double, radius: Double) -> [SIMD3<Double>] {
         guard strength != 0, radius > 0 else { return rgb }
         let blurred = Blur.apply(rgb, width: width, height: height, radius: radius)
         return rgb.indices.map { rgb[$0] + strength * (blurred[$0] - rgb[$0]) }

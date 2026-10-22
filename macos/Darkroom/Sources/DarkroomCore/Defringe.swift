@@ -12,7 +12,7 @@ public enum Defringe {
         MaskColour.params(["mask_hue": hueDegrees, "mask_hue_width": widthDegrees, "mask_chroma_min": chromaFloor, "mask_feather": feather])
     }
 
-    public static func apply(_ rgb: [SIMD3<Double>], width: Int, height: Int, radius: Int, strength: Double, hueDegrees: Double, widthDegrees: Double) -> [SIMD3<Double>] {
+    public static func apply(_ rgb: [SIMD3<Double>], width: Int, height: Int, radius: Double, strength: Double, hueDegrees: Double, widthDegrees: Double) -> [SIMD3<Double>] {
         guard strength != 0, radius > 0 else { return rgb }
         let y = rgb.map { v -> SIMD3<Double> in let l = ColorCommon.luminance(v); return SIMD3(l, l, l) }
         let yb = Blur.apply(y, width: width, height: height, radius: radius)

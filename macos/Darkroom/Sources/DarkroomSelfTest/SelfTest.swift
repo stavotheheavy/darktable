@@ -1012,6 +1012,9 @@ struct SelfTest {
             if let only, !only.contains(op) { continue }
             guard let schema = try? await engine.schema(for: op) else { continue }
             let group = groupOf[op] ?? "Other"
+            // DARKROOM_SWEEP_BASE=golden holds every other field at the golden setting instead of its default, so fields behind a gate (amount, strength) show their effect
+            let baseParams: [String: ParamValue] = ProcessInfo.processInfo.environment["DARKROOM_SWEEP_BASE"] == "golden"
+                ? (CIEngineProbe.goldenCases().first { $0.operation == op }?.stack.first?.params ?? [:]) : [:]
             for f in schema.fields {
                 var settings: [(String, ParamValue)] = []
                 switch f.kind {
@@ -1027,7 +1030,7 @@ struct SelfTest {
                     var flags: [String] = []
                     var line: String
                     do {
-                        let frame = try await engine.sessionRender(stack: [StackEntry(operation: op, params: [f.name: value])], scale: 1)
+                        let frame = try await engine.sessionRender(stack: [StackEntry(operation: op, params: baseParams.merging([f.name: value]) { $1 })], scale: 1)
                         let px = rgba(frame.image), luma = meanLuma(frame.image)
                         var clipped = 0, crushed = 0, ringSum = 0.0, ringN = 0.0, inSum = 0.0, inN = 0.0
                         if px.count == baseRGBA.count {
@@ -1044,7 +1047,7 @@ struct SelfTest {
                         if ringChange > 8, ringChange > 3 * max(inChange, 1) { flags.append("EDGE") }
                         if Double(clipped) / Double(w * h) > 0.35 { flags.append("CLIPPED") }
                         if Double(crushed) / Double(w * h) > 0.35 { flags.append("CRUSHED") }
-                        if inChange < 0.05, ringChange < 0.05 { flags.append("NO-CHANGE") }
+                        if inChange < 0.05, ringChange < 0.05, px.count == baseRGBA.count { flags.append("NO-CHANGE") }
                         try writePNG(frame.image, to: URL(fileURLWithPath: "\(dir)/\(f.name).\(label).png"))
                         line = String(format: "%@,%@,%@,%@,%@,%.0f,%.1f,%.1f,%.2f,%.2f,%.1f,%.1f,%@\n", group, op, f.name, label, "\(value)".replacingOccurrences(of: ",", with: ";"),
                                       frame.milliseconds, luma, luma - baseLuma, 100 * Double(clipped) / Double(w * h), 100 * Double(crushed) / Double(w * h),

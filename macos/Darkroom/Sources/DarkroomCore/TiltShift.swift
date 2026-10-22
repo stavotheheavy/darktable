@@ -14,7 +14,7 @@ public enum TiltShift {
         return amount * ColorCommon.smoothstep(0, transition, abs(d) - bandWidth / 2)
     }
 
-    public static func apply(_ rgb: [SIMD3<Double>], width: Int, height: Int, radius: Int, position: Double, angleDegrees: Double,
+    public static func apply(_ rgb: [SIMD3<Double>], width: Int, height: Int, radius: Double, position: Double, angleDegrees: Double,
                             bandWidth: Double, transition: Double, amount: Double) -> [SIMD3<Double>] {
         guard amount != 0, radius > 0 else { return rgb }
         let blurred = Blur.apply(rgb, width: width, height: height, radius: radius)

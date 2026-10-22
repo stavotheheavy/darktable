@@ -6,7 +6,7 @@
 import Foundation
 
 public enum Highpass {
-    public static func apply(_ rgb: [SIMD3<Double>], width: Int, height: Int, strength: Double, radius: Int) -> [SIMD3<Double>] {
+    public static func apply(_ rgb: [SIMD3<Double>], width: Int, height: Int, strength: Double, radius: Double) -> [SIMD3<Double>] {
         let encoded = rgb.map { v in SIMD3(enc(v.x), enc(v.y), enc(v.z)) }
         let blurred = Blur.apply(encoded, width: width, height: height, radius: radius)
         return rgb.indices.map { i in

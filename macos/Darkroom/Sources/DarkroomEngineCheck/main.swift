@@ -2039,6 +2039,35 @@ do {
     check("E-EDGE \(cases.count) gather modules after another module match their oracle over the whole 300 x 200 frame, borders included", bad.isEmpty, "\(bad)")
 }
 
+// E-RAD radius sliders work at preview scale: the blur radius was rounded to whole box pixels after the preview scaling, so every radius under about 4.5 px was 1 and a slider's
+// low and middle positions gave one identical picture. At scale 0.13 (an 800 px preview of a 6000 px photo) three radii must give three different pictures.
+do {
+    let bw = 300, bh = 200
+    var tex = [SIMD4<Float>](repeating: .zero, count: bw * bh)
+    for y in 0..<bh { for x in 0..<bw {
+        let fx = Float(x) / Float(bw), fy = Float(y) / Float(bh)
+        tex[y * bw + x] = SIMD4(0.3 + 0.2 * sin(Float(x) / 2) * cos(Float(y) / 3), 0.35 + 0.15 * sin(Float(x + y) / 4), 0.3 + 0.2 * fx * fy + 0.1 * cos(Float(x) / 5), 1)
+    } }
+    let ops: [(String, [String: Double])] = [
+        ("blurs", [:]), ("soften", ["strength": 1]), ("highpass", ["strength": 1]), ("lowpass", [:]),
+        ("deband", ["strength": 1, "threshold": 0.5]), ("deconvsharp", ["amount": 1, "iterations": 3]), ("tiltshift", ["amount": 1]),
+    ]
+    var same: [String] = []
+    for (op, fixed) in ops {
+        var renders: [[SIMD4<Float>]] = []
+        for radius in [2.0, 8.0, 40.0] {
+            let stack = [StackEntry(operation: op, params: fixed.merging(["radius": radius]) { $1 }.mapValues { .number($0) })]
+            guard let out = try? CIEngineProbe.renderSized(stack: stack, pixels: tex, width: bw, height: bh, scale: 0.13).pixels, out.count == tex.count else { same.append("\(op): no render"); break }
+            renders.append(out)
+        }
+        guard renders.count == 3 else { continue }
+        func diff(_ a: [SIMD4<Float>], _ b: [SIMD4<Float>]) -> Double { zip(a, b).reduce(0.0) { $0 + Double(abs($1.0.x - $1.1.x) + abs($1.0.y - $1.1.y) + abs($1.0.z - $1.1.z)) } / Double(3 * a.count) }
+        let d01 = diff(renders[0], renders[1]), d12 = diff(renders[1], renders[2]), d02 = diff(renders[0], renders[2])
+        if min(d01, d12, d02) < 2e-4 { same.append("\(op): \(d01) \(d12) \(d02)") }
+    }
+    check("E-RAD \(ops.count) radius sliders give three different pictures at three radii at preview scale 0.13", same.isEmpty, "\(same)")
+}
+
 // E-LPF low-pass (a blur of the tone, colour kept) and E-RLT fill light (shadhi's shadows), against their oracles with seams
 do {
     let lp = [StackEntry(operation: "lowpass", params: ["radius": .number(12)])]

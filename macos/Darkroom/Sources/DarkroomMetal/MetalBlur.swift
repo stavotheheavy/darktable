@@ -36,7 +36,7 @@ extension CIBridge {
     """#
 
     /// DarkroomCore.Blur.apply: three box means of `radius` pixels. Radius 0 returns the image.
-    public static func blur(_ image: CIImage, radius: Int) throws -> CIImage {
+    public static func blur(_ image: CIImage, radius: Double) throws -> CIImage {
         guard radius > 0 else { return image }
         var out = image
         for _ in 0..<Blur.passes { out = try boxMean(out, radius: radius) }
@@ -44,7 +44,7 @@ extension CIBridge {
     }
 
     /// DarkroomCore.Soften.apply: the image mixed `strength` of the way toward its blur.
-    public static func soften(_ image: CIImage, strength: Double, radius: Int) throws -> CIImage {
+    public static func soften(_ image: CIImage, strength: Double, radius: Double) throws -> CIImage {
         guard strength != 0, radius > 0 else { return image }
         return try combine([image, try blur(image, radius: radius)], source: softenSource, function: "softenMixTex", uniforms: [Float(strength)])
     }

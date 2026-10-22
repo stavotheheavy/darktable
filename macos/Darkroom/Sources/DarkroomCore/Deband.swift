@@ -8,7 +8,7 @@ import Foundation
 public enum Deband {
     static func enc(_ v: Double) -> Double { v.isNaN ? 0 : Transfer.linearToSRGB(min(max(v, 0), 1)) }
 
-    public static func apply(_ rgb: [SIMD3<Double>], width: Int, height: Int, radius: Int, threshold: Double, strength: Double) -> [SIMD3<Double>] {
+    public static func apply(_ rgb: [SIMD3<Double>], width: Int, height: Int, radius: Double, threshold: Double, strength: Double) -> [SIMD3<Double>] {
         guard strength != 0, radius > 0 else { return rgb }
         let blurred = Blur.apply(rgb, width: width, height: height, radius: radius)
         return rgb.indices.map { i in

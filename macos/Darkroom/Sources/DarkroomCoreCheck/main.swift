@@ -2432,8 +2432,17 @@ do {
     for i in b.indices { kept += b[i].x - dark.x }
     check("BLR4 the blur keeps the light: the sum of the differences is the dot's excess (2.8)", abs(kept - 2.8) < 1e-9, "\(kept)")
     check("BLR5 the blur is symmetric about the dot and falls away from it", near(at(b, 15, 20) - dark, at(b, 25, 20) - dark, 1e-12) && at(b, 20, 20).x > at(b, 22, 20).x && at(b, 22, 20).x > at(b, 24, 20).x)
-    check("BLR6 the slider radius sets the box radius: 30 px is 10, 1 px is the least, 0, negative and NaN are none",
-          Blur.radius(px: 30) == 10 && Blur.radius(px: 1) == 1 && Blur.radius(px: 0) == 0 && Blur.radius(px: -4) == 0 && Blur.radius(px: .nan) == 0)
+    check("BLR6 the slider radius sets the box radius, fractional: 30 px is 10, 1 px is a third, 0, negative and NaN are none",
+          Blur.radius(px: 30) == 10 && abs(Blur.radius(px: 1) - 1.0 / 3) < 1e-12 && Blur.radius(px: 0) == 0 && Blur.radius(px: -4) == 0 && Blur.radius(px: .nan) == 0)
+    let centre = { (r: Double) in at(Blur.apply(dot, width: w, height: h, radius: r), 20, 20).x }
+    check("BLR7 a whole fractional radius is exactly the integer blur", Blur.apply(dot, width: w, height: h, radius: 2.0) == b)
+    let c2 = centre(2), c25 = centre(2.5), c3 = centre(3)
+    check("BLR8 half a pixel more radius lies between its neighbours", c25 < c2 && c25 > c3, "\(c2) \(c25) \(c3)")
+    let cs = [0.2, 0.5, 0.9, 1.4, 2.3, 3.1, 4.6].map(centre)
+    check("BLR9 more radius never gives a sharper dot: every fractional step flattens it", zip(cs, cs.dropFirst()).allSatisfy { $0 > $1 }, "\(cs)")
+    var keptFrac = 0.0
+    for p in Blur.apply(dot, width: w, height: h, radius: 1.7) { keptFrac += p.x - dark.x }
+    check("BLR10 a fractional blur keeps the light too (2.8, within 1e-9)", abs(keptFrac - 2.8) < 1e-9, "\(keptFrac)")
 
     check("SOF1 strength 0 or radius 0 is the identity", Soften.apply(dot, width: w, height: h, strength: 0, radius: 2) == dot && Soften.apply(dot, width: w, height: h, strength: 1, radius: 0) == dot)
     let full = Soften.apply(dot, width: w, height: h, strength: 1, radius: 2)

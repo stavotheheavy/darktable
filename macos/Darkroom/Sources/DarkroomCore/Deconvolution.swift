@@ -9,7 +9,7 @@ import Foundation
 public enum Deconvolution {
     public static let floor = 1e-4, lowGain = 0.25, highGain = 4.0
 
-    public static func apply(_ rgb: [SIMD3<Double>], width: Int, height: Int, radius: Int, iterations: Int, amount: Double) -> [SIMD3<Double>] {
+    public static func apply(_ rgb: [SIMD3<Double>], width: Int, height: Int, radius: Double, iterations: Int, amount: Double) -> [SIMD3<Double>] {
         guard amount != 0, radius > 0, iterations > 0 else { return rgb }
         var u = rgb
         for _ in 0..<iterations {
