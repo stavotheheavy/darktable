@@ -253,13 +253,15 @@ public final class LibraryModel {
 public struct LibraryView: View {
     @Bindable var library: LibraryModel
     let open: (String) -> Void
+    var send: (() -> Void)?
     @State private var choosing = false
     @State private var comparing: String? { didSet { Rig.comparing = comparing != nil } }
     @FocusState private var focused: Bool
 
-    public init(library: LibraryModel, open: @escaping (String) -> Void) {
+    public init(library: LibraryModel, open: @escaping (String) -> Void, send: (() -> Void)? = nil) {
         self.library = library
         self.open = open
+        self.send = send
     }
 
     public var body: some View {
@@ -352,6 +354,12 @@ public struct LibraryView: View {
             Spacer()
 
             HStack(spacing: 8) {
+                if let send {
+                    Button { send() } label: { Label("Send to gallery", systemImage: "paperplane") }
+                        .buttonStyle(FlatCapsuleStyle())
+                        .help("Send photos to a client gallery on Databit Dev (\u{2325}\u{2318}G)")
+                        .rig("send-gallery")
+                }
                 Button { library.groupStacks.toggle() } label: { Label("Stacks", systemImage: "square.stack") }
                     .buttonStyle(FlatCapsuleStyle(on: library.groupStacks))
                     .rig("stacks-toggle")

@@ -38,6 +38,21 @@ not yet; cloud galleries come next) and **Sign out**.
 - The address is databitdev.com. To point Vantage at another copy (a test server), set the `DARKROOM_CLOUD_URL` environment
   variable before launching.
 
+## Send to gallery (signed in)
+
+Send photos to a client gallery on Databit Dev. In the library, press **Send to gallery** (or **⌥⌘G**, or use the account menu).
+A sheet shows the open folder. Photos you rejected start unticked; tick the rest, name the gallery and the client (the email is
+optional), and press Send.
+
+- Vantage makes a JPEG of each photo with your edits applied, up to 3000 pixels on the long side, and uploads it. The photo you
+  have open is not touched, and your RAW files never leave this Mac.
+- When it finishes the sheet shows the client's link and code. Databit Dev shows the code **once**; copy it then. Sending
+  again makes a new one.
+- If it stops half way (no network, storage full, the plan ended), the sheet says why. Press Send again: photos already up are
+  not sent twice.
+- Galleries need a Databit Dev plan with galleries. If you own several sites, the sheet asks which one.
+- The client picks on the web; seeing their picks inside Vantage comes next.
+
 ## Auto edit (both modes)
 
 The wand button in the header, or **A**. It looks at the photo and makes a fair starting edit, all as one step in History
@@ -202,3 +217,4 @@ The app's shortcuts live in one table (`Sources/DarkroomUI/Shortcuts.swift`). Th
 | F | Section: fold or unfold (`section-fold`) |
 | A | Auto edit: white balance, exposure, highlights, shadows (`auto-edit`) |
 | ⌥⌘U | Sign in to Databit Dev (`sign-in`) |
+| ⌥⌘G | Send photos to a client gallery (`send-gallery`) |

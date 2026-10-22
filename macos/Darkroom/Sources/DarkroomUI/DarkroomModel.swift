@@ -136,6 +136,8 @@ public final class DarkroomModel {
     public var cloudPro = false
     public var cloudBusy = false
     public var cloudMessage: String?
+    /// Bumped when something asks for the Send to gallery sheet (the key, the account menu); the window's root opens it.
+    public var galleryRequest = 0
     public var cloudStore: any CloudTokenStore = KeychainTokenStore()
     public var cloudClient = CloudClient(base: DarkroomModel.defaultCloudBase)
     /// How Pro's panel stacks its sections: the one switched on last at the top (the owner's history view), or in the
@@ -1129,6 +1131,18 @@ public final class DarkroomModel {
             status = "Export failed: \(error)"
         }
         requestRender()
+    }
+
+    /// A JPEG of the current edit, at most `maxSide` on its long side, for a gallery. False when it could not be made.
+    public func exportJPEG(to url: URL, maxSide: Int, quality: Double) async -> Bool {
+        guard let path = filePath else { return false }
+        do {
+            await shipRasters(for: buildStack())
+            let result = try await engine.exportRender(path: path, maxSide: maxSide, stack: buildStack())
+            guard let dest = CGImageDestinationCreateWithURL(url as CFURL, UTType.jpeg.identifier as CFString, 1, nil) else { return false }
+            CGImageDestinationAddImage(dest, result.image, [kCGImageDestinationLossyCompressionQuality: quality] as CFDictionary)
+            return CGImageDestinationFinalize(dest)
+        } catch { return false }
     }
 
     // MARK: helpers
