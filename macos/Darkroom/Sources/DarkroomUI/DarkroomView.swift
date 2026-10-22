@@ -52,11 +52,14 @@ public struct DarkroomView: View {
             // keyboard routes, every one from the registry (Shortcuts.swift): instant, because a key that is pressed
             // often should not animate
             Group {
-                ForEach(Shortcuts.all) { s in
+                ForEach(Shortcuts.all.filter { !$0.viaRouter }) { s in
                     Button("") { s.action(model) }.keyboardShortcut(s.shortcut)
                 }
             }
             .opacity(0).frame(width: 0, height: 0).allowsHitTesting(false)
+            .onAppear { KeyRouter.install(for: model) }
+
+            if model.helpShown { HelpOverlay(model: model).transition(.opacity) }
         }
         .overlayPreferenceValue(ProMenuAnchorKey.self) { anchors in
             // the open Pro dropdown, right under its header button; a click anywhere else, or Escape, closes it

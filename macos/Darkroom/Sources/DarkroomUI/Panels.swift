@@ -454,6 +454,8 @@ struct ParamRow: View {
         let current = model.value(module, field).double ?? 0
         let soft = SoftRange.range(operation: module.operation, field: field)
         HStack(spacing: 6) {
+            // the slider the arrow keys nudge (KeyboardNav.swift)
+            if model.isFocusedField(module, field) { Circle().fill(Theme.accent).frame(width: 6, height: 6).accessibilityHidden(true) }
             Text(field.label)
                 .font(.footnote)
                 .foregroundStyle(changed ? Theme.accent : Color.secondary)

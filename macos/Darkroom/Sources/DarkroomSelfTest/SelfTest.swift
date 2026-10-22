@@ -1,3 +1,4 @@
+import AppKit
 import CoreGraphics
 import CoreImage
 import DarkroomCore
@@ -1878,6 +1879,80 @@ struct SelfTest {
             Shortcuts.all.first { $0.id == "redo" }?.action(model)
             check(keyed == beforeKey + 1 && afterUndo == keyed - 1 && model.historyIndex == keyed, "PP6 the undo and redo shortcuts step History back and forward (\(beforeKey), \(keyed), \(afterUndo), \(model.historyIndex))")
             model.undo()
+            await model.settle()
+
+            // KB the keyboard suite: every shortcut is in a help group, the router reads keys, the arrow keys drive the panel
+            let grouped = Shortcuts.groups.flatMap { $0.shortcuts.map(\.id) }
+            check(Set(grouped) == Set(Shortcuts.all.map(\.id)) && grouped.count == Shortcuts.all.count,
+                  "KB1 every shortcut is in exactly one help group (\(grouped.count) of \(Shortcuts.all.count))")
+            func route(_ k: Character, _ f: NSEvent.ModifierFlags = []) -> String? { KeyRouter.match(key: k, flags: f)?.id }
+            check(route("?", .shift) == "help" && route("j") == "clipping" && route("\u{F703}") == "nudge-up"
+                  && route("\u{F703}", .shift) == "nudge-up-big" && route("\u{F702}", .option) == "nudge-down-fine"
+                  && route("\u{7F}") == "slider-reset" && route("[") == "slider-prev",
+                  "KB2 the router reads ?, letters, arrows with Shift and Option, Delete and brackets")
+            check(route("j", .command) == nil && route("c", .shift) == nil && route("z") == nil && route("\u{F703}", .control) == nil,
+                  "KB3 the router ignores Command keys, extra Shift and unknown keys")
+            model.mode = .pro
+            let exposure = entryWith("exposure")!
+            model.addToPanel(exposure)
+            await model.settle()
+            model.proOpen = []
+            model.focusEntryID = nil
+            let down = Shortcuts.all.first { $0.id == "panel-down" }!, up = Shortcuts.all.first { $0.id == "panel-up" }!
+            down.action(model)
+            let entries = model.proPanelEntries
+            check(model.focusEntryID == entries.first?.id && model.proOpen.contains(model.focusEntryID ?? "") && model.focusedField != nil,
+                  "KB4 Down focuses the first section, opens it and picks its first slider (\(model.focusedEntry?.name ?? "none"), \(model.focusedField?.field.name ?? "none"))")
+            // aim at exposure: it has a soft range of -4...4
+            model.focusEntryID = exposure.id
+            model.focusFieldName = "exposure"
+            let (em, ef) = model.focusedField!
+            let e0 = model.value(em, ef).double ?? 0
+            Shortcuts.all.first { $0.id == "nudge-up" }!.action(model)
+            let e1 = model.value(em, ef).double ?? 0
+            Shortcuts.all.first { $0.id == "nudge-up-big" }!.action(model)
+            let e2 = model.value(em, ef).double ?? 0
+            Shortcuts.all.first { $0.id == "nudge-down-fine" }!.action(model)
+            let e3 = model.value(em, ef).double ?? 0
+            check(abs((e1 - e0) - 0.08) < 1e-6 && abs((e2 - e1) - 0.8) < 1e-6 && abs((e3 - e2) + 0.008) < 1e-6,
+                  "KB5 Right nudges a hundredth of the range, Shift ten times that, Option a tenth (\(e0), \(e1), \(e2), \(e3))")
+            Shortcuts.all.first { $0.id == "slider-reset" }!.action(model)
+            check(abs((model.value(em, ef).double ?? 1) - (model.base(em, ef).double ?? 0)) < 1e-9, "KB6 Delete puts the slider back to its default")
+            let power0 = model.proEffectOn(exposure)
+            Shortcuts.all.first { $0.id == "section-power" }!.action(model)
+            check(model.proEffectOn(exposure) != power0, "KB7 E switches the focused section's effect")
+            Shortcuts.all.first { $0.id == "section-power" }!.action(model)
+            let open0 = model.proOpen.contains(exposure.id)
+            Shortcuts.all.first { $0.id == "section-fold" }!.action(model)
+            check(model.proOpen.contains(exposure.id) != open0, "KB8 F folds or unfolds the focused section")
+            // a section with several sliders: ] and [ walk them
+            if let many = model.proMenu.flatMap(\.entries).first(where: { e in
+                model.addToPanel(e); return model.focusableFields(e).count >= 2 }) {
+                model.focusEntryID = many.id
+                model.focusFieldName = model.focusableFields(many).first?.field.name
+                let first = model.focusFieldName
+                Shortcuts.all.first { $0.id == "slider-next" }!.action(model)
+                let nextField = model.focusFieldName
+                Shortcuts.all.first { $0.id == "slider-prev" }!.action(model)
+                check(nextField != first && model.focusFieldName == first, "KB9 ] and [ move between sliders (\(first ?? "none"), \(nextField ?? "none") in \(many.name))")
+            } else { check(false, "KB9 found no section with two sliders") }
+            up.action(model)
+            check(model.focusEntryID != nil, "KB10 Up keeps a section focused")
+            let helpKey = Shortcuts.all.first { $0.id == "help" }!, esc = Shortcuts.all.first { $0.id == "close-menu" }!
+            helpKey.action(model)
+            let shown = model.helpShown
+            esc.action(model)
+            check(shown && !model.helpShown, "KB11 ? opens the shortcut list and Esc closes it")
+            model.proMenuOpen = nil
+            Shortcuts.all.first { $0.id == "menu-history" }!.action(model)
+            let hOpen = model.proMenuOpen == .history
+            Shortcuts.all.first { $0.id == "menu-history" }!.action(model)
+            check(hOpen && model.proMenuOpen == nil, "KB12 H opens and closes History")
+            Shortcuts.all.first { $0.id == "zoom-100" }!.action(model)
+            let z = model.zoom
+            Shortcuts.all.first { $0.id == "zoom-fit" }!.action(model)
+            check(z == .actual && model.zoom == .fit, "KB13 the zoom keys set 100% and Fit")
+            model.undo(); model.undo(); model.undo(); model.undo()
             await model.settle()
 
             // PP7 a basic that is on by default: taking white balance out switches it off, and undo brings it back in and on
