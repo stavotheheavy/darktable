@@ -257,6 +257,22 @@ struct CIModule: Sendable {
         a["vignette"] = CIAlias(survivor: "radiallight", name: "vignetting") { p in
             ["exposure": num(Vignette.ev(strength: n(p, "strength", 0))), "x": num(0.5), "y": num(0.5), "size": num(Vignette.size(scale: n(p, "scale", 1))),
              "shape": num(1), "rotation": num(0), "feather": num(1), "outside": num(1)] }
+        a["soften"] = CIAlias(survivor: "blurs", name: "soften") { p in ["mode": .option("soft"), "strength": num(n(p, "strength", 0)), "radius": num(n(p, "radius", 4))] }
+        a["lowpass"] = CIAlias(survivor: "blurs", name: "lowpass (tone)") { p in ["mode": .option("tone"), "radius": num(n(p, "radius", 0))] }
+        a["bilateral"] = CIAlias(survivor: "surfaceblur", name: "bilateral filter") { p in
+            ["method": .option("bilateral"), "amount": num(n(p, "amount", 0)), "radius": num(n(p, "radius", 4)), "range": num(n(p, "range", 0.1))] }
+        a["diffuse"] = CIAlias(survivor: "surfaceblur", name: "diffuse (anisotropic)") { p in
+            ["method": .option("anisotropic"), "iterations": num(n(p, "iterations", 0)), "edge": num(n(p, "threshold", 0.1))] }
+        a["skinsmooth"] = CIAlias(survivor: "surfaceblur", name: "skin smoothing") { p in
+            ["method": .option("skin"), "amount": num(n(p, "amount", 0)), "radius": num(n(p, "radius", 10)), "hue": num(n(p, "hue", 55)), "width": num(n(p, "width", 35))] }
+        a["nlmeans"] = CIAlias(survivor: "denoiseprofile", name: "non-local means denoise") { p in
+            ["method": .option("nonlocal"), "amount": num(n(p, "amount", 0)), "strength": num(n(p, "strength", 0.06))] }
+        a["chromadenoise"] = CIAlias(survivor: "denoiseprofile", name: "chroma denoise") { p in
+            ["method": .option("colour"), "radius": num(n(p, "radius", 6)), "amount": num(n(p, "amount", 0))] }
+        a["deconvsharp"] = CIAlias(survivor: "sharpen", name: "deconvolution sharpen") { p in
+            ["method": .option("deconvolution"), "radius": num(n(p, "radius", 2)), "iterations": num(n(p, "iterations", 4)), "amount": num(n(p, "amount", 0))] }
+        a["texturebands"] = CIAlias(survivor: "bilat", name: "texture bands") { p in
+            ["method": .option("bands"), "radius": num(n(p, "radius", 6)), "detail": num(n(p, "amount", 0))] }
         a["shadhi"] = CIAlias(survivor: "zones", name: "shadows and highlights") { p in
             ["shadows": num(n(p, "shadows", 0) / Shadhi.sliderPerEV), "highlights": num(n(p, "highlights", 0) / Shadhi.sliderPerEV)] }
         return a
@@ -273,7 +289,7 @@ struct CIModule: Sendable {
     /// Modules that read a neighbourhood (a blur radius, a guided filter, wavelet levels): the expensive ones. The segment cache keeps
     /// the picture after each of them, so a slider moved further down the stack does not run them again.
     static let neighbourhoodOperations: Set<String> = [
-        "sharpen", "denoiseprofile", "bilat", "atrous", "hazeremoval", "zones", "clahe", "soften", "blurs", "lowpass", "censorize", "highpass", "hdrtone", "deconvsharp", "chromadenoise", "mediandenoise", "deband", "skinsmooth", "texturebands", "caradial", "distortion", "perspective", "tiltshift", "defringe", "surfaceblur", "lensblur", "motionblur", "radialblur", "diffuse", "kuwahara", "nlmeans", "bilateral", "emboss", "sketch", "halftone", "retouch", "bloom", "highlights",
+        "sharpen", "denoiseprofile", "bilat", "atrous", "hazeremoval", "zones", "clahe", "blurs", "censorize", "highpass", "hdrtone", "mediandenoise", "deband", "caradial", "distortion", "perspective", "tiltshift", "defringe", "surfaceblur", "lensblur", "motionblur", "radialblur", "kuwahara", "emboss", "sketch", "halftone", "retouch", "bloom", "highlights",
     ]
 
     /// The display-referred modules: they assume 0...1 values (a curve, levels, a contrast about 0.5, a lift of the shadows) and are
@@ -367,14 +383,22 @@ extension CIModule {
         // Two-dimensional unsharp mask on the square root of luminance: amount and the radius it works over.
         CIModule(
             operation: "sharpen", name: "sharpen", iopOrder: 30, defaultEnabled: false,
+            // method "unsharp": the unsharp mask on square-root luminance (E-SH); "deconvolution": the old deconvolution sharpen,
+            // Richardson-Lucy for `iterations` with a three-box point spread of `radius`, amount at most 1 (E-DCV). Each on its own kernel.
             fields: [
+                choice("method", "method", "unsharp", [("unsharp", 0, "unsharp mask"), ("deconvolution", 1, "deconvolution")]),
                 FieldSchema(name: "amount", description: "amount", kind: .float,
                             min: 0, max: 2, defaultValue: .number(0.4), options: []),
                 FieldSchema(name: "radius", description: "radius", kind: .float,
-                            min: 0.5, max: 8, defaultValue: .number(1.5), options: []),
+                            min: 0.5, max: 10, defaultValue: .number(1.5), options: []),
+                field("iterations", 1, 10, 4),
             ],
             apply: { image, v in
-                try CIBridge.sharpen2D(image, amount: v["amount"] ?? 0.4, radius: (v["radius"] ?? 1.5) * (v["_scale"] ?? 1))
+                if v["method"] == 1 {
+                    return try CIBridge.deconvolve(image, radius: Blur.radius(px: (v["radius"] ?? 2) * (v["_scale"] ?? 1)),
+                                                   iterations: Int((v["iterations"] ?? 4).rounded()), amount: min(v["amount"] ?? 0, 1))
+                }
+                return try CIBridge.sharpen2D(image, amount: v["amount"] ?? 0.4, radius: (v["radius"] ?? 1.5) * (v["_scale"] ?? 1))
             }),
 
         // Wavelet noise reduction: luminance and colour strength, each 0...1. Zero is off, and both zero is the identity
@@ -382,12 +406,21 @@ extension CIModule {
         CIModule(
             operation: "denoiseprofile", name: "noise reduction", iopOrder: 5,
             defaultEnabled: false,
+            // method "wavelet": wavelet shrinkage, luma and chroma strength (E-NR); "nonlocal": the old non-local means, `amount` and
+            // `strength` (E-NLM); "colour": the old chroma denoise, the colour planes smoothed by a luminance-guided window of `radius`
+            // (E-CDN). Each on its own kernel.
             fields: [
+                choice("method", "method", "wavelet", [("wavelet", 0, "wavelet"), ("nonlocal", 1, "non-local means"), ("colour", 2, "colour window")]),
                 field("luma", 0, 1, 0),
                 field("chroma", 0, 1, 0),
+                field("amount", 0, 1, 0), field("strength", 0.01, 0.3, 0.06), field("radius", 1, 30, 6),
             ],
             apply: { image, v in
-                try CIBridge.noiseReduction(image, luma: (v["luma"] ?? 0) * (v["_scale"] ?? 1), chroma: (v["chroma"] ?? 0) * (v["_scale"] ?? 1))
+                switch v["method"] {
+                case 1: return try CIBridge.nonLocalMeans(image, h: v["strength"] ?? 0.06, amount: v["amount"] ?? 0)
+                case 2: return try CIBridge.fractionalWindow(image, radius: (v["radius"] ?? 6) * (v["_scale"] ?? 1)) { img, n in try CIBridge.chromaDenoise(img, radius: n, amount: v["amount"] ?? 0) }
+                default: return try CIBridge.noiseReduction(image, luma: (v["luma"] ?? 0) * (v["_scale"] ?? 1), chroma: (v["chroma"] ?? 0) * (v["_scale"] ?? 1))
+                }
             }),
 
         // Tone curve: five nodes across the tonal range; the identity curve has each node at
@@ -459,17 +492,18 @@ extension CIModule {
         // Blur in DarkroomCore is the oracle (BLR1-BLR6, E-BLR in darkroom-engine-check).
         CIModule(
             operation: "blurs", name: "blurs", iopOrder: 48, defaultEnabled: false,
-            fields: [field("radius", 0, 50, 0)],
+            // mode "full": the three-box blur of the whole picture; "tone": the old lowpass, the blur of the tone only with colour kept
+            // (E-LP); "soft": the old soften, the picture mixed toward its own blur by strength (E-SOF). Each on its own kernel.
+            fields: [choice("mode", "mode", "full", [("full", 0, "whole picture"), ("tone", 1, "tone only"), ("soft", 2, "soft focus")]),
+                     field("radius", 0, 50, 0), field("strength", 0, 1, 1)],
             apply: { image, v in
-                try CIBridge.blur(image, radius: Blur.radius(px: (v["radius"] ?? 0) * (v["_scale"] ?? 1)))
+                let r = Blur.radius(px: (v["radius"] ?? 0) * (v["_scale"] ?? 1))
+                switch v["mode"] {
+                case 1: return try CIBridge.lowPass(image, radius: r)
+                case 2: return try CIBridge.soften(image, strength: v["strength"] ?? 1, radius: r)
+                default: return try CIBridge.blur(image, radius: r)
+                }
             }),
-
-        // Low-pass: a blur of the tone (the square-root luminance) given back as a gain, so colour detail survives (unlike `blurs`). LowPass in DarkroomCore is the oracle
-        // (LPS1-LPS5, E-LPF).
-        CIModule(
-            operation: "lowpass", name: "lowpass (tone)", iopOrder: 49, defaultEnabled: false,
-            fields: [field("radius", 0, 50, 0)],
-            apply: { image, v in try CIBridge.lowPass(image, radius: Blur.radius(px: (v["radius"] ?? 0) * (v["_scale"] ?? 1))) }),
 
         // Dither or posterize: the encoded value quantised to a number of levels per channel, no noise. Posterize in DarkroomCore is
         // the oracle (DTH1-DTH5, posterizeBuf in darkroom-metal-check, E-DTH in darkroom-engine-check).
@@ -485,14 +519,6 @@ extension CIModule {
             fields: [field("pixelation", 1, 100, 1)],
             apply: { image, v in
                 try CIBridge.mosaic(image, block: Mosaic.block(pixelation: v["pixelation"] ?? 1, scale: v["_scale"] ?? 1))
-            }),
-
-        // Soften: the picture mixed toward its own blur. Soften in DarkroomCore is the oracle (SOF1-SOF5, E-SOF).
-        CIModule(
-            operation: "soften", name: "soften", iopOrder: 62, defaultEnabled: false,
-            fields: [field("strength", 0, 1, 0), field("radius", 1, 30, 4)],
-            apply: { image, v in
-                try CIBridge.soften(image, strength: v["strength"] ?? 0, radius: Blur.radius(px: (v["radius"] ?? 4) * (v["_scale"] ?? 1)))
             }),
 
         // Colour zones: a hue shift, a saturation change and a lightness change for each of eight hue bands, blended smoothly
@@ -652,23 +678,6 @@ extension CIModule {
             fields: [field("contrast", -1, 1, 0), field("pivot", 0.2, 0.8, 0.5)],
             apply: { image, v in try CIModule.applyFused("scurve", image, v) }),
 
-        // Deconvolution sharpen: Richardson-Lucy with the three-box blur as the point spread function. Deconvolution in DarkroomCore is the oracle (DCV1-DCV5, E-DCV).
-        CIModule(
-            operation: "deconvsharp", name: "deconvolution sharpen", iopOrder: 70, defaultEnabled: false,
-            fields: [field("radius", 1, 10, 2), field("iterations", 1, 10, 4), field("amount", 0, 1, 0)],
-            apply: { image, v in
-                try CIBridge.deconvolve(image, radius: Blur.radius(px: (v["radius"] ?? 2) * (v["_scale"] ?? 1)),
-                                        iterations: Int((v["iterations"] ?? 4).rounded()), amount: v["amount"] ?? 0)
-            }),
-
-        // Chroma denoise: the OkLab a and b planes smoothed by a guided filter guided by luminance; lightness untouched. ChromaDenoise in DarkroomCore is the oracle (CDN1-CDN5, E-CDN).
-        CIModule(
-            operation: "chromadenoise", name: "chroma denoise", iopOrder: 7, defaultEnabled: false,
-            fields: [field("radius", 1, 30, 6), field("amount", 0, 1, 0)],
-            apply: { image, v in
-                try CIBridge.fractionalWindow(image, radius: (v["radius"] ?? 6) * (v["_scale"] ?? 1)) { img, n in try CIBridge.chromaDenoise(img, radius: n, amount: v["amount"] ?? 0) }
-            }),
-
         // Median denoise: each channel the median of its 3x3 or 5x5 neighbourhood. MedianDenoise in DarkroomCore is the oracle (MDN1-MDN5, E-MDN).
         CIModule(
             operation: "mediandenoise", name: "hot pixels (median)", iopOrder: 8, defaultEnabled: false,
@@ -682,23 +691,6 @@ extension CIModule {
             apply: { image, v in
                 try CIBridge.deband(image, radius: Blur.radius(px: (v["radius"] ?? 8) * (v["_scale"] ?? 1)), threshold: v["threshold"] ?? 0.01, strength: v["strength"] ?? 0)
             }),
-
-        // Skin smooth: an edge-aware smooth mixed in by a skin-hue matte. SkinSmooth in DarkroomCore is the oracle (SKS1-SKS5, E-SKS).
-        CIModule(
-            operation: "skinsmooth", name: "skin smoothing", iopOrder: 43, defaultEnabled: false,
-            fields: [field("amount", 0, 1, 0), field("radius", 2, 40, 10), field("hue", 0, 360, 55), field("width", 15, 90, 35)],
-            apply: { image, v in
-                try CIBridge.fractionalWindow(image, radius: (v["radius"] ?? 10) * (v["_scale"] ?? 1)) {
-                    img, n in try CIBridge.skinSmooth(img, radius: n, amount: v["amount"] ?? 0, hueDegrees: v["hue"] ?? 55, widthDegrees: v["width"] ?? 35)
-                }
-            }),
-
-        // Texture bands: a band-pass of the luminance (blur at the radius minus blur at three times it) added back as a gain. TextureBands in DarkroomCore is the
-        // oracle (TXB1-TXB5, E-TXB).
-        CIModule(
-            operation: "texturebands", name: "texture and clarity", iopOrder: 71, defaultEnabled: false,
-            fields: [field("radius", 2, 40, 6), field("amount", -1, 2, 0)],
-            apply: { image, v in try CIBridge.textureBands(image, radiusPixels: (v["radius"] ?? 6) * (v["_scale"] ?? 1), amount: v["amount"] ?? 0) }),
 
         // Lateral chromatic aberration: the red and blue channels scaled about the centre (percent of the radius; real lenses are a few hundredths), green fixed, bilinear.
         // `fill` (on by default) magnifies just enough that no edge pixel is repeated. Remap in DarkroomCore is the oracle (CAR1-CAR4, FIL1-FIL5, E-CAR).
@@ -750,9 +742,22 @@ extension CIModule {
         // Surface blur: an edge-preserving blur (guided filter guided by luminance) over the whole picture. SurfaceBlur in DarkroomCore is the oracle (SRB1-SRB4, E-SRB).
         CIModule(
             operation: "surfaceblur", name: "surface blur", iopOrder: 74, defaultEnabled: false,
-            fields: [field("amount", 0, 1, 0), field("radius", 1, 40, 8), field("threshold", 0.0005, 0.05, 0.004)],
+            // method "guided": the guided-filter surface blur (E-SBL); "bilateral": the old bilateral filter, spatial and range Gaussians
+            // (E-BIL; its window stays at most 10 px as the old module's was); "anisotropic": the old diffuse, Perona-Malik diffusion for
+            // `iterations` with `edge` as its threshold (E-DIF); "skin": the old skin smoothing, the smooth mixed in by a skin-hue matte
+            // (E-SKS). Each on its own kernel.
+            fields: [choice("method", "method", "guided", [("guided", 0, "guided"), ("bilateral", 1, "bilateral"), ("anisotropic", 2, "anisotropic"), ("skin", 3, "skin")]),
+                     field("amount", 0, 1, 0), field("radius", 1, 40, 8), field("threshold", 0.0005, 0.05, 0.004),
+                     field("range", 0.01, 0.5, 0.1), field("iterations", 0, 30, 0), field("edge", 0.01, 0.5, 0.1),
+                     field("hue", 0, 360, 55), field("width", 15, 90, 35)],
             apply: { image, v in
-                try CIBridge.surfaceBlur(image, radius: (v["radius"] ?? 8) * (v["_scale"] ?? 1), eps: v["threshold"] ?? 0.004, amount: v["amount"] ?? 0)
+                let radius = (v["radius"] ?? 8) * (v["_scale"] ?? 1)
+                switch v["method"] {
+                case 1: return try CIBridge.fractionalWindow(image, radius: min(radius, 10 * (v["_scale"] ?? 1))) { img, n in try CIBridge.bilateral(img, radius: n, range: v["range"] ?? 0.1, amount: v["amount"] ?? 0) }
+                case 2: return try CIBridge.diffuse(image, iterations: Int((v["iterations"] ?? 0).rounded()), threshold: v["edge"] ?? 0.1)
+                case 3: return try CIBridge.fractionalWindow(image, radius: radius) { img, n in try CIBridge.skinSmooth(img, radius: n, amount: v["amount"] ?? 0, hueDegrees: v["hue"] ?? 55, widthDegrees: v["width"] ?? 35) }
+                default: return try CIBridge.surfaceBlur(image, radius: radius, eps: v["threshold"] ?? 0.004, amount: v["amount"] ?? 0)
+                }
             }),
 
         // Lens blur: a disc blur with bright highlights spread into bokeh discs. LensBlur in DarkroomCore is the oracle (LNB1-LNB5, E-LNB).
@@ -777,12 +782,6 @@ extension CIModule {
                 try CIBridge.radialBlur(image, spin: (v["spin"] ?? 0) >= 0.5, amount: v["amount"] ?? 0, centreX: v["centre_x"] ?? 0.5, centreY: v["centre_y"] ?? 0.5)
             }),
 
-        // Diffusion: Perona-Malik anisotropic diffusion on the square root of the scene value. Diffusion in DarkroomCore is the oracle (DIF1-DIF5, E-DIF).
-        CIModule(
-            operation: "diffuse", name: "diffuse (anisotropic)", iopOrder: 78, defaultEnabled: false,
-            fields: [field("iterations", 0, 30, 0), field("threshold", 0.01, 0.5, 0.1)],
-            apply: { image, v in try CIBridge.diffuse(image, iterations: Int((v["iterations"] ?? 0).rounded()), threshold: v["threshold"] ?? 0.1) }),
-
         // Kuwahara: the painterly edge-preserving smoother. Kuwahara in DarkroomCore is the oracle (KUW1-KUW5, E-KUW).
         CIModule(
             operation: "kuwahara", name: "painterly (Kuwahara)", iopOrder: 79, defaultEnabled: false,
@@ -795,20 +794,6 @@ extension CIModule {
             operation: "selectivecolor", name: "selective colour", iopOrder: 30, defaultEnabled: false,
             fields: SelectiveColor.families.flatMap { f in SelectiveColor.inks.map { field("\(f)_\($0)", -1, 1, 0) } },
             apply: { image, v in try CIModule.applyFused("selectivecolor", image, v) }),
-
-        // Non-local means: the weighted mean of similar patches in a 7 x 7 window (Buades, Coll, Morel). NonLocalMeans in DarkroomCore is the oracle (NLM1-NLM5, E-NLM).
-        CIModule(
-            operation: "nlmeans", name: "non-local means denoise", iopOrder: 80, defaultEnabled: false,
-            fields: [field("amount", 0, 1, 0), field("strength", 0.01, 0.3, 0.06)],
-            apply: { image, v in try CIBridge.nonLocalMeans(image, h: v["strength"] ?? 0.06, amount: v["amount"] ?? 0) }),
-
-        // Bilateral filter: spatial and colour-range Gaussians (Tomasi and Manduchi). BilateralFilter in DarkroomCore is the oracle (BIL1-BIL5, E-BIL).
-        CIModule(
-            operation: "bilateral", name: "bilateral filter", iopOrder: 81, defaultEnabled: false,
-            fields: [field("amount", 0, 1, 0), field("radius", 1, 10, 4), field("range", 0.01, 0.5, 0.1)],
-            apply: { image, v in
-                try CIBridge.fractionalWindow(image, radius: (v["radius"] ?? 4) * (v["_scale"] ?? 1)) { img, n in try CIBridge.bilateral(img, radius: n, range: v["range"] ?? 0.1, amount: v["amount"] ?? 0) }
-            }),
 
         // Emboss: the directional derivative of the encoded luminance on mid-grey. Emboss in DarkroomCore is the oracle (EMB1-EMB5, E-EMB).
         CIModule(
@@ -864,9 +849,14 @@ extension CIModule {
         CIModule(
             operation: "bilat", name: "texture and clarity", iopOrder: 47,
             defaultEnabled: false,
-            fields: [field("detail", -1, 2, 0), field("radius", 1, 50, 10)],
+            // method "guided": local contrast on a guided-filter base (E-LC); "bands": the old texture bands, a band-pass of the luminance
+            // added back as a gain (E-TXB). Each on its own kernel.
+            fields: [choice("method", "method", "guided", [("guided", 0, "guided"), ("bands", 1, "texture bands")]),
+                     field("detail", -1, 2, 0), field("radius", 1, 50, 10)],
             apply: { image, v in
-                try CIBridge.localContrast(image, detail: v["detail"] ?? 0, radius: (v["radius"] ?? 10) * (v["_scale"] ?? 1))
+                let radius = (v["radius"] ?? 10) * (v["_scale"] ?? 1)
+                if v["method"] == 1 { return try CIBridge.textureBands(image, radiusPixels: radius, amount: v["detail"] ?? 0) }
+                return try CIBridge.localContrast(image, detail: v["detail"] ?? 0, radius: radius)
             }),
 
         // Contrast equalizer: wavelet gains on fine, medium and coarse detail of the square-root luminance.
@@ -1057,8 +1047,8 @@ extension CIModule {
     /// in the working primaries): a saved edit made before shows the "maths changed" notice. The other modules (gains, curves, levels,
     /// the curves, levels) are per channel and did not move. `colorize` is a Core Image filter that weighs the channels, so it moved too (3: then Core Image's CIColorMonochrome became the OkLab tint mix).
     static let workingSpaceVersions: [String: Int] = [
-        "display": 3, "colorbalancergb": 3, "monochrome": 3, "splittoning": 2, "sharpen": 3, "bilat": 2, "atrous": 2,
-        "denoiseprofile": 2, "hazeremoval": 2, "zones": 2,
+        "display": 3, "colorbalancergb": 3, "monochrome": 3, "splittoning": 2, "sharpen": 4, "bilat": 3, "atrous": 2,
+        "denoiseprofile": 3, "surfaceblur": 2, "hazeremoval": 2, "zones": 2,
         // not the working space: invert was Core Image's complement of the linear value and is now the complement of the encoded one
         "invert": 2,
         // merge wave 2 (2026-10-22): the survivors that grew the controls of a module folded into them
@@ -1068,8 +1058,8 @@ extension CIModule {
         "radialblur": 2,
         "clahe": 2,
         "dither": 2,
-        "blurs": 3, "lowpass": 4, "soften": 3, "censorize": 2,
-        "defringe": 2, "highpass": 2, "retouch": 3, "texturebands": 2,
+        "blurs": 4, "censorize": 2,
+        "defringe": 2, "highpass": 2, "retouch": 3, 
         "kuwahara": 2,
     ]
 

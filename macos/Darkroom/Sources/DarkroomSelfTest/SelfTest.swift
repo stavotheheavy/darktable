@@ -1332,9 +1332,12 @@ struct SelfTest {
 
         print("cancel")
         func bytes(_ image: CGImage?) -> Data? { image?.dataProvider?.data as Data? }
-        if let diffuse = module(model, "diffuse") {
+        if let diffuse = module(model, "surfaceblur") {
             model.select(diffuse)
             for _ in 0..<50 where model.schema(for: diffuse) == nil { try await Task.sleep(for: .milliseconds(20)) }
+            // the slow path is the old diffuse: surface blur's anisotropic method
+            if let method = field(model, diffuse, "method") { model.setParam(diffuse, method, to: .option("anisotropic")) }
+            await model.settle()
             if let it = field(model, diffuse, "iterations") {
                 let before = bytes(model.frame)
                 let canceled = model.canceledRenders
@@ -1356,6 +1359,9 @@ struct SelfTest {
                     await model.settle()
                 }
                 check(before != nil && bytes(model.frame) == before, "the frame after a canceled render is byte-identical to the one before")
+                // the method choice was a step of its own: take it back, so surface blur is not left edited for the checks that follow
+                model.undo()
+                await model.settle()
             } else { check(false, "diffuse has an iterations field") }
         } else if clean {
             skip("cancel of a slow render", "the clean engine has no slow module yet (no diffuse); test cancel again when M4 adds one")

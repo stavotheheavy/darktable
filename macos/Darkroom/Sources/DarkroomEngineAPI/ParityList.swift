@@ -40,7 +40,7 @@ public enum ParityList {
     """.split(whereSeparator: { $0 == " " || $0 == "\n" }).map(String.init)
 
     /// Modules of ours that darktable does not have under that name.
-    public static let ownModules: [String] = ["display", "graduated", "radiallight", "zones", "solarize", "gradientmap", "bleachbypass", "channelcurves", "chromalimit", "warmth", "highlightrolloff", "lumabands", "hdrtone", "lumacurve", "scurve", "deconvsharp", "chromadenoise", "mediandenoise", "deband", "skinsmooth", "texturebands", "caradial", "distortion", "perspective", "tiltshift", "surfaceblur", "lensblur", "motionblur", "radialblur", "kuwahara", "emboss", "sketch", "halftone", "selectivecolor"]
+    public static let ownModules: [String] = ["display", "graduated", "radiallight", "zones", "solarize", "gradientmap", "bleachbypass", "channelcurves", "chromalimit", "warmth", "highlightrolloff", "lumabands", "hdrtone", "lumacurve", "scurve", "mediandenoise", "deband", "caradial", "distortion", "perspective", "tiltshift", "surfaceblur", "lensblur", "motionblur", "radialblur", "kuwahara", "emboss", "sketch", "halftone", "selectivecolor"]
 
     public static let entries: [ParityEntry] = {
         func e(_ op: String, _ s: ParityStatus, _ note: String = "") -> ParityEntry { ParityEntry(operation: op, status: s, note: note) }
@@ -60,15 +60,15 @@ public enum ParityList {
             e("atrous", .exact, "contrast equalizer: three groups of wavelet scales"), e("denoiseprofile", .exact, "wavelet shrinkage; no camera noise profiles"),
             e("hazeremoval", .exact), e("flip", .exact), e("ashift", .exact, "rotate and straighten only"), e("crop", .exact),
             // Core Image stand-ins
-            e("basecurve", .covered(by: "rgblevels"), "folded into rgblevels (merge 2026-10-22); an old edit still renders exactly through it"), e("colorize", .covered(by: "gradientmap"), "folded into gradientmap (merge 2026-10-22); an old edit still renders exactly through it"), e("blurs", .exact, "three box means in a row, a Gaussian-like blur at any radius"), e("lowpass", .exact, "a low-pass of the tone: the blurred square-root luminance given back as a gain, colour detail kept; darktable's low-pass has more settings"),
-            e("dither", .exact, "posterize: the encoded value quantised to N levels per channel, no noise"), e("censorize", .exact, "a mosaic: each block of the chosen size shows its centre pixel"), e("soften", .exact, "the picture mixed toward its own blur"), e("rgbcurve", .covered(by: "tonecurve"), "folded into tonecurve (merge 2026-10-22); an old edit still renders exactly through it"),
+            e("basecurve", .covered(by: "rgblevels"), "folded into rgblevels (merge 2026-10-22); an old edit still renders exactly through it"), e("colorize", .covered(by: "gradientmap"), "folded into gradientmap (merge 2026-10-22); an old edit still renders exactly through it"), e("blurs", .exact, "three box means in a row, a Gaussian-like blur at any radius"), e("lowpass", .covered(by: "blurs"), "folded into blurs (merge 2026-10-22) as a method; an old edit still renders exactly through it"),
+            e("dither", .exact, "posterize: the encoded value quantised to N levels per channel, no noise"), e("censorize", .exact, "a mosaic: each block of the chosen size shows its centre pixel"), e("soften", .covered(by: "blurs"), "folded into blurs (merge 2026-10-22) as a method; an old edit still renders exactly through it"), e("rgbcurve", .covered(by: "tonecurve"), "folded into tonecurve (merge 2026-10-22); an old edit still renders exactly through it"),
             e("relight", .covered(by: "lumabands"), "folded into lumabands (merge 2026-10-22); an old edit still renders exactly through it"), e("colorcontrast", .covered(by: "colorbalancergb"), "folded into colorbalancergb (merge 2026-10-22); an old edit still renders exactly through it"),
             e("colorcorrection", .covered(by: "colorbalancergb"), "folded into colorbalancergb (merge 2026-10-22); an old edit still renders exactly through it"), e("clahe", .exact, "contrast limited adaptive histogram equalisation on a tile grid (Zuiderveld), luminance given back as a gain"),
             // the job is done by something we have
             e("filmicrgb", .covered(by: "display"), "the scene-referred display transform is the tone mapper"),
             e("sigmoid", .covered(by: "display")), e("agx", .covered(by: "display")),
             e("graduatednd", .covered(by: "masks"), "a gradient mask on exposure"),
-            e("bilateral", .exact, "the bilateral filter: spatial and colour-range Gaussians on the square root of the scene value"), e("nlmeans", .exact, "non-local means: the weighted mean of similar 3 x 3 patches in a 7 x 7 window"),
+            e("bilateral", .covered(by: "surfaceblur"), "folded into surfaceblur (merge 2026-10-22) as a method; an old edit still renders exactly through it"), e("nlmeans", .covered(by: "denoiseprofile"), "folded into denoiseprofile (merge 2026-10-22) as a method; an old edit still renders exactly through it"),
             e("contrastntexture", .covered(by: "atrous")), 
             // wanted, not built (roughly in order of value to a photographer)
             e("toneequal", .covered(by: "zones")),
@@ -76,7 +76,7 @@ public enum ParityList {
             e("colorequal", .covered(by: "colorzones")),
             e("colorzones", .exact, "eight hue bands, each with a hue shift, a saturation change and a lightness change in OkLab, blended smoothly between neighbours; greys untouched"), e("satcurvergb", .exact, "saturation by lightness: shadows, mids and highlights each get a saturation change, blended smoothly over OkLab lightness"),
             e("lut3d", .planned("Core Image CIColorCube is the natural base")), e("grain", .exact, "lattice value noise from the pixel position with a midtone weight, neutral on all channels; repeatable for a seed"), e("lowlight", .exact, "a Purkinje-shift model: dim parts mixed toward a cool scotopic grey; a model, not a measured transform"),
-            e("highpass", .exact, "the encoded value minus its three-box blur, on mid-grey: the base of a high-pass sharpen"), e("diffuse", .exact, "Perona-Malik anisotropic diffusion on the square root of the scene value (denoising and smoothing; the sharpening presets of darktable are not built)"),
+            e("highpass", .exact, "the encoded value minus its three-box blur, on mid-grey: the base of a high-pass sharpen"), e("diffuse", .covered(by: "surfaceblur"), "folded into surfaceblur (merge 2026-10-22) as a method; an old edit still renders exactly through it"),
             e("retouch", .exact, "one spot per instance, cloned or healed by frequency separation (the destination's low frequencies, the source's detail); no PatchMatch fill"), e("liquify", .exact, "one bulge or pinch warp per instance; no warp mesh"),
             e("lens", .planned("lens correction needs our own calibration tool, not lensfun data")), e("colorchecker", .planned()),
             e("cacorrectrgb", .covered(by: "caradial"), "darktable detects the aberration; ours is a manual radial correction"), e("colorreconstruct", .planned("highlight colour reconstruction")),
@@ -113,12 +113,8 @@ public enum ParityList {
             e("distortion", .exact, "not a darktable module: Brown's radial lens distortion polynomial, bilinear, manual coefficients"),
             e("perspective", .exact, "not a darktable module: a keystone as a plane projective map, bilinear"),
             e("tiltshift", .exact, "not a darktable module: a sharp band across the frame and a wide blur beyond it"),
-            e("deconvsharp", .exact, "not a darktable module: Richardson-Lucy deconvolution with a three-box blur as the point spread function"),
-            e("chromadenoise", .exact, "not a darktable module: the OkLab a and b planes smoothed by a luminance-guided filter; lightness untouched"),
             e("mediandenoise", .exact, "not a darktable module: each channel the median of its 3x3 or 5x5 neighbourhood: hot pixels and impulse noise"),
             e("deband", .exact, "not a darktable module: smooth gradients replaced by their blur, edges kept"),
-            e("skinsmooth", .exact, "not a darktable module: an edge-aware smooth mixed in by a skin-hue matte"),
-            e("texturebands", .exact, "not a darktable module: a band-pass of the luminance added back as a gain: texture, and clarity at a larger radius"),
             e("highlightrolloff", .exact, "not a darktable module: a tanh shoulder on scene luminance above a knee, colour ratios kept"),
             e("lumabands", .exact, "not a darktable module: an exposure change by the pixel's own luminance in five bands (the cheap cousin of zones)"),
             e("hdrtone", .exact, "not a darktable module: base and detail dynamic range compression with the guided filter base, as in Durand and Dorsey"),

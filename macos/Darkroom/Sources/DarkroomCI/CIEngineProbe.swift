@@ -144,7 +144,16 @@ public enum CIEngineProbe {
         "chromalimit": ["limit": 0.1],
         "highlightrolloff": ["white": 1, "knee": 0.4, "amount": 1],
         "deband": ["radius": 9, "threshold": 0.05, "strength": 1],
-        "skinsmooth": ["amount": 1, "radius": 8, "hue": 140, "width": 90],
+        "surfaceblur-skin": ["amount": 1, "radius": 8, "hue": 140, "width": 90],
+        "surfaceblur-anisotropic": ["iterations": 6, "edge": 0.1],
+        "blurs-soft": ["radius": 6, "strength": 0.8],
+        "blurs-tone": ["radius": 6],
+        "denoiseprofile-nonlocal": ["amount": 1, "strength": 0.1],
+        "denoiseprofile-colour": ["amount": 1, "radius": 6],
+        "sharpen-deconvolution": ["amount": 1, "radius": 2, "iterations": 4],
+        "bilat-bands": ["detail": 1, "radius": 6],
+        "bloom-film": ["strength": 1, "size": 20, "hue": 25],
+        "highlightrolloff-reinhard": ["white": 4, "amount": 1],
         "zones": ["shadows": 1.2, "highlights": -1, "blacks": 0.5, "z_p1": 0.4, "scale": 0.1],
         "graduated": ["exposure": -1.2, "position": 0.45, "angle": -70, "feather": 0.4],
         // the fixture's corner patch (3.2, 2.6, 1.9) is clipped in some channels at this level
@@ -164,8 +173,8 @@ public enum CIEngineProbe {
     /// One stack per catalogue module for the golden-image suite (T11): the module on, every float field moved halfway
     /// from its default to the end of its range that is further away. Derived from the schema, so a module that is added
     /// has a golden case without anyone writing one. Geometry modules change the picture's size and have their own checks.
-    public static func goldenCases() -> [(operation: String, version: Int, stack: [StackEntry])] {
-        CIModule.all.filter { !$0.geometry }.sorted { $0.operation < $1.operation }.map { m in
+    public static func goldenCases() -> [(operation: String, variant: String, version: Int, stack: [StackEntry])] {
+        CIModule.all.filter { !$0.geometry }.sorted { $0.operation < $1.operation }.flatMap { m -> [(operation: String, variant: String, version: Int, stack: [StackEntry])] in
             var params: [String: ParamValue] = [:]
             for f in m.fields where f.kind == .float || f.kind == .int {
                 let d = f.defaultValue.double ?? 0
@@ -174,9 +183,18 @@ public enum CIEngineProbe {
                 if f.kind == .int { v = v.rounded() }
                 params[f.name] = .number(v)
             }
-            // schema-derived settings can make a module a no-op on the small fixture (a haze patch as wide as the frame)
-            for (name, value) in Self.goldenOverrides[m.operation] ?? [:] { params[name] = .number(value) }
-            return (m.operation, m.algorithmVersion, [StackEntry(operation: m.operation, params: params)])
+            // a module with a choice (a method, a mode) gets one case per option: the default option keeps the plain name, the
+            // others are "<op>-<option>", so the maths a folded module brought in keeps a golden of its own
+            let choices = m.fields.filter { $0.kind == .enumeration }
+            let variants: [(name: String, params: [String: ParamValue])] = choices.isEmpty ? [("", [:])]
+                : choices.flatMap { f in f.options.map { o in (o.name == f.defaultValue.option ? "" : o.name, [f.name: ParamValue.option(o.name)]) } }
+            return variants.map { variant in
+                var p = params.merging(variant.params) { $1 }
+                // schema-derived settings can make a module a no-op on the small fixture (a haze patch as wide as the frame)
+                let key = variant.name.isEmpty ? m.operation : "\(m.operation)-\(variant.name)"
+                for (name, value) in Self.goldenOverrides[key] ?? Self.goldenOverrides[m.operation] ?? [:] { p[name] = .number(value) }
+                return (m.operation, variant.name, m.algorithmVersion, [StackEntry(operation: m.operation, params: p)])
+            }
         }
     }
 

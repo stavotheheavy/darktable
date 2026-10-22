@@ -54,6 +54,15 @@ how many were folded.
 | shadows and highlights | zone exposure | shadows, highlights (a slider of 100 is 2 EV) |
 | halation | bloom | glow: film halation, with size and hue |
 | vignetting | radial light | a centred circle, outside, feather 1; strength 1 is -2 EV |
+| soften | blurs | mode: soft focus, with strength |
+| lowpass (tone) | blurs | mode: tone only |
+| bilateral filter | surface blur | method: bilateral, with range |
+| diffuse (anisotropic) | surface blur | method: anisotropic, with iterations and edge |
+| skin smoothing | surface blur | method: skin, with hue and width |
+| non-local means denoise | noise reduction | method: non-local means, with amount and strength |
+| chroma denoise | noise reduction | method: colour window, with radius and amount |
+| deconvolution sharpen | sharpen | method: deconvolution, with iterations |
+| texture bands | texture and clarity | method: texture bands |
 
 Ten others only changed name: color balance (OkLab) is *contrast and saturation*; color balance (shadows, mids,
 highlights) is *lift, gamma, gain*; rgb levels is *levels*; highlight roll-off is *highlight compression*; channel mixer

@@ -1303,21 +1303,22 @@ do {
     var cases = 0, rewritten = 0
     for c in CIEngineProbe.goldenCases() {
         cases += 1
-        let file = dir.appendingPathComponent("\(c.operation).v\(c.version).f16")
+        let tag = c.variant.isEmpty ? c.operation : "\(c.operation)-\(c.variant)"
+        let file = dir.appendingPathComponent("\(tag).v\(c.version).f16")
         let got = runDetail(c.stack)
         guard got.count == detailW * detailH, got.allSatisfy({ $0.x.isFinite && $0.y.isFinite && $0.z.isFinite }) else {
             check("T11 \(c.operation) v\(c.version) renders a finite frame of the input's size (\(got.count) pixels, wanted \(detailW * detailH))", false); continue
         }
         if update { try? store(got).write(to: file); rewritten += 1; continue }
         guard let data = try? Data(contentsOf: file), data.count == detailW * detailH * 6 else {
-            check("T11 \(c.operation) v\(c.version) has a golden image (run --update-goldens after reviewing the change)", false, file.lastPathComponent)
+            check("T11 \(tag) v\(c.version) has a golden image (run --update-goldens after reviewing the change)", false, file.lastPathComponent)
             continue
         }
         let want = load(data)
         let eEnc = worst(got, want, oracleEncoded: false), eLin = worstLinear(got, want)
-        check("T11 \(c.operation) v\(c.version) renders as its golden image", eEnc < tol && eLin < 5e-3, "encoded \(eEnc), linear \(eLin)")
+        check("T11 \(tag) v\(c.version) renders as its golden image", eEnc < tol && eLin < 5e-3, "encoded \(eEnc), linear \(eLin)")
         let moved = worstLinear(detailPx, want)
-        check("T11 \(c.operation)'s golden case really changes the picture", moved > 1e-3 || c.operation == "display", "\(moved)")
+        check("T11 \(tag)'s golden case really changes the picture", moved > 1e-3 || c.operation == "display", "\(moved)")
     }
     if update { print("wrote \(rewritten) golden images to \(dir.path)"); exit(0) }
     check("T11 the suite covers every catalogue module (\(cases) cases)", cases >= 30, "\(cases)")
@@ -2027,7 +2028,9 @@ do {
         ("lensblur", ["amount": 1, "radius": 12, "highlights": 2], LensBlur.apply(src, width: bw, height: bh, radius: 12, boost: 2, amount: 1)),
         ("kuwahara", ["amount": 1, "radius": 5], Kuwahara.apply(src, width: bw, height: bh, radius: 5, amount: 1)),
         ("bilateral", ["amount": 1, "radius": 6, "range": 0.1], BilateralFilter.apply(src, width: bw, height: bh, radius: 6, range: 0.1, amount: 1)),
-        ("nlmeans", ["amount": 1, "strength": 0.08], NonLocalMeans.apply(src, width: bw, height: bh, h: 0.08, amount: 1)),
+        // non-local means is noise reduction's method since the merge of 2026-10-22, so it runs before the exposure (iopOrder 5): the
+        // oracle sees the unexposed frame and the gain comes after
+        ("nlmeans", ["amount": 1, "strength": 0.08], NonLocalMeans.apply(big.map { SIMD3(Double($0.x), Double($0.y), Double($0.z)) }, width: bw, height: bh, h: 0.08, amount: 1).map { $0 * gain }),
         ("motionblur", ["length": 20, "angle": 30], MotionBlur.apply(src, width: bw, height: bh, length: 20, angleDegrees: 30)),
         ("diffuse", ["iterations": 6, "threshold": 0.1], Diffusion.apply(src, width: bw, height: bh, iterations: 6, threshold: 0.1)),
         ("radialblur", ["amount": 1, "spin": 0], RadialBlur.apply(src, width: bw, height: bh, spin: false, amount: 1, centreX: 0.5, centreY: 0.5)),

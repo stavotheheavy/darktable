@@ -494,7 +494,7 @@ public final class DarkroomModel {
         "monochrome": [("filter_hue", "filter_strength", 0.5), ("filter_hue", "intensity", 1), ("filter_strength", "intensity", 1)],
         "gradientmap": [("*", "strength", 0.5), ("mids_hue", "mids_sat", 0.5)],
         "warmth": [("hue", "density", 0.5), ("preserve", "density", 0.5)],
-        "skinsmooth": [("*", "amount", 0.5)],
+        "surfaceblur": [("hue", "amount", 0.5), ("width", "amount", 0.5), ("range", "amount", 0.5)],
         "bloom": [("*", "strength", 0.5)],
         "defringe": [("*", "strength", 0.5)],
     ]
