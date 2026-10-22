@@ -56,7 +56,7 @@ public enum ParityList {
             e("vignette", .exact, "a circular surround darkening: radial light turned inside out, feathered over its whole radius"),
             e("shadhi", .exact, "shadows and highlights: the zone exposure's two controls, a slider of 100 is 2 EV"),
             e("bloom", .exact, "the highlights above a soft luminance knee, blurred by three box means and added back"),
-            e("splittoning", .exact), e("sharpen", .exact), e("bilat", .exact, "local contrast"),
+            e("splittoning", .exact), e("sharpen", .exact), e("bilat", .exact, "texture and clarity (was local contrast)"),
             e("atrous", .exact, "contrast equalizer: three groups of wavelet scales"), e("denoiseprofile", .exact, "wavelet shrinkage; no camera noise profiles"),
             e("hazeremoval", .exact), e("flip", .exact), e("ashift", .exact, "rotate and straighten only"), e("crop", .exact),
             // Core Image stand-ins

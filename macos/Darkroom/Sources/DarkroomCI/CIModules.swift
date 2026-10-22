@@ -274,7 +274,7 @@ extension CIModule {
         // Contrast and Color sliders write. ColorBalance in DarkroomCore is the oracle, and the
         // per-pixel kernel is checked against it (darkroom-engine-check E-CB).
         CIModule(
-            operation: "colorbalancergb", name: "color balance (OkLab)", iopOrder: 25,
+            operation: "colorbalancergb", name: "contrast and saturation", iopOrder: 25,
             defaultEnabled: false,
             fields: [
                 FieldSchema(name: "vibrance", description: "vibrance", kind: .float,
@@ -386,7 +386,7 @@ extension CIModule {
 
         // Monochrome: black and white with a colour filter. Intensity 0 leaves the image unchanged; greys stay grey.
         CIModule(
-            operation: "monochrome", name: "monochrome", iopOrder: 45,
+            operation: "monochrome", name: "black and white", iopOrder: 45,
             defaultEnabled: false,
             fields: [field("intensity", 0, 1, 0), field("filter_hue", 0, 360, 30), field("filter_strength", 0, 1, 0)],
             // DarkroomCore's Monochrome on the oracle-checked per-pixel kernel (darkroom-engine-check E-MO)
@@ -441,7 +441,7 @@ extension CIModule {
         // Levels: black, grey and white points on the encoded value, one kernel per pixel. Checked by
         // LV1-LV5 (darkroom-core-check), the levels Metal check (darkroom-metal-check) and E-LV (darkroom-engine-check).
         CIModule(
-            operation: "rgblevels", name: "rgb levels", iopOrder: 33,
+            operation: "rgblevels", name: "levels", iopOrder: 33,
             defaultEnabled: false,
             fields: [field("black", 0, 0.5, 0), field("grey", 0.1, 0.9, 0.5), field("white", 0.5, 1, 1)],
             apply: { image, v in try CIModule.applyFused("rgblevels", image, v) }),
@@ -472,7 +472,7 @@ extension CIModule {
         // Dither or posterize: the encoded value quantised to a number of levels per channel, no noise. Posterize in DarkroomCore is
         // the oracle (DTH1-DTH5, posterizeBuf in darkroom-metal-check, E-DTH in darkroom-engine-check).
         CIModule(
-            operation: "dither", name: "dither or posterize", iopOrder: 60,
+            operation: "dither", name: "posterize", iopOrder: 60,
             defaultEnabled: false,
             fields: [field("levels", 2, 64, 64)],
             apply: { image, v in try CIModule.applyFused("dither", image, v) }),
@@ -515,7 +515,7 @@ extension CIModule {
         // the highlights (slope), on scene-linear values. LiftGammaGain in DarkroomCore is the oracle (LG1-LG7 in darkroom-core-check,
         // lggBuf in darkroom-metal-check, E-LG in darkroom-engine-check).
         CIModule(
-            operation: "colorbalance", name: "color balance (shadows, mids, highlights)", iopOrder: 21,
+            operation: "colorbalance", name: "lift, gamma, gain", iopOrder: 21,
             defaultEnabled: false,
             fields: ["shadows", "mids", "highlights"].flatMap { r in
                 [field("\(r)_hue", 0, 360, 0), field("\(r)_sat", 0, 1, 0), field("\(r)_lum", -1, 1, 0)]
@@ -624,7 +624,7 @@ extension CIModule {
 
         // Highlight roll-off: a tanh shoulder on scene luminance above a knee, colour ratios kept. HighlightRolloff in DarkroomCore is the oracle (HRO1-HRO5, E-HRO).
         CIModule(
-            operation: "highlightrolloff", name: "highlight roll-off", iopOrder: 27, defaultEnabled: false,
+            operation: "highlightrolloff", name: "highlight compression", iopOrder: 27, defaultEnabled: false,
             fields: [field("white", 0.5, 8, 1), field("knee", 0.3, 0.95, 0.7), field("amount", 0, 1, 0)],
             apply: { image, v in try CIModule.applyFused("highlightrolloff", image, v) }),
 
@@ -688,7 +688,7 @@ extension CIModule {
 
         // Median denoise: each channel the median of its 3x3 or 5x5 neighbourhood. MedianDenoise in DarkroomCore is the oracle (MDN1-MDN5, E-MDN).
         CIModule(
-            operation: "mediandenoise", name: "median denoise", iopOrder: 8, defaultEnabled: false,
+            operation: "mediandenoise", name: "hot pixels (median)", iopOrder: 8, defaultEnabled: false,
             fields: [field("radius", 1, 2, 1), field("amount", 0, 1, 0)],
             apply: { image, v in try CIBridge.medianDenoise(image, radius: Int((v["radius"] ?? 1).rounded()), amount: v["amount"] ?? 0) }),
 
@@ -894,7 +894,7 @@ extension CIModule {
         // Local contrast: a guided filter on square-root luminance, so the boost stops at strong edges (no halos).
         // LocalContrast in DarkroomCore is the oracle, and the GPU path is checked against it (darkroom-engine-check E-LC).
         CIModule(
-            operation: "bilat", name: "local contrast", iopOrder: 47,
+            operation: "bilat", name: "texture and clarity", iopOrder: 47,
             defaultEnabled: false,
             fields: [field("detail", -1, 2, 0), field("radius", 1, 50, 10)],
             apply: { image, v in
@@ -1101,7 +1101,7 @@ extension CIModule {
                                  defaultValue: .option("ORIENTATION_NULL"), options: orientations)],
             apply: { image, _ in image })
         var straighten = CIModule(
-            operation: "ashift", name: "rotate and straighten", iopOrder: 95, defaultEnabled: false,
+            operation: "ashift", name: "straighten", iopOrder: 95, defaultEnabled: false,
             fields: [field("rotation", -45, 45, 0),
                      FieldSchema(name: "cropmode", description: "automatic cropping", kind: .enumeration, min: 0, max: 0,
                                  defaultValue: .option("ASHIFT_CROP_LARGEST"), options: cropModes),
