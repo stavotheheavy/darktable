@@ -7,11 +7,11 @@ import UniformTypeIdentifiers
 
 /// What a mask layer is: painted with the brush, or found by Vision.
 public enum MaskLayerKind: String, Codable, Sendable, CaseIterable {
-    case brush, subject, person, face, eyes, lips
+    case brush, subject, person, face, eyes, lips, animal, object
 
     public init(_ vision: VisionMasks.Kind) { self = MaskLayerKind(rawValue: vision.rawValue) ?? .subject }
     public var vision: VisionMasks.Kind? { VisionMasks.Kind(rawValue: rawValue) }
-    public var title: String { rawValue }
+    public var title: String { vision?.title ?? rawValue }
 }
 
 /// A painted or detected mask of one photo. A module's blend refers to it by `mask_raster = "<id>.<revision>"`: a brush layer's

@@ -24,6 +24,27 @@ the category's rows on the right. The top shows what you picked last.
 A merged module (one with a *method*, *mode*, *glow* or *curve* switch) shows the controls of the chosen method only. Pick
 another method and its own controls appear.
 
+## Auto edit (both modes)
+
+The wand button in the header, or **A**. It looks at the photo and makes a fair starting edit, all as one step in History
+(one undo takes it all back):
+
+- **White balance:** the same measurement as the Auto button next to white balance.
+- **Exposure:** the middle of the picture toward a comfortable brightness. If Vantage finds a face, the face is what it
+  brightens for. It will not push the brightest part into clipping to get there.
+- **Highlights and shadows:** pulled back only when a visible share of the picture is clipped or crushed.
+- **Contrast and colour:** a little contrast when the picture is flat, and a little colour.
+
+It moves Simple's own controls, so you see what it did in Simple's sliders or in Pro's panel, and can change any of it. Run it
+again and it measures what you have now, so a photo that is already right is left alone. Every move is capped.
+
+## Finding things in the picture (masks)
+
+The Masks category in the library finds, with Apple's Vision framework on this Mac (nothing is sent anywhere): the **subject**,
+**person**, **face**, **eyes**, **lips**, **animal** (cats and dogs) and **objects**. Vision has no recogniser for things in
+general, so *objects* means the things that stand out from the background, other than people and animals. *Animal* is the
+cut-out of the cat or dog; if nothing can be cut out around it, a soft oval over where Vision saw it.
+
 ## The crop tool (Pro)
 
 Crop is a tool, not a module. It has its own button in the header, next to Undo and Redo, and a key: **C**. It opens a
@@ -165,3 +186,4 @@ The app's shortcuts live in one table (`Sources/DarkroomUI/Shortcuts.swift`). Th
 | ⌫ | Slider: back to its default (`slider-reset`) |
 | E | Section: switch its effect on or off (`section-power`) |
 | F | Section: fold or unfold (`section-fold`) |
+| A | Auto edit: white balance, exposure, highlights, shadows (`auto-edit`) |

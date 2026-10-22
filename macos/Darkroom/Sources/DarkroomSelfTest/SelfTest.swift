@@ -1987,6 +1987,33 @@ struct SelfTest {
             model.undo(); model.undo(); model.undo(); model.undo()
             await model.settle()
 
+            // AE Auto edit: the judgement on pictures of known brightness, then on the real photo as one history step
+            func flat(_ v: Float, spread: Float = 0.45) -> [Float] { (0..<4096).map { v - spread / 2 + spread * Float($0 % 64) / 63 } }
+            let dark = AutoEdit.plan(luma: flat(0.15), faceLuma: nil), bright = AutoEdit.plan(luma: flat(0.85, spread: 0.3), faceLuma: nil)
+            let fair = AutoEdit.plan(luma: flat(0.44, spread: 0.85), faceLuma: nil)
+            check(dark.lightStops > 0.3 && bright.lightStops < -0.3 && abs(fair.lightStops) < 0.1,
+                  "AE1 a dark picture is lifted, a bright one lowered and a fair one left (\(dark.lightStops), \(bright.lightStops), \(fair.lightStops))")
+            let faceDark = AutoEdit.plan(luma: flat(0.45, spread: 0.85), faceLuma: 0.2)
+            check(faceDark.lightStops > 0.3 && faceDark.forFace && abs(fair.lightStops) < 0.1, "AE2 a dark face lifts the exposure of a fair picture (\(faceDark.lightStops))")
+            let clippedPlan = AutoEdit.plan(luma: flat(0.97, spread: 0.1) + flat(0.3), faceLuma: nil)
+            check(clippedPlan.highlights < 0, "AE3 a picture with clipped highlights gets highlights pulled back (\(clippedPlan.highlights))")
+            let before = model.historyIndex
+            await model.autoEdit()
+            await model.settle()
+            let moved = model.history[model.historyIndex].edits != model.history[before].edits
+            check(model.historyIndex == before + 1 && model.history[model.historyIndex].label == "Auto edit" && !model.autoEditing && moved,
+                  "AE4 Auto edit on the photo is one history step that changes the edit (\(before) to \(model.historyIndex), changed \(moved)): \(model.history[model.historyIndex].detail)")
+            model.undo()
+            await model.settle()
+            check(model.historyIndex == before, "AE5 one undo takes Auto edit back")
+            // the new finders run on the real photo without failing (a picture without a cat or objects answers nil)
+            if let preview = EmbeddedPreview.read(path: path, maxSide: 800) {
+                for kind in [VisionMasks.Kind.animal, .object] {
+                    do { let p = try VisionMasks.detect(kind, in: preview); check(p == nil || p!.coverage > 0, "AE6 the \(kind.title) finder runs (\(p.map { String(format: "%.1f%% covered", $0.coverage * 100) } ?? "none found"))") }
+                    catch { check(false, "AE6 the \(kind.title) finder threw \(error)") }
+                }
+            }
+
             // PP7 a basic that is on by default: taking white balance out switches it off, and undo brings it back in and on
             // (catches a removal that leaves the module applied, or a removed basic coming straight back)
             let wb = entryWith("temperature")!

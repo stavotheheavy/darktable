@@ -24,6 +24,8 @@ public enum Shortcuts {
                  shortcut: KeyboardShortcut("z", modifiers: [.command])) { $0.undo() },
         Shortcut(id: "redo", title: "Redo the edit you undid", keys: "\u{2318}\u{21E7}Z",
                  shortcut: KeyboardShortcut("z", modifiers: [.command, .shift])) { $0.redo() },
+        Shortcut(id: "auto-edit", title: "Auto edit: white balance, exposure, highlights, shadows", keys: "A",
+                 shortcut: KeyboardShortcut("a", modifiers: [])) { m in Task { await m.autoEdit() } },
         Shortcut(id: "hide-ui", title: "Hide or show the panels", keys: "\u{2318}\u{21E7}H",
                  shortcut: KeyboardShortcut("h", modifiers: [.command, .shift])) { $0.uiHidden.toggle() },
         Shortcut(id: "original", title: "Hold to compare with the original (press again to return)", keys: "\u{2318}\\",
@@ -92,7 +94,7 @@ public enum Shortcuts {
 
     /// The help overlay's groups, by shortcut id. `--ui` fails when a shortcut is in no group.
     static let groupIDs: [(title: String, ids: [String])] = [
-        ("Edit", ["undo", "redo", "original", "crop-tool"]),
+        ("Edit", ["undo", "redo", "auto-edit", "original", "crop-tool"]),
         ("The panel (Pro)", ["panel-up", "panel-down", "slider-prev", "slider-next", "nudge-down", "nudge-up",
                              "nudge-down-big", "nudge-up-big", "nudge-down-fine", "nudge-up-fine", "slider-reset",
                              "section-power", "section-fold", "all-on", "all-off", "panel-order"]),

@@ -129,6 +129,8 @@ public final class DarkroomModel {
     public var focusFieldName: String?
     /// The `?` overlay listing every shortcut.
     public var helpShown = false
+    /// Auto edit is working (AutoEdit.swift).
+    public private(set) var autoEditing = false
     /// How Pro's panel stacks its sections: the one switched on last at the top (the owner's history view), or in the
     /// order the engine applies them (masks and geometry read better that way). Remembered across launches.
     public private(set) var proPanelOrder: ProPanelOrder =
@@ -1162,5 +1164,50 @@ public final class DarkroomModel {
             parts.append(t >= 1 ? String(format: "%.1f s", t) : "1/\(Int((1 / t).rounded()))")
         }
         return parts.joined(separator: " · ")
+    }
+}
+
+// MARK: Auto edit (the judgement is AutoEdit.swift; this is in the model's file for its private state)
+
+extension DarkroomModel {
+    /// Auto edit: white balance from the scene, then exposure (for a face when there is one), highlights, shadows, contrast and a
+    /// little colour from a look at a small render. All of it is one step in History.
+    public func autoEdit() async {
+        guard let path = filePath, !autoEditing else { return }
+        autoEditing = true
+        defer { autoEditing = false }
+        let start = historyIndex
+        await autoWhiteBalance()
+        // the whole frame, before any crop, with what the edits so far do to the colour
+        let entries = stack(for: edits).filter { !Self.geometryOperations.contains($0.operation) }
+        guard let frame = try? await engine.render(path: path, maxSide: 640, stack: entries),
+              let (luma, w, h) = AutoEdit.luma(of: frame.image) else { status = "Auto edit could not read the picture"; return }
+        var face: Double?
+        if filePath == path {
+            let preview = EmbeddedPreview.read(path: path, maxSide: 1200) ?? frame.image
+            if let mask = try? await Task.detached(priority: .userInitiated, operation: { try VisionMasks.detect(.face, in: preview) }).value {
+                face = AutoEdit.meanLuma(luma, width: w, height: h, under: mask)
+            }
+        }
+        guard filePath == path else { return }
+        let plan = AutoEdit.plan(luma: luma, faceLuma: face)
+        // Simple's controls write the modules; moves add to what is there, and colour only ever comes up to its floor
+        func add(_ c: SimpleControl, _ d: Double) { if d != 0 { setSimple(c, to: simpleValue(c) + d) } }
+        add(.light, plan.lightStops / 2 * 100)
+        add(.highlights, plan.highlights)
+        add(.shadows, plan.shadows)
+        add(.contrast, plan.contrast)
+        if simpleValue(.color) < plan.color { setSimple(.color, to: plan.color) }
+        collapseHistory(from: start, label: "Auto edit", target: "auto-edit")
+        status = "Auto edit: " + plan.summary
+    }
+
+    /// Folds the steps after `start` into one.
+    func collapseHistory(from start: Int, label: String, target: String) {
+        guard historyIndex > start else { return }
+        let last = history[historyIndex]
+        history.removeSubrange((start + 1)...historyIndex)
+        history.append(HistoryItem(label: label, detail: last.detail, edits: last.edits, target: target, time: Date()))
+        historyIndex = history.count - 1
     }
 }
