@@ -1849,6 +1849,27 @@ struct SelfTest {
             ctrl?.action(model)
             check(model.proMenuOpen == nil, "PP6 and closes it")
 
+            // the crop box on the photo: the tool shows the frame before the crop, a drag writes the crop, closing shows the crop
+            let beforeBox = model.historyIndex
+            model.setCrop(CropRect(left: 0.1, top: 0.2, right: 0.6, bottom: 0.9))
+            model.setCrop(CropRect(left: 0.1, top: 0.2, right: 0.6, bottom: 0.9))
+            await model.settle()
+            let cropW = model.frame?.width ?? 0, cropH = model.frame?.height ?? 0
+            check(abs(Double(cropW) - 0.5 * Double(fullW)) <= 2 && abs(Double(cropH) - 0.7 * Double(fullH)) <= 2,
+                  "PP6 a crop box of 0.5 x 0.7 crops the frame to it (\(cropW)x\(cropH) from \(fullW)x\(fullH))")
+            check(model.historyIndex == beforeBox + 1, "PP6 a drag on the box is one history step")
+            model.proMenuOpen = .crop
+            await model.settle()
+            check(model.cropEditing && model.frame?.width == fullW && model.frame?.height == fullH
+                  && model.cropRect == CropRect(left: 0.1, top: 0.2, right: 0.6, bottom: 0.9),
+                  "PP6 with the tool open the canvas shows the whole frame and the box keeps its crop (\(model.frame?.width ?? 0)x\(model.frame?.height ?? 0))")
+            model.proMenuOpen = nil
+            await model.settle()
+            check(!model.cropEditing && model.frame?.width == cropW && model.frame?.height == cropH,
+                  "PP6 closing the tool shows the crop again (\(model.frame?.width ?? 0)x\(model.frame?.height ?? 0))")
+            model.resetGeometry()
+            await model.settle()
+
             // PP7 a basic that is on by default: taking white balance out switches it off, and undo brings it back in and on
             // (catches a removal that leaves the module applied, or a removed basic coming straight back)
             let wb = entryWith("temperature")!

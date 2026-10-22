@@ -123,6 +123,23 @@ extension DarkroomModel {
     }
     public var geometryEdited: Bool { Self.simpleGeometryOperations.compactMap { module($0) }.contains(where: isEdited) }
 
+    /// The crop as fractions of the frame straighten and flip leave: the box the canvas draws while the crop tool is open.
+    public var cropRect: CropRect {
+        guard let m = module("crop"), isEnabled(m) else { return .full }
+        return CropRect(left: geometryNumber("crop", "cx") ?? 0, top: geometryNumber("crop", "cy") ?? 0,
+                        right: geometryNumber("crop", "cw") ?? 1, bottom: geometryNumber("crop", "ch") ?? 1)
+    }
+
+    /// Sets the crop box from a drag on the photo. A drag is one history step (`grouped` merges the repeated target).
+    public func setCrop(_ r: CropRect) {
+        grouped("Crop", target: "crop.drag") {
+            writeGeometry("crop", "cx", .number(r.left))
+            writeGeometry("crop", "cy", .number(r.top))
+            writeGeometry("crop", "cw", .number(r.right))
+            writeGeometry("crop", "ch", .number(r.bottom))
+        }
+    }
+
     // MARK: helpers
 
     /// The frame straighten and flip leave for these settings, before the crop, at scale 1.

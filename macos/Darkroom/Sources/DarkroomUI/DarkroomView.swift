@@ -125,6 +125,7 @@ struct PhotoView: View {
                         .position(x: r.midX, y: r.midY)
                         .accessibilityLabel("Photo")
                         .rig("photo")
+                    if model.cropEditing { CropOverlay(model: model, photo: r) }
                 } else {
                     Text(model.status)
                         .font(.title3)
