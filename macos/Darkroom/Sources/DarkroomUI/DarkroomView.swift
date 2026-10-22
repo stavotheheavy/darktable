@@ -57,7 +57,7 @@ public struct DarkroomView: View {
                 }
             }
             .opacity(0).frame(width: 0, height: 0).allowsHitTesting(false)
-            .onAppear { KeyRouter.install(for: model) }
+            .onAppear { KeyRouter.install(for: model); Task { await model.refreshCloud() } }
 
             if model.helpShown { HelpOverlay(model: model).transition(.opacity) }
         }
@@ -335,6 +335,8 @@ struct TopBar: View {
             Button { model.redo() } label: { Image(systemName: "arrow.uturn.forward").frame(width: 44, height: 44).contentShape(Rectangle()) }
                 .buttonStyle(.plain).disabled(!model.canRedo)
                 .accessibilityLabel("Redo").rig("redo")
+
+            AccountMenu(model: model)
 
             BackdropMenu(model: model)
 

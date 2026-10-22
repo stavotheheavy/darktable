@@ -131,6 +131,13 @@ public final class DarkroomModel {
     public var helpShown = false
     /// Auto edit is working (AutoEdit.swift).
     public private(set) var autoEditing = false
+    /// Databit Dev sign-in (CloudAccount.swift): who is signed in, whether Pro is on, and the last thing worth telling the user.
+    public var cloudUser: CloudUser?
+    public var cloudPro = false
+    public var cloudBusy = false
+    public var cloudMessage: String?
+    public var cloudStore: any CloudTokenStore = KeychainTokenStore()
+    public var cloudClient = CloudClient(base: DarkroomModel.defaultCloudBase)
     /// How Pro's panel stacks its sections: the one switched on last at the top (the owner's history view), or in the
     /// order the engine applies them (masks and geometry read better that way). Remembered across launches.
     public private(set) var proPanelOrder: ProPanelOrder =
