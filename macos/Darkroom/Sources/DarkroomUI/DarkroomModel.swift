@@ -206,6 +206,9 @@ public final class DarkroomModel {
     public var brushSoftness = 0.5
     public var brushFlow = 1.0
     public var brushErase = false
+    /// What the photo's drag draws while a module's mask is being drawn: the brush or one of the shapes.
+    public var paintTool: MaskLayerKind = .brush
+    public var shapeFeather = 0.4
     /// What a running detection is doing ("Finding the subject…"), or nil.
     public private(set) var maskBusy: String?
     private var rasterCache: [String: MaskPicture] = [:]
@@ -679,6 +682,7 @@ public final class DarkroomModel {
         let layer = MaskLayer(id: Self.newLayerID(), name: "brush \(n)", kind: .brush)
         maskLayers.append(layer)
         attach(layer, rev: 0, to: m, detail: "mask: brush")
+        paintTool = .brush
         paintModuleID = m.id
         maskShowID = m.id
     }
@@ -688,6 +692,34 @@ public final class DarkroomModel {
         guard let layer = maskLayer(for: m), layer.kind == .brush, let i = maskLayers.firstIndex(where: { $0.id == layer.id }) else { return }
         maskLayers[i].strokes = Array(layer.strokes.prefix(strokeCount(m))) + [stroke]
         attach(maskLayers[i], rev: maskLayers[i].strokes.count, to: m, detail: stroke.erase ? "erase" : "brush stroke")
+    }
+
+    /// A line for the status bar from another file (the setter is private to this one).
+    func say(_ text: String) { status = text }
+
+    /// Starts drawing a lasso, linear or radial selection for the module; the layer is made when the drag ends.
+    public func startShape(_ k: MaskLayerKind, for m: ModuleInfo) {
+        guard k.shape != nil else { return }
+        paintTool = k
+        paintModuleID = m.id
+        maskShowID = m.id
+        status = canPaint ? "Draw the \(k.title) on the photo" : "Reset the crop and the zoom to draw: selections go on the uncropped picture"
+    }
+
+    /// A selection the drag drew (points normalised on the shown picture): a new layer on the module, shown while drawing.
+    public func drawShape(_ points: [CGPoint]) {
+        guard let id = paintModuleID, let m = modules.first(where: { $0.id == id }), canPaint, let shape = paintTool.shape else { return }
+        let p = points.map { SIMD2(min(max(Double($0.x), 0), 1), min(max(Double($0.y), 0), 1)) }
+        let enough = shape == .lasso ? p.count >= 3 : (p.count >= 2 && hypot(p[0].x - p[p.count - 1].x, p[0].y - p[p.count - 1].y) > 0.01)
+        guard enough else { return }
+        let ends = shape == .lasso ? p : [p[0], p[p.count - 1]]
+        let n = maskLayers.filter { $0.kind == paintTool }.count + 1
+        var layer = MaskLayer(id: Self.newLayerID(), name: "\(paintTool.title) \(n)", kind: paintTool)
+        layer.points = ends.flatMap { [$0.x, $0.y] }
+        layer.feather = shapeFeather
+        maskLayers.append(layer)
+        attach(layer, rev: 0, to: m, detail: "mask: \(paintTool.title)")
+        maskShowID = m.id
     }
 
     /// A stroke from points on the shown picture (normalised 0...1, y down) with the current brush.
@@ -733,7 +765,13 @@ public final class DarkroomModel {
         let parts = ref.split(separator: ".", maxSplits: 1).map(String.init)
         guard parts.count == 2, let layer = maskLayers.first(where: { $0.id == parts[0] }) else { return nil }
         let made: MaskPicture?
-        if layer.kind == .brush {
+        if let shape = layer.kind.shape, let flat = layer.points {
+            let aspect = info.map { Double($0.processedWidth) / Double(max($0.processedHeight, 1)) } ?? 1.5
+            let size = Brush.rasterSize(aspect: aspect)
+            let pts = stride(from: 0, to: flat.count - 1, by: 2).map { SIMD2(flat[$0], flat[$0 + 1]) }
+            let r = MaskShapes.rasterize(shape, points: pts, feather: layer.feather ?? 0.4, width: size.width, height: size.height, id: ref)
+            made = MaskPicture(id: ref, width: r.width, height: r.height, pixels: r.pixels)
+        } else if layer.kind == .brush {
             let rev = max(0, min(Int(parts[1]) ?? 0, layer.strokes.count))
             let aspect = info.map { Double($0.processedWidth) / Double(max($0.processedHeight, 1)) } ?? 1.5
             let size = Brush.rasterSize(aspect: aspect)

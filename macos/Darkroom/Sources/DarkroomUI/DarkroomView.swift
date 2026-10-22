@@ -176,16 +176,31 @@ struct PhotoView: View {
         }
     }
 
-    /// The brush stroke under the finger, white and soft, until it is committed.
+    /// What is being drawn under the finger until it is committed: the brush stroke (white, soft), or the shape's outline.
     @ViewBuilder private func liveStroke(_ r: CGRect) -> some View {
         if !live.isEmpty {
-            let width = model.brushRadius * hypot(r.width, r.height) * 2
-            Path { p in
-                let pts = live.map { CGPoint(x: $0.x - r.minX, y: $0.y - r.minY) }
-                p.move(to: pts[0])
-                if pts.count == 1 { p.addLine(to: pts[0]) } else { p.addLines(Array(pts.dropFirst())) }
+            let pts = live.map { CGPoint(x: $0.x - r.minX, y: $0.y - r.minY) }
+            let tool = model.paintTool
+            Group {
+                if tool == .brush {
+                    let width = model.brushRadius * hypot(r.width, r.height) * 2
+                    Path { p in
+                        p.move(to: pts[0])
+                        if pts.count == 1 { p.addLine(to: pts[0]) } else { p.addLines(Array(pts.dropFirst())) }
+                    }
+                    .stroke(Color.white.opacity(model.brushErase ? 0.25 : 0.55), style: StrokeStyle(lineWidth: width, lineCap: .round, lineJoin: .round))
+                } else {
+                    Path { p in
+                        let a = pts[0], b = pts[pts.count - 1]
+                        switch tool {
+                        case .lasso: p.move(to: a); p.addLines(Array(pts.dropFirst())); p.closeSubpath()
+                        case .linear: p.move(to: a); p.addLine(to: b)
+                        default: p.addEllipse(in: CGRect(x: a.x - abs(b.x - a.x), y: a.y - abs(b.y - a.y), width: 2 * abs(b.x - a.x), height: 2 * abs(b.y - a.y)))
+                        }
+                    }
+                    .stroke(Color.white.opacity(0.9), style: StrokeStyle(lineWidth: 1.5, lineCap: .round, lineJoin: .round, dash: [6, 4]))
+                }
             }
-            .stroke(Color.white.opacity(model.brushErase ? 0.25 : 0.55), style: StrokeStyle(lineWidth: width, lineCap: .round, lineJoin: .round))
             .frame(width: r.width, height: r.height, alignment: .topLeading)
             .clipped()
             .allowsHitTesting(false)
@@ -205,7 +220,8 @@ struct PhotoView: View {
                 guard let f = model.frame, !live.isEmpty else { return }
                 let r = imageRect(frame: f, in: size)
                 guard r.width > 0, r.height > 0 else { return }
-                model.paintStroke(live.map { CGPoint(x: ($0.x - r.minX) / r.width, y: ($0.y - r.minY) / r.height) })
+                let unit = live.map { CGPoint(x: ($0.x - r.minX) / r.width, y: ($0.y - r.minY) / r.height) }
+                if model.paintTool == .brush { model.paintStroke(unit) } else { model.drawShape(unit) }
             }
     }
 
@@ -355,6 +371,26 @@ struct TopBar: View {
                 .accessibilityLabel("Crop and straighten")
                 .accessibilityAddTraits(open ? .isSelected : [])
                 .rig("crop-tool")
+            }
+
+            // the mask tools (Pro): brush, lasso, linear and radial selections drawn on the photo; each goes on the open section
+            if model.mode == .pro {
+                Menu {
+                    ForEach([MaskLayerKind.brush, .lasso, .linear, .radial], id: \.self) { k in
+                        Button { Task { await model.applyLibraryMask(k) } } label: { Label(k.title.capitalized, systemImage: k.symbol) }
+                    }
+                } label: {
+                    Image(systemName: model.paintModuleID != nil ? "lasso.badge.sparkles" : "lasso")
+                        .frame(width: 40, height: 40)
+                        .contentShape(Rectangle())
+                }
+                .menuStyle(.button)
+                .buttonStyle(.plain)
+                .menuIndicator(.hidden)
+                .background(model.paintModuleID != nil ? Color.white.opacity(0.14) : .clear, in: Circle())
+                .help("Mask tools: brush (B), lasso (L), linear gradient (G), radial (R)")
+                .accessibilityLabel("Mask tools")
+                .rig("mask-tools")
             }
 
             // HDR preview: only where a screen has headroom above SDR white

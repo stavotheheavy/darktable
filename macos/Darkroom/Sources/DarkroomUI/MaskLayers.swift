@@ -7,11 +7,25 @@ import UniformTypeIdentifiers
 
 /// What a mask layer is: painted with the brush, or found by Vision.
 public enum MaskLayerKind: String, Codable, Sendable, CaseIterable {
-    case brush, subject, person, face, eyes, lips, animal, object
+    case brush, lasso, linear, radial, subject, person, face, eyes, lips, animal, object
 
     public init(_ vision: VisionMasks.Kind) { self = MaskLayerKind(rawValue: vision.rawValue) ?? .subject }
     public var vision: VisionMasks.Kind? { VisionMasks.Kind(rawValue: rawValue) }
+    /// A selection drawn on the photo as a shape (lasso, linear, radial), made by MaskShapes.
+    public var shape: MaskShape? { MaskShape(rawValue: rawValue) }
+    /// Drawn on the photo by hand (the brush or a shape) rather than found by Vision.
+    public var isDrawn: Bool { self == .brush || shape != nil }
     public var title: String { vision?.title ?? rawValue }
+    /// The tool's icon in the header menu and the library.
+    public var symbol: String {
+        switch self {
+        case .brush: "paintbrush.pointed"
+        case .lasso: "lasso"
+        case .linear: "rectangle.bottomhalf.inset.filled"
+        case .radial: "circle.dashed"
+        default: "viewfinder"
+        }
+    }
 }
 
 /// A painted or detected mask of one photo. A module's blend refers to it by `mask_raster = "<id>.<revision>"`: a brush layer's
@@ -24,6 +38,9 @@ public struct MaskLayer: Codable, Equatable, Identifiable, Sendable {
     public var strokes: [BrushStroke] = []
     /// A detected layer's picture, a PNG in the photo's masks folder.
     public var picture: String?
+    /// A shape layer's points, flat x, y pairs normalised on the upright picture, and its feather 0...1.
+    public var points: [Double]?
+    public var feather: Double?
 }
 
 /// The pictures of detected layers, next to the photo: `<raw>.darkroom.masks/<layer id>.png`, 8-bit grey.

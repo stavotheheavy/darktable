@@ -79,6 +79,19 @@ The wand button in the header, or **A**. It looks at the photo and makes a fair 
 It moves Simple's own controls, so you see what it did in Simple's sliders or in Pro's panel, and can change any of it. Run it
 again and it measures what you have now, so a photo that is already right is left alone. Every move is capped.
 
+## Mask tools: brush, lasso, linear and radial (Pro)
+
+The **mask tools button** in the header (a lasso icon, next to Crop) and the keys **B**, **L**, **G** and **R** start a selection for the
+open section in the panel (switch a module on first). The edit then applies only inside the selection.
+
+- **Brush (B):** paint on the photo. Size, softness, flow and Erase are in the section's Blend controls.
+- **Lasso (L):** drag around what you want and let go; the loop closes itself. A loop that crosses itself fills even-odd.
+- **Linear (G):** drag from where the edit is full to where it fades out, like a graduated filter.
+- **Radial (R):** drag from the centre to the edge of an ellipse; the rim fades by the softness slider.
+
+Selections are drawn on the uncropped picture, so reset the crop and the zoom first. **Draw again** in the Blend controls replaces the
+shape; Invert, edge refine and Show mask work on every kind. Each drawing is one step in History.
+
 ## Finding things in the picture (masks)
 
 The Masks category in the library finds, with Apple's Vision framework on this Mac (nothing is sent anywhere): the **subject**,
@@ -182,7 +195,7 @@ Press **?** at any time for the list of every shortcut. The arrow keys work on t
 - **Left and Right** nudge the slider by a hundredth of its range. **Shift** makes it ten times as much, **Option** a tenth.
   A held key keeps going and is one step in History.
 - **Delete** puts the slider back to its default. **E** switches the section's effect on or off. **F** folds or unfolds it.
-- **M** opens the library with its search ready. **P and H** open and close the Presets and History menus.
+- **B, L, G and R** pick the mask tools: brush, lasso, linear gradient and radial gradient (see Mask tools below). **M** opens the library with its search ready. **P and H** open and close the Presets and History menus.
 
 These keys step aside while you type in a field (the library's search, a typed slider value), so typing and the field's own
 arrow keys still work.
@@ -212,6 +225,10 @@ The app's shortcuts live in one table (`Sources/DarkroomUI/Shortcuts.swift`). Th
 | ⌘1 | Zoom: 100% (`zoom-100`) |
 | ⌘2 | Zoom: 200% (`zoom-200`) |
 | M | Open the library with its search ready (`menu-modules`) |
+| B | Mask tool: brush (`mask-brush`) |
+| L | Mask tool: lasso (`mask-lasso`) |
+| G | Mask tool: linear gradient (`mask-linear`) |
+| R | Mask tool: radial gradient (`mask-radial`) |
 | P | Open or close the Presets menu (`menu-presets`) |
 | H | Open or close History (`menu-history`) |
 | ↑ | Panel: previous section (`panel-up`) |

@@ -406,6 +406,16 @@ public final class Rig {
                     model.paintStroke(pts)
                 }
                 return ["ok": true, "layers": model.maskLayers.map { "\($0.name):\($0.strokes.count)" }]
+            case "shape":
+                // shape lasso|linear|radial <op> <x,y> <x,y> ... (normalised 0...1 on the upright picture): draws the selection on the module
+                guard parts.count > 3, let k = MaskLayerKind(rawValue: parts[1]), k.shape != nil, let m = model.modules.first(where: { $0.operation == parts[2] }) else { return ["ok": false, "error": "shape lasso|linear|radial <op> x,y ..."] }
+                let pts = parts.dropFirst(3).compactMap { s -> CGPoint? in
+                    let c = s.split(separator: ",").compactMap { Double($0) }
+                    return c.count == 2 ? CGPoint(x: c[0], y: c[1]) : nil
+                }
+                model.startShape(k, for: m)
+                model.drawShape(pts)
+                return ["ok": true, "layers": model.maskLayers.map { "\($0.name):\($0.kind.rawValue)" }]
             case "detect":
                 guard parts.count > 2, let k = VisionMasks.Kind(rawValue: parts[1]), let m = model.modules.first(where: { $0.operation == parts[2] }) else { return ["ok": false, "error": "detect subject|person|face|eyes|lips|animal|object <op>"] }
                 await model.detect(k, for: m)

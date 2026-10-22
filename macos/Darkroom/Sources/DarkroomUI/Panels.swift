@@ -673,7 +673,7 @@ struct BlendSection: View {
             ForEach(MaskLayerKind.allCases, id: \.self) { k in
                 let selected = maskMode == 2 && isRaster && layer?.kind == k
                 Button {
-                    if k == .brush { model.startBrush(module) } else if let v = k.vision { Task { await model.detect(v, for: module) } }
+                    if k == .brush { model.startBrush(module) } else if k.shape != nil { model.startShape(k, for: module) } else if let v = k.vision { Task { await model.detect(v, for: module) } }
                 } label: {
                     Text(k.title).font(.caption.weight(.medium)).lineLimit(1).minimumScaleFactor(0.8)
                         .frame(maxWidth: .infinity, minHeight: 32)
@@ -682,7 +682,7 @@ struct BlendSection: View {
                 }
                 .buttonStyle(.plain)
                 .disabled(model.maskBusy != nil)
-                .accessibilityLabel(k == .brush ? "Paint a mask with the brush" : "Find the \(k.title) in the photo")
+                .accessibilityLabel(k == .brush ? "Paint a mask with the brush" : k.shape != nil ? "Draw a \(k.title) selection on the photo" : "Find the \(k.title) in the photo")
                 .accessibilityAddTraits(selected ? .isSelected : [])
                 .rig("mask-find-\(k.title)")
             }
@@ -690,11 +690,15 @@ struct BlendSection: View {
         if let busy = model.maskBusy {
             HStack(spacing: 6) { ProgressView().controlSize(.small); Text(busy).font(.caption).foregroundStyle(.secondary) }
         }
+        if model.paintModuleID == module.id, model.paintTool.shape != nil { ShapeControls(model: model, module: module) }
         if maskMode == 2, isRaster {
             if let layer {
                 Text(layer.kind == .brush ? "\(layer.name) · \(layer.strokes.prefix(Int((model.blendValue(module, "mask_raster")?.option ?? "").split(separator: ".").last ?? "") ?? 0).count) strokes" : layer.name)
                     .font(.footnote).foregroundStyle(.secondary)
                 if layer.kind == .brush { BrushControls(model: model, module: module) }
+                else if layer.kind.shape != nil, !(model.paintModuleID == module.id && model.paintTool.shape != nil) {
+                    Button("Draw again") { model.startShape(layer.kind, for: module) }.buttonStyle(.glass).controlSize(.small).rig("shape-redraw")
+                }
             } else {
                 Text("This mask's picture is missing, so the edit does not apply.").font(.footnote).foregroundStyle(.orange)
             }
@@ -804,7 +808,7 @@ struct BrushControls: View {
             Text(model.canPaint ? "Paint on the photo." : "Reset the crop and the zoom to paint: strokes go on the uncropped picture.")
                 .font(.caption2).foregroundStyle(.secondary)
         }
-        .onAppear { model.paintModuleID = module.id }
+        .onAppear { model.paintModuleID = module.id; model.paintTool = .brush }
         .onDisappear { if model.paintModuleID == module.id { model.paintModuleID = nil } }
     }
 
@@ -916,5 +920,34 @@ public struct DarkroomRoot: View {
         screen = .darkroom
         library.paused = true   // thumbnails share the engine, so they wait while you edit
         Task { await model.open(path: path) }
+    }
+}
+
+/// A drawn selection (lasso, linear, radial): its feather, and what to do on the photo. The layer is made when the drag ends.
+struct ShapeControls: View {
+    @Bindable var model: DarkroomModel
+    let module: ModuleInfo
+
+    private var hint: String {
+        guard model.canPaint else { return "Reset the crop and the zoom to draw: selections go on the uncropped picture." }
+        switch model.paintTool {
+        case .lasso: return "Drag around what you want; let go to close the loop."
+        case .linear: return "Drag from where the edit is full to where it fades out."
+        default: return "Drag from the centre to the edge of the ellipse."
+        }
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            if model.paintTool != .linear {
+                HStack {
+                    Text(model.paintTool == .lasso ? "edge softness" : "rim softness").font(.footnote).foregroundStyle(.secondary)
+                    Spacer()
+                    Text(String(format: "%.2f", model.shapeFeather)).font(.footnote.monospacedDigit())
+                }
+                Slider(value: $model.shapeFeather, in: 0...1).tint(Theme.accent).accessibilityLabel("Selection softness").rig("shape-feather")
+            }
+            Text(hint).font(.caption2).foregroundStyle(.secondary)
+        }
     }
 }

@@ -1626,6 +1626,26 @@ do {
     check("E-RS6 edge refine works on a raster mask (guided by the photo)", worstLinear(engine([maskedExposure(refined)])?.pixels ?? [], maskedExposureOracle(refinedSpec)) < 2e-2)
 }
 
+// E-LAS the three drawn selections (lasso, linear, radial) through the engine as raster masks, like the brush
+do {
+    let size = Brush.rasterSize(aspect: Double(detailW) / Double(detailH))
+    let shapes: [(String, MaskShape, [SIMD2<Double>], Double)] = [
+        ("lasso", .lasso, [SIMD2(0.15, 0.2), SIMD2(0.8, 0.12), SIMD2(0.9, 0.7), SIMD2(0.4, 0.88), SIMD2(0.1, 0.6)], 0.5),
+        ("linear", .linear, [SIMD2(0.2, 0.3), SIMD2(0.75, 0.7)], 0),
+        ("radial", .radial, [SIMD2(0.5, 0.5), SIMD2(0.8, 0.75)], 0.4),
+    ]
+    for (name, shape, pts, feather) in shapes {
+        let raster = MaskShapes.rasterize(shape, points: pts, feather: feather, width: size.width, height: size.height, id: "shape.\(name)")
+        let picture = MaskPicture(id: raster.id, width: raster.width, height: raster.height, pixels: raster.pixels)
+        let blend: [String: ParamValue] = ["mask_mode": .number(2), "mask_kind": .number(5), "mask_raster": .option(raster.id)]
+        var spec = Mask.spec(from: ["mask_mode": 2, "mask_kind": 5])!
+        spec.raster = raster
+        let got = (try? CIEngineProbe.renderSized(stack: [maskedExposure(blend)], pixels: detailPx, width: detailW, height: detailH, camera: .none, rasters: [picture]))?.pixels ?? []
+        let eLin = worstLinear(got, maskedExposureOracle(spec))
+        check("E-LAS \(name) selection through the engine matches the oracle (8-bit matte, 6e-3)", eLin < 6e-3 && worstLinear(got, detailImg) > 0.05, "\(eLin)")
+    }
+}
+
 // E-TP the point curve through the engine: points against the oracle, an old five-height edit equal to its new-format twin,
 // hostile values made safe, tile seams
 do {

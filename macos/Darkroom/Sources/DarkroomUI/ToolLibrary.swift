@@ -106,9 +106,16 @@ extension DarkroomModel {
             }
         case .masks:
             return MaskLayerKind.allCases.map { k in
-                let name = k == .brush ? "brush" : "find the \(k.title)"
-                let detail = k == .brush ? "paint where the edit applies" : "Vision finds it; the edit applies there"
-                return LibraryEntry(id: "mask-\(k.rawValue)", name: name, detail: detail, kind: .mask(k), keywords: "mask \(k.rawValue) detect face object")
+                let name = k.isDrawn ? k.title : "find the \(k.title)"
+                let detail: String
+                switch k {
+                case .brush: detail = "paint where the edit applies"
+                case .lasso: detail = "draw around it; the edit applies inside"
+                case .linear: detail = "a fading edge, like a graduated filter"
+                case .radial: detail = "an ellipse that fades at the rim"
+                default: detail = "Vision finds it; the edit applies there"
+                }
+                return LibraryEntry(id: "mask-\(k.rawValue)", name: name, detail: detail, kind: .mask(k), keywords: "mask select selection \(k.rawValue) detect face object")
             }
         default:
             guard let g = c.menuGroup, let entries = proMenu.first(where: { $0.group == g })?.entries else { return [] }
@@ -156,11 +163,11 @@ extension DarkroomModel {
 
     /// A mask on the target section: the brush starts painting, a Vision kind runs the finder; the section and its Blend open.
     public func applyLibraryMask(_ k: MaskLayerKind) async {
-        guard let m = libraryMaskTarget else { return }
+        guard let m = libraryMaskTarget else { say("Switch a module on first; the mask goes on the open section in the panel"); return }
         proOpen.insert(m.id)
         blendOpen = true
         libraryPicked = "mask-\(k.rawValue)"
-        if k == .brush { startBrush(m) } else if let v = k.vision { await detect(v, for: m) }
+        if k == .brush { startBrush(m) } else if k.shape != nil { startShape(k, for: m) } else if let v = k.vision { await detect(v, for: m) }
     }
 
     /// A merged module's method switch, and the controls that belong to one method only. A control not listed shows whatever the
@@ -343,7 +350,7 @@ struct ToolLibrary: View {
         case .mask(let k):
             DropdownRow { Task { await model.applyLibraryMask(k) } } content: {
                 HStack(spacing: 10) {
-                    Image(systemName: k == .brush ? "paintbrush.pointed" : "viewfinder").font(.system(size: 12)).foregroundStyle(.secondary).frame(width: 16)
+                    Image(systemName: k.symbol).font(.system(size: 12)).foregroundStyle(.secondary).frame(width: 16)
                     VStack(alignment: .leading, spacing: 0) {
                         Text(e.name).font(.system(size: 13)).lineLimit(1)
                         Text(e.detail).font(.system(size: 10.5)).foregroundStyle(.secondary).lineLimit(1)
@@ -352,7 +359,7 @@ struct ToolLibrary: View {
                 }
             }
             .disabled(model.libraryMaskTarget == nil || model.maskBusy != nil)
-            .accessibilityLabel(k == .brush ? "Paint a mask with the brush" : "Find the \(k.title) in the photo")
+            .accessibilityLabel(k == .brush ? "Paint a mask with the brush" : k.shape != nil ? "Draw a \(k.title) selection on the photo" : "Find the \(k.title) in the photo")
             .rig("lib-mask-\(k.rawValue)")
         }
     }
