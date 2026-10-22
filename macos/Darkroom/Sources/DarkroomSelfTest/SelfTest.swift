@@ -1869,6 +1869,16 @@ struct SelfTest {
                   "PP6 closing the tool shows the crop again (\(model.frame?.width ?? 0)x\(model.frame?.height ?? 0))")
             model.resetGeometry()
             await model.settle()
+            // ⌘Z and ⇧⌘Z are the registry's undo and redo
+            let beforeKey = model.historyIndex
+            model.setAspect(.square)
+            let keyed = model.historyIndex
+            Shortcuts.all.first { $0.id == "undo" }?.action(model)
+            let afterUndo = model.historyIndex
+            Shortcuts.all.first { $0.id == "redo" }?.action(model)
+            check(keyed == beforeKey + 1 && afterUndo == keyed - 1 && model.historyIndex == keyed, "PP6 the undo and redo shortcuts step History back and forward (\(beforeKey), \(keyed), \(afterUndo), \(model.historyIndex))")
+            model.undo()
+            await model.settle()
 
             // PP7 a basic that is on by default: taking white balance out switches it off, and undo brings it back in and on
             // (catches a removal that leaves the module applied, or a removed basic coming straight back)
