@@ -1,0 +1,454 @@
+// !$*UTF8*$!
+{
+	archiveVersion = 1;
+	classes = {
+	};
+	objectVersion = 77;
+	objects = {
+
+/* Begin PBXBuildFile section */
+		118F57D23AD6EC630167556C /* DarkroomUI in Frameworks */ = {isa = PBXBuildFile; productRef = BCD6B598D5124869072C7523 /* DarkroomUI */; };
+		2448D74EFD5649D44FAD6B1A /* VantageMobileApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 247DB61361DFDE991999521A /* VantageMobileApp.swift */; };
+		354DAD76FB19E401F90B4098 /* TestSupport.swift in Sources */ = {isa = PBXBuildFile; fileRef = 430BAC3843E7F0CD4A1B9D5E /* TestSupport.swift */; };
+		94C756CD1121D0AA26AABBAA /* VantageWalkTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E71AC996EFEFBA3848DE4A7A /* VantageWalkTests.swift */; };
+		A6FB3BA71FDE26092E089FDA /* VantageFlowTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 49405C90E50C987265DA3119 /* VantageFlowTests.swift */; };
+		B23C2EBABD1885B6D1EFEA62 /* ShotTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = FC616B3E19C0784F7C2BD3EB /* ShotTests.swift */; };
+		D838741ECBCF513DC9FDDD02 /* HaikuExploreTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D3A357CF2518386500D38304 /* HaikuExploreTests.swift */; };
+/* End PBXBuildFile section */
+
+/* Begin PBXContainerItemProxy section */
+		322D73FE552555DA97E5852D /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = BD057E58B01B2300DB869AB0 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = 593180EC10FF307B0CFF7675;
+			remoteInfo = VantageMobile;
+		};
+/* End PBXContainerItemProxy section */
+
+/* Begin PBXFileReference section */
+		1E14471E58F1A12A4A68BE32 /* VantageMobile.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = VantageMobile.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		247DB61361DFDE991999521A /* VantageMobileApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VantageMobileApp.swift; sourceTree = "<group>"; };
+		430BAC3843E7F0CD4A1B9D5E /* TestSupport.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = TestSupport.swift; sourceTree = "<group>"; };
+		49405C90E50C987265DA3119 /* VantageFlowTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VantageFlowTests.swift; sourceTree = "<group>"; };
+		7FFD9077A869E1228A0FDD46 /* Darkroom */ = {isa = PBXFileReference; lastKnownFileType = folder; name = Darkroom; path = ../Darkroom; sourceTree = SOURCE_ROOT; };
+		D3A357CF2518386500D38304 /* HaikuExploreTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HaikuExploreTests.swift; sourceTree = "<group>"; };
+		E651BF77DC4B5FA313D47AE5 /* VantageMobileUITests.xctest */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.cfbundle; path = VantageMobileUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		E71AC996EFEFBA3848DE4A7A /* VantageWalkTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VantageWalkTests.swift; sourceTree = "<group>"; };
+		FC616B3E19C0784F7C2BD3EB /* ShotTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ShotTests.swift; sourceTree = "<group>"; };
+/* End PBXFileReference section */
+
+/* Begin PBXFrameworksBuildPhase section */
+		109AC91EB2F3EA6B0296A445 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				118F57D23AD6EC630167556C /* DarkroomUI in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXFrameworksBuildPhase section */
+
+/* Begin PBXGroup section */
+		039E2F7718DD8980BD2EB5B2 = {
+			isa = PBXGroup;
+			children = (
+				043CF5328979B5A52AC1D43B /* Packages */,
+				16F137E01121D5E46DE592FB /* Sources */,
+				34DE5520B858846F0092523D /* UITests */,
+				ECC7CCF60B10A520151AD835 /* Products */,
+			);
+			sourceTree = "<group>";
+		};
+		043CF5328979B5A52AC1D43B /* Packages */ = {
+			isa = PBXGroup;
+			children = (
+				7FFD9077A869E1228A0FDD46 /* Darkroom */,
+			);
+			name = Packages;
+			sourceTree = "<group>";
+		};
+		16F137E01121D5E46DE592FB /* Sources */ = {
+			isa = PBXGroup;
+			children = (
+				247DB61361DFDE991999521A /* VantageMobileApp.swift */,
+			);
+			path = Sources;
+			sourceTree = "<group>";
+		};
+		34DE5520B858846F0092523D /* UITests */ = {
+			isa = PBXGroup;
+			children = (
+				D3A357CF2518386500D38304 /* HaikuExploreTests.swift */,
+				FC616B3E19C0784F7C2BD3EB /* ShotTests.swift */,
+				430BAC3843E7F0CD4A1B9D5E /* TestSupport.swift */,
+				49405C90E50C987265DA3119 /* VantageFlowTests.swift */,
+				E71AC996EFEFBA3848DE4A7A /* VantageWalkTests.swift */,
+			);
+			path = UITests;
+			sourceTree = "<group>";
+		};
+		ECC7CCF60B10A520151AD835 /* Products */ = {
+			isa = PBXGroup;
+			children = (
+				1E14471E58F1A12A4A68BE32 /* VantageMobile.app */,
+				E651BF77DC4B5FA313D47AE5 /* VantageMobileUITests.xctest */,
+			);
+			name = Products;
+			sourceTree = "<group>";
+		};
+/* End PBXGroup section */
+
+/* Begin PBXNativeTarget section */
+		1E0FFC11CEC95450F115B918 /* VantageMobileUITests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = E9389B5F07A97B47BC7AEFCF /* Build configuration list for PBXNativeTarget "VantageMobileUITests" */;
+			buildPhases = (
+				2DE64DB5196199E8BEDB998A /* Sources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				F2F139F62078F2979C34851E /* PBXTargetDependency */,
+			);
+			name = VantageMobileUITests;
+			packageProductDependencies = (
+			);
+			productName = VantageMobileUITests;
+			productReference = E651BF77DC4B5FA313D47AE5 /* VantageMobileUITests.xctest */;
+			productType = "com.apple.product-type.bundle.ui-testing";
+		};
+		593180EC10FF307B0CFF7675 /* VantageMobile */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = 67ADC9905074DB413EEC302E /* Build configuration list for PBXNativeTarget "VantageMobile" */;
+			buildPhases = (
+				E23DB2088D42828C6AE05670 /* Sources */,
+				109AC91EB2F3EA6B0296A445 /* Frameworks */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			name = VantageMobile;
+			packageProductDependencies = (
+				BCD6B598D5124869072C7523 /* DarkroomUI */,
+			);
+			productName = VantageMobile;
+			productReference = 1E14471E58F1A12A4A68BE32 /* VantageMobile.app */;
+			productType = "com.apple.product-type.application";
+		};
+/* End PBXNativeTarget section */
+
+/* Begin PBXProject section */
+		BD057E58B01B2300DB869AB0 /* Project object */ = {
+			isa = PBXProject;
+			attributes = {
+				BuildIndependentTargetsInParallel = YES;
+				LastUpgradeCheck = 1430;
+				TargetAttributes = {
+					1E0FFC11CEC95450F115B918 = {
+						TestTargetID = 593180EC10FF307B0CFF7675;
+					};
+					593180EC10FF307B0CFF7675 = {
+						ProvisioningStyle = Automatic;
+					};
+				};
+			};
+			buildConfigurationList = B1A91782F48023F7FD90A50E /* Build configuration list for PBXProject "VantageMobile" */;
+			compatibilityVersion = "Xcode 14.0";
+			developmentRegion = en;
+			hasScannedForEncodings = 0;
+			knownRegions = (
+				Base,
+				en,
+			);
+			mainGroup = 039E2F7718DD8980BD2EB5B2;
+			minimizedProjectReferenceProxies = 1;
+			packageReferences = (
+				7DAA99B7B9A85026873498C8 /* XCLocalSwiftPackageReference "../Darkroom" */,
+			);
+			preferredProjectObjectVersion = 77;
+			projectDirPath = "";
+			projectRoot = "";
+			targets = (
+				593180EC10FF307B0CFF7675 /* VantageMobile */,
+				1E0FFC11CEC95450F115B918 /* VantageMobileUITests */,
+			);
+		};
+/* End PBXProject section */
+
+/* Begin PBXSourcesBuildPhase section */
+		2DE64DB5196199E8BEDB998A /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				D838741ECBCF513DC9FDDD02 /* HaikuExploreTests.swift in Sources */,
+				B23C2EBABD1885B6D1EFEA62 /* ShotTests.swift in Sources */,
+				354DAD76FB19E401F90B4098 /* TestSupport.swift in Sources */,
+				A6FB3BA71FDE26092E089FDA /* VantageFlowTests.swift in Sources */,
+				94C756CD1121D0AA26AABBAA /* VantageWalkTests.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		E23DB2088D42828C6AE05670 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				2448D74EFD5649D44FAD6B1A /* VantageMobileApp.swift in Sources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXSourcesBuildPhase section */
+
+/* Begin PBXTargetDependency section */
+		F2F139F62078F2979C34851E /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = 593180EC10FF307B0CFF7675 /* VantageMobile */;
+			targetProxy = 322D73FE552555DA97E5852D /* PBXContainerItemProxy */;
+		};
+/* End PBXTargetDependency section */
+
+/* Begin XCBuildConfiguration section */
+		13B7F8CABF8CC40B63B59199 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				GENERATE_INFOPLIST_FILE = YES;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@loader_path/Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = dev.stavo.VantageMobileUITests;
+				SDKROOT = iphoneos;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				TEST_TARGET_NAME = VantageMobile;
+			};
+			name = Release;
+		};
+		51F8FAD9A57AFB763CAD652B /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++14";
+				CLANG_CXX_LIBRARY = "libc++";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
+				ENABLE_NS_ASSERTIONS = NO;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu11;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 26.0;
+				MTL_ENABLE_DEBUG_INFO = NO;
+				MTL_FAST_MATH = YES;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = iphoneos;
+				SWIFT_COMPILATION_MODE = wholemodule;
+				SWIFT_OPTIMIZATION_LEVEL = "-O";
+				SWIFT_VERSION = 5.0;
+			};
+			name = Release;
+		};
+		850FF4397D22E8707F388ED3 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ANALYZER_NUMBER_OBJECT_CONVERSION = YES_AGGRESSIVE;
+				CLANG_CXX_LANGUAGE_STANDARD = "gnu++14";
+				CLANG_CXX_LIBRARY = "libc++";
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				CLANG_ENABLE_OBJC_WEAK = YES;
+				CLANG_WARN_BLOCK_CAPTURE_AUTORELEASING = YES;
+				CLANG_WARN_BOOL_CONVERSION = YES;
+				CLANG_WARN_COMMA = YES;
+				CLANG_WARN_CONSTANT_CONVERSION = YES;
+				CLANG_WARN_DEPRECATED_OBJC_IMPLEMENTATIONS = YES;
+				CLANG_WARN_DIRECT_OBJC_ISA_USAGE = YES_ERROR;
+				CLANG_WARN_DOCUMENTATION_COMMENTS = YES;
+				CLANG_WARN_EMPTY_BODY = YES;
+				CLANG_WARN_ENUM_CONVERSION = YES;
+				CLANG_WARN_INFINITE_RECURSION = YES;
+				CLANG_WARN_INT_CONVERSION = YES;
+				CLANG_WARN_NON_LITERAL_NULL_CONVERSION = YES;
+				CLANG_WARN_OBJC_IMPLICIT_RETAIN_SELF = YES;
+				CLANG_WARN_OBJC_LITERAL_CONVERSION = YES;
+				CLANG_WARN_OBJC_ROOT_CLASS = YES_ERROR;
+				CLANG_WARN_QUOTED_INCLUDE_IN_FRAMEWORK_HEADER = YES;
+				CLANG_WARN_RANGE_LOOP_ANALYSIS = YES;
+				CLANG_WARN_STRICT_PROTOTYPES = YES;
+				CLANG_WARN_SUSPICIOUS_MOVE = YES;
+				CLANG_WARN_UNGUARDED_AVAILABILITY = YES_AGGRESSIVE;
+				CLANG_WARN_UNREACHABLE_CODE = YES;
+				CLANG_WARN__DUPLICATE_METHOD_MATCH = YES;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = dwarf;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				ENABLE_TESTABILITY = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu11;
+				GCC_DYNAMIC_NO_PIC = NO;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_OPTIMIZATION_LEVEL = 0;
+				GCC_PREPROCESSOR_DEFINITIONS = (
+					"$(inherited)",
+					"DEBUG=1",
+				);
+				GCC_WARN_64_TO_32_BIT_CONVERSION = YES;
+				GCC_WARN_ABOUT_RETURN_TYPE = YES_ERROR;
+				GCC_WARN_UNDECLARED_SELECTOR = YES;
+				GCC_WARN_UNINITIALIZED_AUTOS = YES_AGGRESSIVE;
+				GCC_WARN_UNUSED_FUNCTION = YES;
+				GCC_WARN_UNUSED_VARIABLE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 26.0;
+				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
+				MTL_FAST_MATH = YES;
+				ONLY_ACTIVE_ARCH = YES;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SDKROOT = iphoneos;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = DEBUG;
+				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
+				SWIFT_VERSION = 5.0;
+			};
+			name = Debug;
+		};
+		DD1C19A114562CBE26D49556 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGN_IDENTITY = "iPhone Developer";
+				CODE_SIGN_STYLE = Automatic;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
+				INFOPLIST_KEY_UISupportedInterfaceOrientations = "UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = dev.stavo.vantage;
+				PRODUCT_NAME = Vantage;
+				SDKROOT = iphoneos;
+				SWIFT_VERSION = 6.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Release;
+		};
+		DFC3E17B1F52C40C7B50F1DD /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGN_IDENTITY = "iPhone Developer";
+				CODE_SIGN_STYLE = Automatic;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
+				INFOPLIST_KEY_UISupportedInterfaceOrientations = "UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = dev.stavo.vantage;
+				PRODUCT_NAME = Vantage;
+				SDKROOT = iphoneos;
+				SWIFT_VERSION = 6.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Debug;
+		};
+		F759A7A9AE62C0DF78DB35C6 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				BUNDLE_LOADER = "$(TEST_HOST)";
+				GENERATE_INFOPLIST_FILE = YES;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@loader_path/Frameworks",
+				);
+				PRODUCT_BUNDLE_IDENTIFIER = dev.stavo.VantageMobileUITests;
+				SDKROOT = iphoneos;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				TEST_TARGET_NAME = VantageMobile;
+			};
+			name = Debug;
+		};
+/* End XCBuildConfiguration section */
+
+/* Begin XCConfigurationList section */
+		67ADC9905074DB413EEC302E /* Build configuration list for PBXNativeTarget "VantageMobile" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				DFC3E17B1F52C40C7B50F1DD /* Debug */,
+				DD1C19A114562CBE26D49556 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+		B1A91782F48023F7FD90A50E /* Build configuration list for PBXProject "VantageMobile" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				850FF4397D22E8707F388ED3 /* Debug */,
+				51F8FAD9A57AFB763CAD652B /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+		E9389B5F07A97B47BC7AEFCF /* Build configuration list for PBXNativeTarget "VantageMobileUITests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				F759A7A9AE62C0DF78DB35C6 /* Debug */,
+				13B7F8CABF8CC40B63B59199 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Debug;
+		};
+/* End XCConfigurationList section */
+
+/* Begin XCLocalSwiftPackageReference section */
+		7DAA99B7B9A85026873498C8 /* XCLocalSwiftPackageReference "../Darkroom" */ = {
+			isa = XCLocalSwiftPackageReference;
+			relativePath = ../Darkroom;
+		};
+/* End XCLocalSwiftPackageReference section */
+
+/* Begin XCSwiftPackageProductDependency section */
+		BCD6B598D5124869072C7523 /* DarkroomUI */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = DarkroomUI;
+		};
+/* End XCSwiftPackageProductDependency section */
+	};
+	rootObject = BD057E58B01B2300DB869AB0 /* Project object */;
+}

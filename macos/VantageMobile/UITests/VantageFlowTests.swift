@@ -32,6 +32,7 @@ final class VantageFlowTests: XCTestCase {
 
     /// A RAW opens straight into the darkroom, with the edit controls on screen.
     func testOpenRawShowsEditControls() {
+        resetSidecar(Self.rawPath)
         let app = XCUIApplication()
         app.launchEnvironment["DARKROOM_OPEN"] = Self.rawPath
         app.launch()
@@ -42,6 +43,7 @@ final class VantageFlowTests: XCTestCase {
 
     /// Auto edit changes the picture, and undo takes it back: both controls respond on touch.
     func testAutoEditThenUndo() {
+        resetSidecar(Self.rawPath)
         let app = XCUIApplication()
         app.launchEnvironment["DARKROOM_OPEN"] = Self.rawPath
         app.launch()

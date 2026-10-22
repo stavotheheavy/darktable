@@ -19,6 +19,7 @@ final class VantageWalkTests: XCTestCase {
     }
 
     private func launchOpen(mode: String, orientation: UIDeviceOrientation = .portrait) -> XCUIApplication {
+        resetSidecar(Self.rawPath)
         let app = XCUIApplication()
         app.terminate()
         app.launchArguments = ["-darkroom.mode", mode]
@@ -132,6 +133,25 @@ final class VantageWalkTests: XCTestCase {
         sleep(2)
         XCTAssertTrue(find(app, "redo").isEnabled, "Command-Z did not undo")
         shot("ipad-keyboard")
+    }
+
+    /// A brush stroke goes through the UIKit capture layer: B starts a brush on the open Pro section, and a drag across the photo
+    /// paints it, which shows as a change in the picture (the mask is shown while it is painted).
+    func testIPad_BrushStrokeThroughTheCaptureLayer() throws {
+        try XCTSkipUnless(isPad)
+        let app = launchOpen(mode: "Pro", orientation: .landscapeLeft)
+        shot("ipad-brush-before")
+        app.typeKey("b", modifierFlags: [])
+        sleep(3)
+        shot("ipad-brush-started")
+        let photo = find(app, "photo")
+        let before = picture(app)
+        let from = photo.coordinate(withNormalizedOffset: CGVector(dx: 0.3, dy: 0.5))
+        let to = photo.coordinate(withNormalizedOffset: CGVector(dx: 0.7, dy: 0.5))
+        from.press(forDuration: 0.1, thenDragTo: to)
+        sleep(3)
+        shot("ipad-brush-stroked")
+        XCTAssertNotEqual(before, picture(app), "painting a stroke did not change the picture")
     }
 
     func testIPad_ExportAndRotate() throws {

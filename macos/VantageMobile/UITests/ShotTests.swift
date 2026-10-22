@@ -15,6 +15,7 @@ final class ShotTests: XCTestCase {
 
     /// A fresh launch with the library shown or hidden, so every screen starts from a known state.
     private func launch(library: Bool, orientation: UIDeviceOrientation, mode: String = "Pro") -> XCUIApplication {
+        resetSidecar(Self.rawPath)
         let app = XCUIApplication()
         app.terminate()
         app.launchArguments = ["-darkroom.mode", mode, "-darkroom.libraryShown", library ? "YES" : "NO"]

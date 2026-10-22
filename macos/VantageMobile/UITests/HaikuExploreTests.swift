@@ -51,6 +51,7 @@ final class HaikuExploreTests: XCTestCase {
     }
 
     private func launch() -> XCUIApplication {
+        resetSidecar(Self.rawPath)
         let app = XCUIApplication()
         app.launchEnvironment["DARKROOM_OPEN"] = Self.rawPath
         app.launch()
