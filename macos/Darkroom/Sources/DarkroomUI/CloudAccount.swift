@@ -256,3 +256,10 @@ extension DarkroomModel {
         clientPicksMessage = found.isEmpty ? "No client picks yet" : "\(found.count) client picks"
     }
 }
+
+extension DarkroomModel {
+    /// The Databit Dev page where Vantage Pro is bought and managed. Vantage opens it in the browser; the app never takes a card.
+    public var subscribeURL: URL { cloudClient.base.appending(path: "portal/vantage") }
+
+    public func openSubscribe() { NSWorkspace.shared.open(subscribeURL) }
+}

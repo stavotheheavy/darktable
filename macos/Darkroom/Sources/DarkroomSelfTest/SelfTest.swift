@@ -2213,6 +2213,16 @@ struct SelfTest {
             check(PickFilter.all.allows(nil) && !PickFilter.picked.allows(nil) && PickFilter.picked.allows(yes) && PickFilter.picked.allows(fav) && !PickFilter.picked.allows(no)
                   && PickFilter.favourites.allows(fav) && !PickFilter.favourites.allows(yes) && PickFilter.declined.allows(no) && !PickFilter.declined.allows(yes),
                   "PK8 the library filter keeps picked (yes and favourite), favourites and declined apart")
+            check(model.subscribeURL.absoluteString.hasSuffix("/portal/vantage") && model.subscribeURL.host == model.cloudClient.base.host,
+                  "PR1 Subscribe opens the Vantage page on the same Databit Dev address (\(model.subscribeURL))")
+            uploadsAnswer = (403, ["error": "Your plan has ended", "code": "plan_ended"])
+            let planned = sender()
+            await planned.send(photos: fakePhotos)
+            uploadsAnswer = (409, ["error": "Storage full", "code": "over_quota"])
+            let storage = sender()
+            await storage.send(photos: fakePhotos)
+            uploadsAnswer = nil
+            check(planned.needsPlan && !storage.needsPlan, "PR2 a plan failure offers Subscribe and a storage failure does not (\(planned.needsPlan), \(storage.needsPlan))")
             try? FileManager.default.removeItem(at: pickDir)
             model.clientPicks = [:]
             model.clientPickStore = .standard
