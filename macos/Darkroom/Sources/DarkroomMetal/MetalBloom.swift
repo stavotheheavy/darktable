@@ -31,7 +31,7 @@ extension CIBridge {
 
     /// DarkroomCore.Bloom.apply: the image with its blurred highlights added, `strength` times, over a glow of `radius` per pass.
     /// Strength 0 returns the image.
-    public static func bloom(_ image: CIImage, strength: Double, radius: Int) throws -> CIImage {
+    public static func bloom(_ image: CIImage, strength: Double, radius: Double) throws -> CIImage {
         guard strength != 0 else { return image }
         var glow = try combine([image], source: bloomSource, function: "bloomBrightTex",
                                uniforms: [Float(Bloom.kneeLow), Float(Bloom.kneeHigh)])

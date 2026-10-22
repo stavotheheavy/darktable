@@ -683,7 +683,7 @@ extension CIModule {
             operation: "chromadenoise", name: "chroma denoise", iopOrder: 7, defaultEnabled: false,
             fields: [field("radius", 1, 30, 6), field("amount", 0, 1, 0)],
             apply: { image, v in
-                try CIBridge.chromaDenoise(image, radius: max(Int(((v["radius"] ?? 6) * (v["_scale"] ?? 1)).rounded()), 1), amount: v["amount"] ?? 0)
+                try CIBridge.fractionalWindow(image, radius: (v["radius"] ?? 6) * (v["_scale"] ?? 1)) { try CIBridge.chromaDenoise(image, radius: $0, amount: v["amount"] ?? 0) }
             }),
 
         // Median denoise: each channel the median of its 3x3 or 5x5 neighbourhood. MedianDenoise in DarkroomCore is the oracle (MDN1-MDN5, E-MDN).
@@ -705,8 +705,9 @@ extension CIModule {
             operation: "skinsmooth", name: "skin smoothing", iopOrder: 43, defaultEnabled: false,
             fields: [field("amount", 0, 1, 0), field("radius", 2, 40, 10), field("hue", 0, 360, 55), field("width", 15, 90, 35)],
             apply: { image, v in
-                try CIBridge.skinSmooth(image, radius: max(Int(((v["radius"] ?? 10) * (v["_scale"] ?? 1)).rounded()), 1), amount: v["amount"] ?? 0,
-                                        hueDegrees: v["hue"] ?? 55, widthDegrees: v["width"] ?? 35)
+                try CIBridge.fractionalWindow(image, radius: (v["radius"] ?? 10) * (v["_scale"] ?? 1)) {
+                    try CIBridge.skinSmooth(image, radius: $0, amount: v["amount"] ?? 0, hueDegrees: v["hue"] ?? 55, widthDegrees: v["width"] ?? 35)
+                }
             }),
 
         // Texture bands: a band-pass of the luminance (blur at the radius minus blur at three times it) added back as a gain. TextureBands in DarkroomCore is the
@@ -777,7 +778,7 @@ extension CIModule {
             operation: "surfaceblur", name: "surface blur", iopOrder: 74, defaultEnabled: false,
             fields: [field("amount", 0, 1, 0), field("radius", 1, 40, 8), field("threshold", 0.0005, 0.05, 0.004)],
             apply: { image, v in
-                try CIBridge.surfaceBlur(image, radius: max(Int(((v["radius"] ?? 8) * (v["_scale"] ?? 1)).rounded()), 1), eps: v["threshold"] ?? 0.004, amount: v["amount"] ?? 0)
+                try CIBridge.surfaceBlur(image, radius: (v["radius"] ?? 8) * (v["_scale"] ?? 1), eps: v["threshold"] ?? 0.004, amount: v["amount"] ?? 0)
             }),
 
         // Lens blur: a disc blur with bright highlights spread into bokeh discs. LensBlur in DarkroomCore is the oracle (LNB1-LNB5, E-LNB).
@@ -785,7 +786,7 @@ extension CIModule {
             operation: "lensblur", name: "lens blur", iopOrder: 75, defaultEnabled: false,
             fields: [field("amount", 0, 1, 0), field("radius", 1, 30, 8), field("highlights", 0, 8, 2)],
             apply: { image, v in
-                try CIBridge.lensBlur(image, radius: max(Int(((v["radius"] ?? 8) * (v["_scale"] ?? 1)).rounded()), 1), boost: v["highlights"] ?? 2, amount: v["amount"] ?? 0)
+                try CIBridge.fractionalWindow(image, radius: (v["radius"] ?? 8) * (v["_scale"] ?? 1)) { try CIBridge.lensBlur(image, radius: $0, boost: v["highlights"] ?? 2, amount: v["amount"] ?? 0) }
             }),
 
         // Motion blur: the mean of samples along a line. MotionBlur in DarkroomCore is the oracle (MOB1-MOB5, E-MOB).
@@ -812,7 +813,7 @@ extension CIModule {
         CIModule(
             operation: "kuwahara", name: "painterly (Kuwahara)", iopOrder: 79, defaultEnabled: false,
             fields: [field("amount", 0, 1, 0), field("radius", 1, 8, 3)],
-            apply: { image, v in try CIBridge.kuwahara(image, radius: max(Int(((v["radius"] ?? 3) * (v["_scale"] ?? 1)).rounded()), 1), amount: v["amount"] ?? 0) }),
+            apply: { image, v in try CIBridge.fractionalWindow(image, radius: (v["radius"] ?? 3) * (v["_scale"] ?? 1)) { try CIBridge.kuwahara(image, radius: $0, amount: v["amount"] ?? 0) } }),
 
         // B&W mixer: the grey is a weighted sum of the scene-linear channels (a colour filter on the lens). BWMixer in DarkroomCore is the oracle (BWM1-BWM4, E-BWM).
         CIModule(
@@ -838,7 +839,7 @@ extension CIModule {
             operation: "bilateral", name: "bilateral filter", iopOrder: 81, defaultEnabled: false,
             fields: [field("amount", 0, 1, 0), field("radius", 1, 10, 4), field("range", 0.01, 0.5, 0.1)],
             apply: { image, v in
-                try CIBridge.bilateral(image, radius: max(Int(((v["radius"] ?? 4) * (v["_scale"] ?? 1)).rounded()), 1), range: v["range"] ?? 0.1, amount: v["amount"] ?? 0)
+                try CIBridge.fractionalWindow(image, radius: (v["radius"] ?? 4) * (v["_scale"] ?? 1)) { try CIBridge.bilateral(image, radius: $0, range: v["range"] ?? 0.1, amount: v["amount"] ?? 0) }
             }),
 
         // Emboss: the directional derivative of the encoded luminance on mid-grey. Emboss in DarkroomCore is the oracle (EMB1-EMB5, E-EMB).
@@ -1153,6 +1154,8 @@ extension CIModule {
         "blurs": 3, "lowpass": 4, "soften": 3, "censorize": 2,
         // refine 5: the blur radius is fractional (it was rounded to whole box pixels, so every radius under about 4.5 px was 1 and the sliders were dead at preview scale)
         "defringe": 2, "highpass": 2, "retouch": 2, "texturebands": 2,
+        // refine 5b: the gather windows (bilateral, kuwahara, lens blur, chroma denoise, skin smooth) blend whole radii by the fraction, surface blur's guided filter and bloom take it directly
+        "kuwahara": 2,
     ]
 
     static let all: [CIModule] = (catalogue + [display] + geometryModules).map { module in

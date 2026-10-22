@@ -292,9 +292,18 @@ extension CIBridge {
         try guided(image, guide: image, radius: r, eps: eps)
     }
 
+    public static func guided(_ image: CIImage, radius r: Double, eps: Double) throws -> CIImage {
+        try guided(image, guide: image, radius: r, eps: eps)
+    }
+
     /// DarkroomCore.Filters.guided on each colour channel of `image`, guided by the luminance of `guide`
     /// (same extent), for refining a mask against the photo it was cut from.
     public static func guided(_ image: CIImage, guide: CIImage, radius r: Int, eps: Double) throws -> CIImage {
+        try guided(image, guide: guide, radius: Double(r), eps: eps)
+    }
+
+    /// The same at a fractional radius (the fractional box mean); a whole radius is the integer filter exactly.
+    public static func guided(_ image: CIImage, guide: CIImage, radius r: Double, eps: Double) throws -> CIImage {
         let i = try many("filtersLumaTex", [guide])
         let meanI = try boxMean(i, radius: r), meanP = try boxMean(image, radius: r)
         let corrI = try boxMean(try many("filtersMulTex", [i, i]), radius: r)

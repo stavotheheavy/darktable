@@ -15,10 +15,10 @@ public enum Bloom {
     /// The box means in the blur.
     public static let passes = 3
 
-    /// The box radius of each pass for a glow that reaches `size` pixels (at least 1).
-    public static func radius(size: Double) -> Int {
+    /// The box radius of each pass for a glow that reaches `size` pixels, fractional so every size changes the glow (0 for a size of 0 or less).
+    public static func radius(size: Double) -> Double {
         let s = size.isFinite ? min(max(size, 0), 400) : 0
-        return max(1, Int((s / Double(passes)).rounded()))
+        return s / Double(passes)
     }
 
     /// The light a pixel gives to the glow: itself, weighted by how far its luminance is over the knee.
@@ -26,7 +26,7 @@ public enum Bloom {
         rgb * ColorCommon.smoothstep(kneeLow, kneeHigh, ColorCommon.luminance(rgb))
     }
 
-    public static func apply(_ rgb: [SIMD3<Double>], width: Int, height: Int, strength: Double, radius: Int) -> [SIMD3<Double>] {
+    public static func apply(_ rgb: [SIMD3<Double>], width: Int, height: Int, strength: Double, radius: Double) -> [SIMD3<Double>] {
         guard strength != 0 else { return rgb }
         let lit = rgb.map { bright($0) }
         var planes = (0..<3).map { c in Plane(width: width, height: height, values: lit.map { $0[c] }) }

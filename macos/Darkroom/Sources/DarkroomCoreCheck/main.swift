@@ -1712,7 +1712,7 @@ do {
 // BLM bloom: the highlights, blurred by three box means, added back. Nothing above the knee is no glow; a bright dot lights its surround and
 // loses nothing; light only goes up
 do {
-    let w = 41, h = 41, r = 2          // three passes of radius 2 reach 6 px, far from the borders at 20
+    let w = 41, h = 41, r = 2.0        // three passes of radius 2 reach 6 px, far from the borders at 20
     let dark = SIMD3<Double>(0.2, 0.15, 0.1)
     var dot = [SIMD3<Double>](repeating: dark, count: w * h)
     dot[20 * w + 20] = SIMD3(3, 3, 3)
@@ -1729,7 +1729,7 @@ do {
     var falling = true, previous = Double.infinity
     for x in 20...27 { let g = at(lit, x, 20).x - at(dot, x, 20).x; falling = falling && g <= previous + 1e-12; previous = g }
     check("BLM5 the glow falls away from the dot and is symmetric about it", falling && near(at(lit, 15, 20) - at(dot, 15, 20), at(lit, 25, 20) - at(dot, 25, 20), 1e-12))
-    func reach(_ radius: Int) -> Int {
+    func reach(_ radius: Double) -> Int {
         let out = Bloom.apply(dot, width: w, height: h, strength: 1, radius: radius)
         return (0..<w).filter { out[20 * w + $0].x - dot[20 * w + $0].x > 1e-9 }.count
     }
@@ -1739,8 +1739,8 @@ do {
           { let red = Bloom.apply([SIMD3<Double>](repeating: .zero, count: w * h).enumerated().map { $0.offset == 20 * w + 20 ? SIMD3(3, 0.1, 0.1) : $0.element },
                                   width: w, height: h, strength: 1, radius: r)
             let p = at(red, 22, 20); return p.x > 0.01 && p.y < p.x * 0.2 }())
-    check("BLM9 the size sets the radius: 30 px is 10 per pass, 1 px is the least, 0 and NaN are the least",
-          Bloom.radius(size: 30) == 10 && Bloom.radius(size: 1) == 1 && Bloom.radius(size: 0) == 1 && Bloom.radius(size: .nan) == 1)
+    check("BLM9 the size sets the radius, fractional: 30 px is 10 per pass, 1 px is a third, 0 and NaN are none",
+          Bloom.radius(size: 30) == 10 && abs(Bloom.radius(size: 1) - 1.0 / 3) < 1e-12 && Bloom.radius(size: 0) == 0 && Bloom.radius(size: .nan) == 0)
     let extremes = Bloom.apply([SIMD3(4, 3, 2), SIMD3(0, 0, 0), SIMD3(0.9, 0.9, 0.9), SIMD3(100, 100, 100)], width: 2, height: 2, strength: 1, radius: 1)
     check("BLM10 past white and at black the output is finite", extremes.allSatisfy { $0.x.isFinite && $0.y.isFinite && $0.z.isFinite }, "\(extremes)")
 }
@@ -3326,6 +3326,24 @@ do {
     check("EXC3 drags land on 0.01 EV and the position of a value round trips within a step",
           ps.allSatisfy { abs($0 * 100 - ($0 * 100).rounded()) < 1e-6 }
           && [-3.2, -0.5, 0.37, 1.3, 3.9].allSatisfy { abs(ExposureCurve.value(position: ExposureCurve.position(value: $0, limit: 4), limit: 4) - $0) <= 0.0051 })
+}
+
+// FRW the fractional window: a gather module at radius n + f is the blend of its whole radii n and n + 1, radius 0 being the picture itself
+do {
+    let w = 30, h = 20
+    var img = [SIMD3<Double>](repeating: SIMD3(0.2, 0.2, 0.2), count: w * h)
+    for y in 0..<h { for x in 0..<w { img[y * w + x] = SIMD3(repeating: 0.2 + 0.5 * (((x / 3 + y / 2) % 2 == 0) ? 1 : 0)) } }
+    let run: (Int) -> [SIMD3<Double>] = { Blur.apply(img, width: w, height: h, radius: Double($0)) }
+    func dist(_ a: [SIMD3<Double>], _ b: [SIMD3<Double>]) -> Double { zip(a, b).reduce(0.0) { $0 + abs($1.0.x - $1.1.x) } / Double(a.count) }
+    check("FRW1 a whole radius runs once and is the integer result exactly", FractionalWindow.apply(img, radius: 3, run) == run(3))
+    let mid = FractionalWindow.apply(img, radius: 2.25, run), lo = run(2), hi = run(3)
+    check("FRW2 radius 2.25 is a quarter of the way from run(2) to run(3), exactly", zip(mid, zip(lo, hi)).allSatisfy { abs($0.x - ($1.0.x + 0.25 * ($1.1.x - $1.0.x))) < 1e-12 })
+    let under = FractionalWindow.apply(img, radius: 0.5, run), one = run(1)
+    check("FRW3 radius under 1 fades in from the picture itself: 0.5 is halfway between it and run(1); 0, negative and NaN are the picture",
+          zip(under, zip(img, one)).allSatisfy { abs($0.x - ($1.0.x + 0.5 * ($1.1.x - $1.0.x))) < 1e-12 }
+          && FractionalWindow.apply(img, radius: 0, run) == img && FractionalWindow.apply(img, radius: -3, run) == img && FractionalWindow.apply(img, radius: .nan, run) == img)
+    let ds = [0.2, 0.7, 1.4, 2.5, 3.1].map { dist(FractionalWindow.apply(img, radius: $0, run), img) }
+    check("FRW4 the further the radius, the further from the picture: every fractional step moves it more", zip(ds, ds.dropFirst()).allSatisfy { $0 < $1 }, "\(ds)")
 }
 
 print(failures == 0 ? "\nall checks passed" : "\n\(failures) failed")

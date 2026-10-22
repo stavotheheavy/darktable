@@ -49,7 +49,7 @@ extension CIBridge {
     """#
 
     /// DarkroomCore.SurfaceBlur.apply on the GPU.
-    public static func surfaceBlur(_ image: CIImage, radius: Int, eps: Double, amount: Double) throws -> CIImage {
+    public static func surfaceBlur(_ image: CIImage, radius: Double, eps: Double, amount: Double) throws -> CIImage {
         guard amount != 0, radius > 0 else { return image }
         return try combine([image, try guided(image, radius: radius, eps: eps)], source: mixSource, function: "mixTowardTex", uniforms: [Float(amount)])
     }

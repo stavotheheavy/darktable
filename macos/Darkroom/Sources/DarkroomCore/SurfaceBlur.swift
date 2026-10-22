@@ -5,7 +5,7 @@
 import Foundation
 
 public enum SurfaceBlur {
-    public static func apply(_ rgb: [SIMD3<Double>], width: Int, height: Int, radius: Int, eps: Double, amount: Double) -> [SIMD3<Double>] {
+    public static func apply(_ rgb: [SIMD3<Double>], width: Int, height: Int, radius: Double, eps: Double, amount: Double) -> [SIMD3<Double>] {
         guard amount != 0, radius > 0 else { return rgb }
         let guide = Plane(width: width, height: height, values: rgb.map { ColorCommon.luminance($0) })
         let smooth = (0..<3).map { c in Filters.guided(guide: guide, input: Plane(width: width, height: height, values: rgb.map { $0[c] }), radius: radius, eps: eps) }

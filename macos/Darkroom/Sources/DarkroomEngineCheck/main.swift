@@ -2068,6 +2068,72 @@ do {
     check("E-RAD \(ops.count) radius sliders give three different pictures at three radii at preview scale 0.13", same.isEmpty, "\(same)")
 }
 
+// E-RAD2 the same for the gather modules and bloom, through their fractional window (whole-pixel windows made every radius up to ~8 px at scale 0.13 the same picture), and E-FRW: at a
+// fractional radius each matches the oracle's blend of its whole radii.
+do {
+    let bw = 300, bh = 200
+    var tex = [SIMD4<Float>](repeating: .zero, count: bw * bh)
+    for y in 0..<bh { for x in 0..<bw {
+        let fx = Float(x) / Float(bw), fy = Float(y) / Float(bh)
+        tex[y * bw + x] = SIMD4(0.3 + 0.25 * sin(Float(x) / 2) * cos(Float(y) / 3), 0.35 + 0.2 * sin(Float(x + y) / 4), 0.3 + 0.2 * fx * fy + 0.1 * cos(Float(x) / 5), 1)
+    } }
+    let src = tex.map { SIMD3(Double($0.x), Double($0.y), Double($0.z)) }
+    let ops: [(String, [String: Double])] = [
+        ("bilateral", ["amount": 1, "range": 0.3]), ("kuwahara", ["amount": 1]), ("surfaceblur", ["amount": 1, "threshold": 0.05]),
+        ("lensblur", ["amount": 1, "highlights": 2]), ("chromadenoise", ["amount": 1]), ("bloom", ["strength": 1]),
+    ]
+    var same: [String] = []
+    for (op, fixed) in ops {
+        let field = op == "bloom" ? "size" : "radius"
+        var renders: [[SIMD4<Float>]] = []
+        // inside every field's range (bilateral to 10, kuwahara to 8); bloom needs light over its knee
+        for radius in op == "bloom" ? [3.0, 12.0, 40.0] : [1.0, 4.0, 8.0] {
+            let stack = [StackEntry(operation: op, params: fixed.merging([field: radius]) { $1 }.mapValues { .number($0) })]
+            guard let out = try? CIEngineProbe.renderSized(stack: stack, pixels: op == "bloom" ? tex.map { SIMD4($0.x * 4, $0.y * 4, $0.z * 4, 1) } : tex, width: bw, height: bh, scale: 0.13).pixels, out.count == tex.count else { same.append("\(op): no render"); break }
+            renders.append(out)
+        }
+        guard renders.count == 3 else { continue }
+        func diff(_ a: [SIMD4<Float>], _ b: [SIMD4<Float>]) -> Double { zip(a, b).reduce(0.0) { $0 + Double(abs($1.0.x - $1.1.x) + abs($1.0.y - $1.1.y) + abs($1.0.z - $1.1.z)) } / Double(3 * a.count) }
+        let d01 = diff(renders[0], renders[1]), d12 = diff(renders[1], renders[2]), d02 = diff(renders[0], renders[2])
+        if min(d01, d12, d02) < 1e-5 { same.append("\(op): \(d01) \(d12) \(d02)") }
+    }
+    check("E-RAD2 \(ops.count) more radius sliders give three different pictures at three radii at preview scale 0.13", same.isEmpty, "\(same)")
+
+    // radius * scale = 5.5 for a slider of 5.5 at scale 1: the blend of the whole radii 5 and 6
+    let wants: [(String, [String: Double], (Int) -> [SIMD3<Double>])] = [
+        ("bilateral", ["amount": 1, "range": 0.3], { BilateralFilter.apply(src, width: bw, height: bh, radius: $0, range: 0.3, amount: 1) }),
+        ("kuwahara", ["amount": 1], { Kuwahara.apply(src, width: bw, height: bh, radius: $0, amount: 1) }),
+        ("lensblur", ["amount": 1, "highlights": 2], { LensBlur.apply(src, width: bw, height: bh, radius: $0, boost: 2, amount: 1) }),
+    ]
+    var bad: [String] = []
+    for (op, fixed, run) in wants { for r in [5.0, 5.5] {
+        let want = FractionalWindow.apply(src, radius: r, run)
+        let stack = [StackEntry(operation: op, params: fixed.merging(["radius": r]) { $1 }.mapValues { .number($0) })]
+        guard let out = try? CIEngineProbe.renderSized(stack: stack, pixels: tex, width: bw, height: bh).pixels, out.count == tex.count else { bad.append("\(op): no render"); continue }
+        var off = 0, worstD = 0.0
+        for i in 0..<out.count {
+            let o = want[i]
+            let d = max(abs(Double(out[i].x) - o.x), abs(Double(out[i].y) - o.y), abs(Double(out[i].z) - o.z)) / max(1, max(abs(o.x), abs(o.y), abs(o.z)))
+            worstD = max(worstD, d)
+            if d > 2e-3 { off += 1 }
+        }
+        // Kuwahara's window choice can tie: 1 percent of its pixels may differ
+        if off > (op == "kuwahara" ? bw * bh / 100 : 0) { bad.append("\(op) at \(r): \(off) pixels off, worst \(worstD)") }
+    } }
+    // surface blur is a guided filter, which takes the fractional radius in its box means directly
+    if let out = try? CIEngineProbe.renderSized(stack: [StackEntry(operation: "surfaceblur", params: ["amount": .number(1), "threshold": .number(0.05), "radius": .number(5.5)])], pixels: tex, width: bw, height: bh).pixels, out.count == tex.count {
+        let want = SurfaceBlur.apply(src, width: bw, height: bh, radius: 5.5, eps: 0.05, amount: 1)
+        var off = 0
+        for i in 0..<out.count {
+            let o = want[i]
+            let d = max(abs(Double(out[i].x) - o.x), abs(Double(out[i].y) - o.y), abs(Double(out[i].z) - o.z)) / max(1, max(abs(o.x), abs(o.y), abs(o.z)))
+            if d > 2e-3 { off += 1 }
+        }
+        if off > 0 { bad.append("surfaceblur at 5.5: \(off) pixels off") }
+    } else { bad.append("surfaceblur: no render") }
+    check("E-FRW \(wants.count + 1) modules at radius 5.5 match the oracle's blend (surface blur: its fractional guided filter)", bad.isEmpty, "\(bad)")
+}
+
 // E-LPF low-pass (a blur of the tone, colour kept) and E-RLT fill light (shadhi's shadows), against their oracles with seams
 do {
     let lp = [StackEntry(operation: "lowpass", params: ["radius": .number(12)])]

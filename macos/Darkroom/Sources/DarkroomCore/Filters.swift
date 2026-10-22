@@ -90,6 +90,11 @@ public enum Filters {
     /// The guided filter: smooths `input` while keeping the edges of `guide`. `eps` is the variance an edge needs to be kept
     /// (larger eps smooths across more). Self-guided (guide == input) it is edge-preserving smoothing.
     public static func guided(guide i: Plane, input p: Plane, radius r: Int, eps: Double) -> Plane {
+        guided(guide: i, input: p, radius: Double(r), eps: eps)
+    }
+
+    /// The same at a fractional radius (the fractional box mean); a whole radius is the integer filter exactly.
+    public static func guided(guide i: Plane, input p: Plane, radius r: Double, eps: Double) -> Plane {
         let meanI = boxMean(i, radius: r), meanP = boxMean(p, radius: r)
         let corrI = boxMean(Plane.zip(i, i, *), radius: r), corrIP = boxMean(Plane.zip(i, p, *), radius: r)
         let varI = Plane.zip(corrI, meanI) { $0 - $1 * $1 }
