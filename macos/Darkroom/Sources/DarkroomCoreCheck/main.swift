@@ -1835,6 +1835,33 @@ do {
     let data = try JSONEncoder().encode(line)
     let back = try JSONDecoder().decode(BrushStroke.self, from: data)
     check("BR10 a stroke round-trips through its compact JSON", back.points.count == 2 && abs(back.points[1].x - 0.8) < 1e-4 && back.radius == line.radius && back.erase == false && data.count < 150, "\(data.count) bytes")
+
+    // drawn selections: lasso, linear and radial
+    let sq: [SIMD2<Double>] = [SIMD2(0.25, 0.25), SIMD2(0.75, 0.25), SIMD2(0.75, 0.75), SIMD2(0.25, 0.75)]
+    let hardLasso = MaskShapes.rasterize(.lasso, points: sq, feather: 0, width: 100, height: 80, id: "l0")
+    check("LAS1 a lasso: 255 inside, 0 outside", px(hardLasso, 50, 40) == 255 && px(hardLasso, 10, 10) == 0 && px(hardLasso, 90, 70) == 0 && px(hardLasso, 50, 5) == 0)
+    let areaFraction = Double(hardLasso.pixels.reduce(0) { $0 + Int($1) }) / 255 / Double(100 * 80)
+    check("LAS2 a lasso's area is the polygon's (a quarter of the picture)", abs(areaFraction - 0.25) < 0.004, "\(areaFraction)")
+    let reversed = MaskShapes.rasterize(.lasso, points: sq.reversed(), feather: 0, width: 100, height: 80, id: "l1")
+    check("LAS3 the same lasso drawn the other way round is identical", reversed.pixels == hardLasso.pixels)
+    let softLasso = MaskShapes.rasterize(.lasso, points: sq, feather: 1, width: 100, height: 80, id: "l2")
+    let edge = (px(softLasso, 25, 40), px(softLasso, 20, 40), px(softLasso, 30, 40))
+    check("LAS4 feather softens the edge: partial weight on it, inside above it, outside below it, centre still 255",
+          px(softLasso, 50, 40) == 255 && edge.0 > 60 && edge.0 < 200 && edge.1 < edge.0 && edge.2 > edge.0, "\(edge)")
+    let bow: [SIMD2<Double>] = [SIMD2(0.2, 0.2), SIMD2(0.8, 0.8), SIMD2(0.8, 0.2), SIMD2(0.2, 0.8)]
+    let tied = MaskShapes.rasterize(.lasso, points: bow, feather: 0, width: 100, height: 80, id: "l3")
+    check("LAS5 a self-crossing lasso fills even-odd (the bow tie's left and right wedges, not top and bottom)",
+          px(tied, 25, 40) == 255 && px(tied, 75, 40) == 255 && px(tied, 50, 15) == 0 && px(tied, 50, 65) == 0)
+    let lin = MaskShapes.rasterize(.linear, points: [SIMD2(0.5, 0.2), SIMD2(0.5, 0.8)], feather: 0, width: 100, height: 80, id: "n")
+    let column = (0..<80).map { px(lin, 50, $0) }
+    check("LAS6 linear: 255 before the first point, 0 after the second, 128 half way, never rising",
+          column[5] == 255 && column[75] == 0 && abs(column[40] - 128) <= 8 && zip(column, column.dropFirst()).allSatisfy { $0 >= $1 } && px(lin, 5, 40) == px(lin, 95, 40))
+    let rad = MaskShapes.rasterize(.radial, points: [SIMD2(0.5, 0.5), SIMD2(0.8, 0.8)], feather: 0.5, width: 100, height: 80, id: "r")
+    check("LAS7 radial: 255 at the centre, 0 outside the ellipse, soft on the rim, symmetric about the centre",
+          px(rad, 50, 40) == 255 && px(rad, 90, 40) == 0 && px(rad, 50, 70) == 0 && px(rad, 70, 40) > 0 && px(rad, 70, 40) < 255 && abs(px(rad, 29, 40) - px(rad, 70, 40)) <= 2)
+    let junk = MaskShapes.rasterize(.lasso, points: [SIMD2(.nan, 0.5), SIMD2(9, -9), SIMD2(0.5, .infinity)], feather: .nan, width: 64, height: 48, id: "j")
+    let few = MaskShapes.rasterize(.radial, points: [SIMD2(0.5, 0.5)], feather: 0.3, width: 64, height: 48, id: "k")
+    check("LAS8 NaN, infinite and too few points cannot crash and give an empty or valid picture", junk.pixels.count == 64 * 48 && few.pixels.allSatisfy { $0 == 0 })
 }
 
 // TP point curve: free points, uneven spacing, black and white points, and the safety net around them
