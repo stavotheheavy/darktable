@@ -1084,7 +1084,7 @@ extension CIModule {
         "clahe": 2,
         "dither": 2,
         "blurs": 3, "lowpass": 4, "soften": 3, "censorize": 2,
-        "defringe": 2, "highpass": 2, "retouch": 2, "texturebands": 2,
+        "defringe": 2, "highpass": 2, "retouch": 3, "texturebands": 2,
         "kuwahara": 2,
     ]
 

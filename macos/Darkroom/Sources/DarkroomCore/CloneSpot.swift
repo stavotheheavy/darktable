@@ -1,8 +1,10 @@
 // Method: spot retouching by frequency separation (the retoucher's heal: the low frequencies of the destination are kept, the detail of the source is brought in). A circular
 // spot at the destination (centre dx, dy as fractions of the frame, radius a fraction of the frame height, feathered over `feather` of it) is replaced by the picture at an offset
-// (the source centre minus the destination centre, in whole pixels). With B the picture's blur (`Blur`, the radius following the spot's), clone = rgb(q) and heal = B(p) + rgb(q) -
-// B(q) at the source position q = p + offset, the pixel becomes mix(clone, heal, `heal`), weighted by amount x (1 - smoothstep(R (1 - feather), R, distance)). Heal 0 is a plain clone,
-// heal 1 matches the surroundings' light and colour. Amount 0 is the identity. Reads are clamped at the frame edge.
+// (the source centre minus the destination centre, in whole pixels). With B the picture's blur (`Blur`, the radius following the spot's), clone = rgb(q) and heal = B(p) x rgb(q) /
+// B(q) at the source position q = p + offset (the source's detail carried as a gain on the destination's base, the log-domain frequency separation: an additive detail from a bright
+// source on a dark destination went negative per channel and clipped into saturated colour), the gain clamped to 0...4 and B(q) floored per channel at 2 percent of its largest channel,
+// the pixel becomes mix(clone, heal, `heal`), weighted by amount x (1 - smoothstep(R (1 - feather), R, distance)). Heal 0 is a plain clone, heal 1 matches the surroundings' light
+// and colour. Amount 0 is the identity. Reads are clamped at the frame edge.
 
 import Foundation
 
@@ -22,6 +24,13 @@ public enum CloneSpot {
         public func blurRadius(height: Int) -> Double { Blur.radius(px: radius * Double(height)) }
     }
 
+    /// The source's detail over its base, per channel: 0...4, with the base floored at 2 percent of its largest channel so a channel near zero cannot blow it up.
+    public static func gain(_ q: SIMD3<Double>, base b: SIMD3<Double>) -> SIMD3<Double> {
+        let floor = 0.02 * max(b.x, b.y, b.z) + 1e-6
+        func g(_ v: Double, _ base: Double) -> Double { min(max(v / max(base, floor), 0), 4) }
+        return SIMD3(g(q.x, b.x), g(q.y, b.y), g(q.z, b.z))
+    }
+
     public static func apply(_ rgb: [SIMD3<Double>], width: Int, height: Int, spot: Spot) -> [SIMD3<Double>] {
         guard spot.amount != 0 else { return rgb }
         let g = spot.geometry(width: width, height: height)
@@ -32,7 +41,7 @@ public enum CloneSpot {
             let wgt = spot.amount * (1 - ColorCommon.smoothstep(g.radius * (1 - spot.feather), g.radius, hypot(Double(x) - g.centre.x, Double(y) - g.centre.y)))
             guard wgt > 0 else { return rgb[i] }
             let q = at(x + g.offset.x, y + g.offset.y)
-            let clone = rgb[q], heal = blurred[i] + rgb[q] - blurred[q]
+            let clone = rgb[q], heal = blurred[i] * gain(rgb[q], base: blurred[q])
             return rgb[i] + wgt * (clone + spot.heal * (heal - clone) - rgb[i])
         }
     }

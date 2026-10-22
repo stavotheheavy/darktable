@@ -209,7 +209,8 @@ extension CIBridge {
         int2 dq = int2(clamp(ax + o.x, 0, int(W) - 1) - ax, clamp(ay + o.y, 0, int(H) - 1) - ay);
         float3 q = img.read(uint2(int2(gid) + off[0] + dq)).rgb;
         float3 bp = blur.read(uint2(int2(gid) + off[1])).rgb, bq = blur.read(uint2(int2(gid) + off[1] + dq)).rgb;
-        float3 heal = bp + q - bq;
+        float bfloor = 0.02f * max(bq.x, max(bq.y, bq.z)) + 1e-6f;
+        float3 heal = bp * clamp(q / max(bq, float3(bfloor)), 0.0f, 4.0f);
         dst.write(float4(c.rgb + wgt * (q + u[6] * (heal - q) - c.rgb), c.a), gid);
     }
     """#

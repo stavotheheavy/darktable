@@ -3221,6 +3221,21 @@ do {
     let hx = Int(hg.centre.x.rounded()), hy = Int(hg.centre.y.rounded())
     check("RTC4 heal keeps the destination's light where the source is brighter: the clone brings 0.8 to the spot, the heal leaves it at 0.2 (within 1e-9)",
           abs(cp[hy * w + hx].x - 0.8) < 0.05 && abs(hp[hy * w + hx].x - 0.2) < 1e-9, "clone \(cp[hy * w + hx].x), heal \(hp[hy * w + hx].x)")
+    // a bright, strongly detailed source on a dark coloured destination: the old additive detail went negative per channel and clipped into saturated colour
+    var hot = [SIMD3<Double>](repeating: SIMD3(0.06, 0.04, 0.02), count: w * h)
+    for y in 0..<h { for x in 0..<14 { hot[y * w + x] = SIMD3(repeating: ((x + y) % 2 == 0) ? 3.0 : 0.4) } }
+    var hs = heal; hs.radius = 0.3
+    let hh = CloneSpot.apply(hot, width: w, height: h, spot: hs)
+    let hgeo = hs.geometry(width: w, height: h)
+    var inSpot = 0, finiteOK = true, cap = 0.0
+    for i in 0..<(w * h) where hypot(Double(i % w) - hgeo.centre.x, Double(i / w) - hgeo.centre.y) < hgeo.radius * 0.5 {
+        inSpot += 1
+        let v = hh[i]
+        finiteOK = finiteOK && v.x.isFinite && v.y.isFinite && v.z.isFinite && v.x >= 0 && v.y >= 0 && v.z >= 0
+        cap = max(cap, v.x / 0.06, v.y / 0.04, v.z / 0.02)
+    }
+    check("RTC6 heal of a bright detailed source on a dark destination stays finite and non-negative and no channel exceeds 4 x the destination (\(inSpot) pixels, max \(cap))",
+          inSpot > 0 && finiteOK && cap <= 4 + 1e-9, "\(finiteOK) \(cap)")
     check("RTC5 the edge of the spot is feathered to nothing: a pixel at the radius is unchanged and the weight falls monotonically outward",
           (0..<30).allSatisfy { i in let r1 = Double(i) / 30 * g.radius, r2 = Double(i + 1) / 30 * g.radius
               return (1 - ColorCommon.smoothstep(g.radius * 0.5, g.radius, r2)) <= (1 - ColorCommon.smoothstep(g.radius * 0.5, g.radius, r1)) + 1e-12 })
