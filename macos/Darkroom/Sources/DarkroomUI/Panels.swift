@@ -497,6 +497,15 @@ struct ParamRow: View {
                 }
             }
             .onDisappear { Rig.setters[id] = nil }
+            // a hue with its strength asleep at zero: say what a drag will wake, so the slider never looks dead
+            let asleep = model.sleepers(module, field)
+            if !asleep.isEmpty {
+                Text("moving this turns up \(asleep.map(\.label).joined(separator: " and "))")
+                    .font(.caption2).foregroundStyle(.secondary).lineLimit(2)
+                    .rig(id + "-wakes")
+            } else if let hint = model.hint(module, field) {
+                Text(hint).font(.caption2).foregroundStyle(.secondary).lineLimit(2)
+            }
         }
     }
 

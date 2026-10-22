@@ -48,13 +48,12 @@ public struct DarkroomView: View {
                     .chrome(hidden: model.uiHidden)
             }
 
-            // keyboard routes: instant, because a key that is pressed often should not animate
+            // keyboard routes, every one from the registry (Shortcuts.swift): instant, because a key that is pressed
+            // often should not animate
             Group {
-                Button("") { model.uiHidden.toggle() }.keyboardShortcut("h", modifiers: [.command, .shift])
-                Button("") { if model.history.count > 1 { model.showingOriginal.toggle() } }
-                    .keyboardShortcut("\\", modifiers: [.command])
-                Button("") { model.proMenuOpen = nil }.keyboardShortcut(.cancelAction)
-                Button("") { model.showClipping.toggle() }.keyboardShortcut("j", modifiers: [])
+                ForEach(Shortcuts.all) { s in
+                    Button("") { s.action(model) }.keyboardShortcut(s.shortcut)
+                }
             }
             .opacity(0).frame(width: 0, height: 0).allowsHitTesting(false)
         }

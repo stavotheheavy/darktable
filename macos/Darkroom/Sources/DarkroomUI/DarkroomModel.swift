@@ -36,6 +36,11 @@ public struct ModuleRow: Identifiable, Equatable {
 /// Edits are a snapshot map of what the user changed on top of darktable's imported
 /// state; every change is a history step, so undo, redo and jumping to any step are
 /// exact. Rendering is latest-wins through the persistent session.
+public enum ProPanelOrder: String, CaseIterable, Sendable {
+    case newest, pipeline
+    public var title: String { self == .newest ? "Newest" : "Pipeline" }
+}
+
 @MainActor
 @Observable
 public final class DarkroomModel {
@@ -118,6 +123,14 @@ public final class DarkroomModel {
     /// The size zoom and pan work in: the output size when known, else the processed size.
     /// Pro's unfolded sections (by module id), for this session; membership itself lives in the edits.
     public var proOpen: Set<String> = []
+    /// How Pro's panel stacks its sections: the one switched on last at the top (the owner's history view), or in the
+    /// order the engine applies them (masks and geometry read better that way). Remembered across launches.
+    public private(set) var proPanelOrder: ProPanelOrder =
+        ProPanelOrder(rawValue: UserDefaults.standard.string(forKey: "darkroom.proPanelOrder") ?? "") ?? .newest
+    public func setProPanelOrder(_ o: ProPanelOrder) {
+        proPanelOrder = o
+        UserDefaults.standard.set(o.rawValue, forKey: "darkroom.proPanelOrder")
+    }
     /// The sensor frame at scale 1 and the camera's orientation, for Simple's geometry controls; nil when
     /// the engine cannot report them (see `simpleGeometryReady`).
     var geometryBase: (sensor: SIMD2<Double>, camera: Orientation)?
@@ -412,7 +425,7 @@ public final class DarkroomModel {
         Task { await loadSchema(for: m) }
     }
 
-    func loadSchema(for m: ModuleInfo) async {
+    public func loadSchema(for m: ModuleInfo) async {
         guard m.haveIntrospection, schemas[m.operation] == nil else { return }
         if let s = try? await engine.schema(for: m.operation) { schemas[m.operation] = s }
     }
@@ -436,6 +449,40 @@ public final class DarkroomModel {
     /// The label a step gets: "exposure", or "color balance rgb · skin".
     private func title(_ m: ModuleInfo) -> String { m.title }
 
+    /// A control that shows nothing while another of its module's controls is at zero: split toning's shadows hue is
+    /// invisible until shadows saturation is above zero, a colour filter's hue until its strength is. Dragging the
+    /// trigger wakes the sleeper to `wake` in the same history step, so the slider the user moves shows on the picture.
+    /// A trigger of "*" is any control of the module but the sleeper. Defaults stay the identity (the goldens hold).
+    static let wakes: [String: [(trigger: String, sleeper: String, wake: Double)]] = [
+        "splittoning": [("shadows_hue", "shadows_saturation", 0.5), ("highlights_hue", "highlights_saturation", 0.5)],
+        "monochrome": [("filter_hue", "filter_strength", 0.5), ("filter_hue", "intensity", 1), ("filter_strength", "intensity", 1)],
+        "colorize": [("hue", "strength", 0.5)],
+        "gradientmap": [("*", "strength", 0.5), ("mids_hue", "mids_sat", 0.5)],
+        "photofilter": [("hue", "density", 0.5), ("preserve", "density", 0.5)],
+        "skinsmooth": [("*", "amount", 0.5)],
+        "halation": [("*", "strength", 0.5)],
+        "defringe": [("*", "strength", 0.5)],
+    ]
+
+    /// A line under a control whose effect is easy to miss, in the user's words (the manual says the same).
+    static let hints: [String: String] = [
+        "denoiseprofile.chroma": "colour noise only: shows on high-ISO photos, not on a clean one",
+        "denoiseprofile.luma": "grain in the brightness; look at the shadows at 100%",
+    ]
+    public func hint(_ m: ModuleInfo, _ f: FieldSchema) -> String? { Self.hints["\(m.operation).\(f.name)"] }
+
+    /// The controls `f` would wake (each at zero now) when it moves; empty when it moves on its own.
+    public func sleepers(_ m: ModuleInfo, _ f: FieldSchema) -> [FieldSchema] {
+        guard let rules = Self.wakes[m.operation], let fields = schemas[m.operation]?.fields else { return [] }
+        var out: [FieldSchema] = []
+        for r in rules where r.trigger == f.name || (r.trigger == "*" && f.name != r.sleeper) {
+            guard let s = fields.first(where: { $0.name == r.sleeper }), !out.contains(where: { $0.name == s.name }),
+                  (value(m, s).double ?? 0) == 0 else { continue }
+            out.append(s)
+        }
+        return out
+    }
+
     public func setParam(_ m: ModuleInfo, _ f: FieldSchema, to v: ParamValue) {
         var value = v
         if case .number(var d) = v {
@@ -447,6 +494,14 @@ public final class DarkroomModel {
         // editing a module that was taken out of Pro's panel brings it back, as a fresh start (switched on below)
         if e.inPanel == false { e.inPanel = nil; e.enabled = nil }
         if value == base(m, f) { e.params[f.name] = nil } else { e.params[f.name] = value }
+        // a hue moved while its strength sleeps at zero: wake the strength too, in this same step
+        if value != base(m, f), let rules = Self.wakes[m.operation] {
+            for s in sleepers(m, f) {
+                let wake = rules.first { $0.sleeper == s.name }?.wake ?? 0.5
+                let w = ParamValue.number(min(max(wake, s.min), s.max))
+                e.params[s.name] = w == base(m, s) ? nil : w
+            }
+        }
         // changing a control on a module that is off turns it on, like the darkroom does
         if !m.enabled, e.enabled == nil, !e.params.isEmpty, !m.hideEnableButton { e.enabled = true }
         commit(id: m.id, edit: e, label: title(m), detail: "\(f.label): \(describe(value, f))",

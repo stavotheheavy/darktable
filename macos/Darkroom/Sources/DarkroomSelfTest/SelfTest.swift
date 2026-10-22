@@ -94,6 +94,7 @@ struct SelfTest {
         let gamutReport = has("--gamut-report")
         // darktable is the default; `ci` runs the clean engine (only --bench supports it so far)
         let engineName = take("--engine") ?? "darktable"
+        if has("--manual") { exit(checkManual() ? 0 : 1) }
         guard let path = args.first else {
             print("usage: dtb-selftest <image> [--max 1400] [--out frame.png] [--ui]")
             exit(2)
@@ -169,6 +170,24 @@ struct SelfTest {
             print("FAILED: \(error)")
             exit(1)
         }
+    }
+
+    // MARK: the manual mirrors the shortcut registry
+
+    /// Every shortcut in `Shortcuts.all` must appear in docs/manual.md with its keys and its id, so the human manual
+    /// cannot drift from the app. Run: swift run dtb-selftest --manual
+    static func checkManual() -> Bool {
+        let manual = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+            .appending(path: "docs/manual.md")
+        guard let text = try? String(contentsOf: manual, encoding: .utf8) else { print("FAIL  no manual at \(manual.path)"); return false }
+        var ok = true
+        for s in Shortcuts.manualLines {
+            let hit = text.contains("| \(s.keys) |") && text.contains("(`\(s.id)`)")
+            print("\(hit ? "PASS" : "FAIL")  manual lists \(s.keys) (\(s.id))")
+            ok = ok && hit
+        }
+        print(ok ? "manual matches the \(Shortcuts.all.count) shortcuts" : "manual is out of date: docs/manual.md")
+        return ok
     }
 
     // MARK: every control, its effect, undo and redo
@@ -1731,6 +1750,9 @@ struct SelfTest {
             let picked = [entryWith("shadhi"), entryWith("sharpen"), entryWith("vignette"), entryWith("crop"), entryWith("invert")].compactMap { $0 }
             for e in picked { model.addToPanel(e) }
             await model.settle()
+            let wasOrder = model.proPanelOrder
+            model.setProPanelOrder(.pipeline)
+            defer { model.setProPanelOrder(wasOrder) }
             let orders = model.proPanelEntries.map { $0.modules.map(\.iopOrder).min() ?? 0 }
             let sorted = zip(orders, orders.dropFirst()).allSatisfy { $0 <= $1 }
             check(picked.count == 5 && picked.allSatisfy { model.inProPanel($0) } && sorted,
@@ -2424,6 +2446,68 @@ struct SelfTest {
             check(!FileManager.default.fileExists(atPath: missingSidecar.path), "a photo that failed to open gets no sidecar from the previous photo's edits")
         }
         try? FileManager.default.removeItem(at: missing)
+
+        if clean {
+            print("pro panel: wake, all on/off, order")
+            // its own copy and model, so the history this block makes reaches no other check
+            let copy2 = work.appending(path: "panel-" + URL(fileURLWithPath: path).lastPathComponent)
+            try FileManager.default.copyItem(atPath: path, toPath: copy2.path)
+            let model = DarkroomModel(engine: engine)
+            await model.open(path: copy2.path)
+            await model.settle()
+            let base = luma(model)
+            // a hue moved while its saturation sleeps at zero wakes the saturation in the same step
+            if let st = module(model, "splittoning") {
+                await model.loadSchema(for: st)
+                if let hue = field(model, st, "shadows_hue"), let sat = field(model, st, "shadows_saturation") {
+                    check(model.sleepers(st, hue).map(\.name) == ["shadows_saturation"], "shadows hue reports its sleeping saturation")
+                    let steps = model.history.count
+                    model.setParam(st, hue, to: .number(300))
+                    check(model.value(st, sat).double == 0.5, "moving shadows hue wakes shadows saturation to 0.5 (\(model.value(st, sat)))")
+                    check(model.history.count == steps + 1, "hue and saturation are one history step")
+                    check(model.sleepers(st, hue).isEmpty, "awake: nothing left to wake")
+                    await model.settle()
+                    check(model.isEnabled(st) && model.inProPanel(st), "split toning is on and in the panel")
+                }
+            }
+            if let exposure = module(model, "exposure"), let ev = field(model, exposure, "exposure") {
+                model.setParam(exposure, ev, to: .number((model.base(exposure, ev).double ?? 0) + 1.5))
+            }
+            await model.settle()
+            let edited = luma(model)
+            check(edited > base + 3, "an exposure edit brightens (\(String(format: "%.1f", base)) -> \(String(format: "%.1f", edited)))")
+            // all off, all on: one step each, the sections stay
+            let before = model.proPanelEntries
+            check(before.count >= 2, "panel has \(before.count) sections")
+            let steps = model.history.count
+            model.setAllProEffects(false)
+            check(!model.canSetAllProEffects(false), "all off: no section left on")
+            check(model.proPanelEntries.count == before.count, "all off keeps every section")
+            check(model.history.count == steps + 1, "all off is one history step")
+            await model.settle()
+            check(abs(luma(model) - edited) > 1, "all off takes the edits off the picture (\(String(format: "%.1f", luma(model))))")
+            model.setAllProEffects(true)
+            check(!model.canSetAllProEffects(true), "all on: no section left off")
+            check(model.history.count == steps + 2, "all on is one history step")
+            await model.settle()
+            check(abs(luma(model) - edited) < 0.5, "all on brings the edits back")
+            // order: newest switched on at the top, pipeline by engine order
+            model.setProPanelOrder(.newest)
+            let menu = model.proMenu.flatMap(\.entries).filter { !model.inProPanel($0) }
+            if menu.count >= 2 {
+                model.addToPanel(menu[0]); model.addToPanel(menu[1])
+                check(model.proPanelEntries.first?.id == menu[1].id, "newest: the section switched on last is at the top")
+                check(model.proPanelEntries.dropFirst().first?.id == menu[0].id, "newest: the one before it is second")
+                model.undo()
+                check(model.proPanelEntries.first?.id == menu[0].id, "undo moves the top down with it")
+                model.redo()
+                model.setProPanelOrder(.pipeline)
+                let orders = model.proPanelEntries.map { $0.modules.map(\.iopOrder).min() ?? 0 }
+                check(orders == orders.sorted(), "pipeline: sections in engine order")
+                model.setProPanelOrder(.newest)
+            } else { skip("panel order", "fewer than two modules left to switch on") }
+            await model.flushSave()
+        }
 
         if !notApplicable.isEmpty { print("\n\(notApplicable.count) check(s) n/a on this engine: \(notApplicable.joined(separator: "; "))") }
         print(failures.isEmpty ? "\nALL CHECKS PASSED" : "\n\(failures.count) CHECK(S) FAILED")

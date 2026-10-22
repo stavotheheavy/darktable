@@ -37,10 +37,36 @@ extension DarkroomModel {
     /// In the panel: what the Modules menu last said (stored with the edit, so undo, redo and the sidecar keep it);
     /// otherwise by default: a basic (its first instance), anything edited, or anything the engine applies that can
     /// be switched off (darktable turns several on by default, and the menu must match what is applied).
-    public func inProPanel(_ m: ModuleInfo) -> Bool {
-        if let decided = edits[m.id]?.inPanel { return decided }
+    public func inProPanel(_ m: ModuleInfo) -> Bool { inProPanel(m, edits) }
+
+    /// The same question of an earlier (or later) state of the edits, for the panel's history order.
+    func inProPanel(_ m: ModuleInfo, _ map: EditMap) -> Bool {
+        if let decided = map[m.id]?.inPanel { return decided }
         if Self.proBasics.contains(m.operation) && m.multiPriority == 0 { return true }
-        return isEdited(m) || (isEnabled(m) && !m.hideEnableButton)
+        let e = map[m.id]
+        let edited = e.map { !$0.params.isEmpty || !$0.blend.isEmpty || ($0.enabled != nil && $0.enabled != m.enabled) } ?? false
+        return edited || ((e?.enabled ?? m.enabled) && !m.hideEnableButton)
+    }
+
+    /// Applied to the picture in this state of the edits: in the panel and switched on.
+    private func live(_ m: ModuleInfo, _ map: EditMap) -> Bool {
+        inProPanel(m, map) && (map[m.id]?.enabled ?? m.enabled) && !m.hideEnableButton
+    }
+
+    /// The history step (index) at which each module last went live, over the steps up to the current one. A module
+    /// that was live from the start (a basic at import) has no step. Derived, so undo and redo keep the order honest.
+    private var lastSwitchedOn: [String: Int] {
+        var out: [String: Int] = [:]
+        guard historyIndex > 0 else { return out }
+        for i in 1...historyIndex {
+            let prev = history[i - 1].edits, cur = history[i].edits
+            // only modules whose edit changed in this step can have changed state
+            for id in Set(prev.keys).union(cur.keys) where prev[id] != cur[id] {
+                guard let m = modules.first(where: { $0.id == id }) else { continue }
+                if !live(m, prev) && live(m, cur) { out[id] = i }
+            }
+        }
+        return out
     }
 
     /// One panel entry per module, or per group of modules shown as one section (crop and straighten).
@@ -59,7 +85,8 @@ extension DarkroomModel {
         return ProEntry(id: first.id, name: name, modules: ms)
     }
 
-    /// The panel's sections, in the order the engine applies them.
+    /// The panel's sections: by `proPanelOrder`, the one switched on last first (then the ones live since import, in
+    /// engine order), or all in the order the engine applies them.
     public var proPanelEntries: [ProEntry] {
         var seen = Set<String>(), out: [(Int, ProEntry)] = []
         for m in modules where inProPanel(m) && !seen.contains(m.id) {
@@ -72,7 +99,28 @@ extension DarkroomModel {
                 out.append((m.iopOrder, ProEntry(id: m.id, name: m.title, modules: [m])))
             }
         }
-        return out.sorted { $0.0 < $1.0 }.map(\.1)
+        let pipeline = out.sorted { $0.0 < $1.0 }.map(\.1)
+        guard proPanelOrder == .newest else { return pipeline }
+        let steps = lastSwitchedOn
+        func step(_ e: ProEntry) -> Int { e.modules.compactMap { steps[$0.id] }.max() ?? -1 }
+        // a stable sort: newest step first; the ones without a step keep their pipeline order after them
+        return pipeline.enumerated().sorted { a, b in
+            let sa = step(a.element), sb = step(b.element)
+            return sa != sb ? sa > sb : a.offset < b.offset
+        }.map(\.element)
+    }
+
+    /// Every section's effect on, or off, as one history step. The sections stay with their settings.
+    public func setAllProEffects(_ on: Bool) {
+        let targets = proPanelEntries.flatMap(\.modules).filter { !$0.hideEnableButton && isEnabled($0) != on }
+        guard !targets.isEmpty else { return }
+        grouped(on ? "All modules on" : "All modules off", target: "pro.all.\(history.count)") {
+            for m in targets { setEnabled(m, on) }
+        }
+    }
+    /// Whether All on / All off would change anything.
+    public func canSetAllProEffects(_ on: Bool) -> Bool {
+        proPanelEntries.flatMap(\.modules).contains { !$0.hideEnableButton && isEnabled($0) != on }
     }
 
     /// The Modules menu: the common ten first, then everything else by kind.
@@ -248,8 +296,31 @@ struct ProPanel: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: 8) {
                     let entries = model.proPanelEntries
-                    HStack {
+                    HStack(spacing: 8) {
                         Text("In the panel \u{00B7} \(entries.count)").font(.caption.weight(.medium)).foregroundStyle(.secondary)
+                        Spacer(minLength: 4)
+                        Picker("Order", selection: Binding(get: { model.proPanelOrder }, set: { model.setProPanelOrder($0) })) {
+                            ForEach(ProPanelOrder.allCases, id: \.self) { Text($0.title).tag($0) }
+                        }
+                        .pickerStyle(.segmented)
+                        .labelsHidden()
+                        .controlSize(.small)
+                        .frame(width: 132)
+                        .help("Newest: the section switched on last at the top. Pipeline: the order the engine applies them.")
+                        .rig("pro-order")
+                    }
+                    .padding(.horizontal, 4)
+                    HStack(spacing: 6) {
+                        Button("All on") { model.setAllProEffects(true) }
+                            .buttonStyle(.glass).controlSize(.small)
+                            .disabled(!model.canSetAllProEffects(true))
+                            .help("Switch every section's effect on (\u{2325}\u{2318}A)")
+                            .rig("pro-all-on")
+                        Button("All off") { model.setAllProEffects(false) }
+                            .buttonStyle(.glass).controlSize(.small)
+                            .disabled(!model.canSetAllProEffects(false))
+                            .help("Switch every section's effect off; the sections and their settings stay (\u{2325}\u{2318}0)")
+                            .rig("pro-all-off")
                         Spacer()
                     }
                     .padding(.horizontal, 4)
