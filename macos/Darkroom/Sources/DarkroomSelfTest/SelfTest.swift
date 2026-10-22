@@ -13,6 +13,7 @@ import DarkroomCI
 //   dtb-selftest <image> [--max 1400] [--out frame.png]      engine round trip + timings
 //   dtb-selftest <image> --ui                                the real model: sliders -> stack -> pixels
 //   dtb-selftest <image> --stack s.json --out f.png         one render of a stack file, on either engine
+//   dtb-selftest <image> --audit dir --time [--max N]       warm render time of every module (median of 5 after a warm-up) in dir/audit-time.csv
 //   dtb-selftest <image> --audit dir [--max 800]            every module of the clean engine at three strengths: PNGs and audit.csv
 //   dtb-selftest <raw> --crop-abuse                          raw crops past the frame must not crash a render
 //
@@ -79,6 +80,7 @@ struct SelfTest {
         let fromModule = take("--from")
         let stackFile = take("--stack")
         let auditDir = take("--audit")
+        let auditTime = has("--time")
         let schemaOp = take("--schema")
         let oneShot = take("--one-shot")
         let hdrJPEG = take("--hdr-jpeg")
@@ -131,7 +133,11 @@ struct SelfTest {
                     print("\(f.name)\t\(f.kind)\tmin \(f.min)\tmax \(f.max)\tdefault \(f.defaultValue)\t\(f.options.map { "\($0)" }.joined(separator: ","))\t\(f.description)")
                 }
             } else if let auditDir {
-                try await runAudit(engine: engine, path: path, maxSide: maxSide, out: auditDir)
+                if auditTime {
+                    try await runAuditTime(engine: engine, path: path, maxSide: maxSide, out: auditDir)
+                } else {
+                    try await runAudit(engine: engine, path: path, maxSide: maxSide, out: auditDir)
+                }
             } else if let stackFile {
                 try await runStack(engine: engine, path: path, maxSide: maxSide, file: stackFile, out: out)
             } else if cropAbuse {
@@ -986,6 +992,33 @@ struct SelfTest {
         }
         try csv.write(toFile: "\(out)/audit.csv", atomically: true, encoding: .utf8)
         print("wrote \(out)/audit.csv")
+    }
+
+    /// Warm render time of every golden case at its golden setting: the first render (shader compile, cache fill) is timed on its own as `cold_ms`,
+    /// then the median of five more is `warm_ms`. The frame is the session render, so `--max` sets the pixel count.
+    static func runAuditTime(engine: any PhotoEngine, path: String, maxSide: Int, out: String) async throws {
+        try FileManager.default.createDirectory(atPath: out, withIntermediateDirectories: true)
+        try await engine.openSession(path: path, maxSide: maxSide)
+        let base = try await engine.sessionRender(stack: [], scale: 1)
+        _ = try await engine.sessionRender(stack: [], scale: 1)
+        var csv = "module,width,height,cold_ms,warm_ms\n"
+        var rows: [(String, Double)] = []
+        for c in CIEngineProbe.goldenCases() {
+            guard let entry = c.stack.first else { continue }
+            do {
+                let stack = [StackEntry(operation: entry.operation, params: entry.params)]
+                let cold = try await engine.sessionRender(stack: stack, scale: 1).milliseconds
+                var warm: [Double] = []
+                for _ in 0..<5 { warm.append(try await engine.sessionRender(stack: stack, scale: 1).milliseconds) }
+                warm.sort()
+                csv += String(format: "%@,%d,%d,%.0f,%.0f\n", entry.operation, base.width, base.height, cold, warm[2])
+                rows.append((entry.operation, warm[2]))
+            } catch { csv += "\(entry.operation),,,,RENDER-FAILED \(error)\n" }
+        }
+        try csv.write(toFile: "\(out)/audit-time.csv", atomically: true, encoding: .utf8)
+        print("\(base.width)x\(base.height): slowest warm renders")
+        for (n, ms) in rows.sorted(by: { $0.1 > $1.1 }).prefix(20) { print(String(format: "  %-16@ %5.0f ms", n as NSString, ms)) }
+        print("wrote \(out)/audit-time.csv")
     }
 
     static func runEngine(engine: any PhotoEngine, path: String, maxSide: Int, out: String?) async throws {

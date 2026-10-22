@@ -1,3 +1,4 @@
+import DarkroomCore
 import AppKit
 import DarktableKit
 import SwiftUI
@@ -462,13 +463,20 @@ struct ParamRow: View {
         }
         if let soft {
             let lo = min(soft.lowerBound, current), hi = max(soft.upperBound, current)
-            let binding = Binding(get: { current }, set: { model.setParam(module, field, to: .number($0)) })
+            let curved = SoftRange.hasCurve(operation: module.operation, field: field)
+            // the curve works over the soft range, widened to the current value so a typed +-8 EV still sits at the end of the track
+            let limit = max(abs(lo), abs(hi))
+            let binding = curved
+                ? Binding(get: { ExposureCurve.position(value: current, limit: limit) },
+                          set: { model.setParam(module, field, to: .number(ExposureCurve.value(position: $0, limit: limit))) })
+                : Binding(get: { current }, set: { model.setParam(module, field, to: .number($0)) })
+            let (trackLo, trackHi) = curved ? (-1.0, 1.0) : (lo, hi)
             Group {
                 // a zero step traps in SwiftUI, so only integers get one
                 if field.kind == .int, hi > lo {
-                    Slider(value: binding, in: lo...hi, step: 1, onEditingChanged: { model.setDragging($0) })
+                    Slider(value: binding, in: trackLo...trackHi, step: 1, onEditingChanged: { model.setDragging($0) })
                 } else if hi > lo {
-                    Slider(value: binding, in: lo...hi, onEditingChanged: { model.setDragging($0) })
+                    Slider(value: binding, in: trackLo...trackHi, onEditingChanged: { model.setDragging($0) })
                 }
             }
             .tint(Theme.accent)
@@ -480,7 +488,11 @@ struct ParamRow: View {
                     Rig.setters[id] = { frac in
                         let c = model.value(module, field).double ?? 0
                         let l = min(soft.lowerBound, c), h = max(soft.upperBound, c)
-                        model.setParam(module, field, to: .number(l + (h - l) * frac))
+                        if SoftRange.hasCurve(operation: module.operation, field: field) {
+                            model.setParam(module, field, to: .number(ExposureCurve.value(position: frac * 2 - 1, limit: max(abs(l), abs(h)))))
+                        } else {
+                            model.setParam(module, field, to: .number(l + (h - l) * frac))
+                        }
                     }
                 }
             }

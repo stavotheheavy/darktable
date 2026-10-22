@@ -1,3 +1,4 @@
+import DarkroomCore
 import DarktableKit
 import Foundation
 
@@ -116,9 +117,14 @@ enum SoftRange {
         "temperature.blue": 0.3...3,
     ]
 
+    /// Fields whose slider is not linear: the track position runs -1...1 and the value follows `ExposureCurve`, so the middle of the track is fine control
+    /// and the ends reach the soft limit quickly. The number field next to the slider stays exact.
+    static func hasCurve(operation: String, field: FieldSchema) -> Bool { "\(operation).\(field.name)" == "exposure.exposure" }
+
     static func range(operation: String, field: FieldSchema) -> ClosedRange<Double>? {
         if let r = table["\(operation).\(field.name)"] { return r }
         guard field.hasUsableRange, field.max > field.min else { return nil }
         return field.min...field.max
     }
 }
+

@@ -3304,5 +3304,15 @@ do {
     check("CLH7 black, past white and negative pixels stay finite and past-white is untouched", hostile.allSatisfy { $0.x.isFinite && $0.y.isFinite && $0.z.isFinite } && hostile[1] == SIMD3(5, 5, 5) && hostile[0] == .zero)
 }
 
+do {
+    let ps = stride(from: -1.0, through: 1.0, by: 0.01).map { ExposureCurve.value(position: $0, limit: 4) }
+    check("EXC1 exposure slider: centre is exactly 0, ends are +-4, never decreasing", ExposureCurve.value(position: 0, limit: 4) == 0 && ps.first == -4 && ps.last == 4
+          && zip(ps, ps.dropFirst()).allSatisfy { $0 <= $1 })
+    check("EXC2 the middle 40 percent of the track covers about +-1 EV (fine control)", abs(ExposureCurve.value(position: 0.4, limit: 4) - 1.0) < 0.35, "\(ExposureCurve.value(position: 0.4, limit: 4))")
+    check("EXC3 drags land on 0.01 EV and the position of a value round trips within a step",
+          ps.allSatisfy { abs($0 * 100 - ($0 * 100).rounded()) < 1e-6 }
+          && [-3.2, -0.5, 0.37, 1.3, 3.9].allSatisfy { abs(ExposureCurve.value(position: ExposureCurve.position(value: $0, limit: 4), limit: 4) - $0) <= 0.0051 })
+}
+
 print(failures == 0 ? "\nall checks passed" : "\n\(failures) failed")
 exit(failures == 0 ? 0 : 1)
