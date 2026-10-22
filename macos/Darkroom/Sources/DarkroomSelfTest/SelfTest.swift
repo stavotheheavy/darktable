@@ -1057,8 +1057,12 @@ struct SelfTest {
             guard let schema = try? await engine.schema(for: op) else { continue }
             let group = groupOf[op] ?? "Other"
             // DARKROOM_SWEEP_BASE=golden holds every other field at the golden setting instead of its default, so fields behind a gate (amount, strength) show their effect
-            let baseParams: [String: ParamValue] = ProcessInfo.processInfo.environment["DARKROOM_SWEEP_BASE"] == "golden"
-                ? (CIEngineProbe.goldenCases().first { $0.operation == op }?.stack.first?.params ?? [:]) : [:]
+            // a module with a method choice has one golden case per option: each is a base of its own, and its rows are labelled "module[option]", so a field can be judged
+            // against the option that uses it
+            let bases: [(variant: String, params: [String: ParamValue])] = ProcessInfo.processInfo.environment["DARKROOM_SWEEP_BASE"] == "golden"
+                ? CIEngineProbe.goldenCases().filter { $0.operation == op }.map { ($0.variant, $0.stack.first?.params ?? [:]) } : [("", [:])]
+            for (variant, baseParams) in bases.isEmpty ? [("", [:])] : bases {
+            let opLabel = variant.isEmpty ? op : "\(op)[\(variant)]"
             for f in schema.fields {
                 var settings: [(String, ParamValue)] = []
                 switch f.kind {
@@ -1076,7 +1080,7 @@ struct SelfTest {
                 case .bool: settings = [("min", .bool(false)), ("max", .bool(true))]
                 case .enumeration: settings = f.options.prefix(8).map { ("opt-\($0.name)", .option($0.name)) }
                 }
-                let dir = "\(out)/\(group)/\(op)"
+                let dir = "\(out)/\(group)/\(opLabel)"
                 if steps <= 1 { try FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true) }
                 for (label, value) in settings {
                     var flags: [String] = []
@@ -1101,14 +1105,15 @@ struct SelfTest {
                         if Double(crushed) / Double(w * h) > 0.35 { flags.append("CRUSHED") }
                         if inChange < 0.05, ringChange < 0.05, px.count == baseRGBA.count { flags.append("NO-CHANGE") }
                         if steps <= 1 { try writePNG(frame.image, to: URL(fileURLWithPath: "\(dir)/\(f.name).\(label).png")) }
-                        line = String(format: "%@,%@,%@,%@,%@,%.0f,%.1f,%.1f,%.2f,%.2f,%.1f,%.1f,%@\n", group, op, f.name, label, "\(value)".replacingOccurrences(of: ",", with: ";"),
+                        line = String(format: "%@,%@,%@,%@,%@,%.0f,%.1f,%.1f,%.2f,%.2f,%.1f,%.1f,%@\n", group, opLabel, f.name, label, "\(value)".replacingOccurrences(of: ",", with: ";"),
                                       frame.milliseconds, luma, luma - baseLuma, 100 * Double(clipped) / Double(w * h), 100 * Double(crushed) / Double(w * h),
                                       ringChange, inChange, flags.joined(separator: " "))
                     } catch {
-                        line = "\(group),\(op),\(f.name),\(label),,,,,,,,,RENDER-FAILED \(error)\n".replacingOccurrences(of: "\n", with: " ", options: [], range: nil) + "\n"
+                        line = "\(group),\(opLabel),\(f.name),\(label),,,,,,,,,RENDER-FAILED \(error)\n".replacingOccurrences(of: "\n", with: " ", options: [], range: nil) + "\n"
                     }
                     csv += line
                 }
+            }
             }
             print("swept \(op)")
         }
