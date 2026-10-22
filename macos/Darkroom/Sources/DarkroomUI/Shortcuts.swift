@@ -15,6 +15,10 @@ public struct Shortcut: Identifiable, Sendable {
 
 public enum Shortcuts {
     public static let all: [Shortcut] = [
+        Shortcut(id: "undo", title: "Undo the last edit", keys: "\u{2318}Z",
+                 shortcut: KeyboardShortcut("z", modifiers: [.command])) { $0.undo() },
+        Shortcut(id: "redo", title: "Redo the edit you undid", keys: "\u{2318}\u{21E7}Z",
+                 shortcut: KeyboardShortcut("z", modifiers: [.command, .shift])) { $0.redo() },
         Shortcut(id: "hide-ui", title: "Hide or show the panels", keys: "\u{2318}\u{21E7}H",
                  shortcut: KeyboardShortcut("h", modifiers: [.command, .shift])) { $0.uiHidden.toggle() },
         Shortcut(id: "original", title: "Hold to compare with the original (press again to return)", keys: "\u{2318}\\",

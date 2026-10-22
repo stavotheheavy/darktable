@@ -117,6 +117,8 @@ The app's shortcuts live in one table (`Sources/DarkroomUI/Shortcuts.swift`). Th
 
 | Keys | Does |
 | --- | --- |
+| ⌘Z | Undo the last edit (`undo`) |
+| ⌘⇧Z | Redo the edit you undid (`redo`) |
 | ⌘⇧H | Hide or show the panels (`hide-ui`) |
 | ⌘\ | Compare with the original; press again to return (`original`) |
 | Esc | Close the open menu (`close-menu`) |
