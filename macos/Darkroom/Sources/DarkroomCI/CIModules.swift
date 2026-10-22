@@ -251,6 +251,12 @@ struct CIModule: Sendable {
             ["curve": .option("reinhard"), "white": num(n(p, "white", 4)), "amount": num(n(p, "amount", 0))] }
         a["relight"] = CIAlias(survivor: "lumabands", name: "fill light") { p in
             ["ev": num(n(p, "ev", 0)), "center": num(n(p, "center", -1)), "width": num(n(p, "width", 4))] }
+        a["halation"] = CIAlias(survivor: "bloom", name: "halation") { p in
+            ["glow": .option("film"), "strength": num(n(p, "strength", 0)), "size": num(n(p, "size", 30)), "hue": num(n(p, "hue", 25))] }
+        // a vignette is the radial light turned inside out: a centred circle of half the diagonal times scale, feathered over its whole radius
+        a["vignette"] = CIAlias(survivor: "radiallight", name: "vignetting") { p in
+            ["exposure": num(Vignette.ev(strength: n(p, "strength", 0))), "x": num(0.5), "y": num(0.5), "size": num(Vignette.size(scale: n(p, "scale", 1))),
+             "shape": num(1), "rotation": num(0), "feather": num(1), "outside": num(1)] }
         a["shadhi"] = CIAlias(survivor: "zones", name: "shadows and highlights") { p in
             ["shadows": num(n(p, "shadows", 0) / Shadhi.sliderPerEV), "highlights": num(n(p, "highlights", 0) / Shadhi.sliderPerEV)] }
         return a
@@ -267,7 +273,7 @@ struct CIModule: Sendable {
     /// Modules that read a neighbourhood (a blur radius, a guided filter, wavelet levels): the expensive ones. The segment cache keeps
     /// the picture after each of them, so a slider moved further down the stack does not run them again.
     static let neighbourhoodOperations: Set<String> = [
-        "sharpen", "denoiseprofile", "bilat", "atrous", "hazeremoval", "zones", "clahe", "soften", "blurs", "lowpass", "censorize", "highpass", "hdrtone", "deconvsharp", "chromadenoise", "mediandenoise", "deband", "skinsmooth", "texturebands", "halation", "caradial", "distortion", "perspective", "tiltshift", "defringe", "surfaceblur", "lensblur", "motionblur", "radialblur", "diffuse", "kuwahara", "nlmeans", "bilateral", "emboss", "sketch", "halftone", "retouch", "bloom", "highlights",
+        "sharpen", "denoiseprofile", "bilat", "atrous", "hazeremoval", "zones", "clahe", "soften", "blurs", "lowpass", "censorize", "highpass", "hdrtone", "deconvsharp", "chromadenoise", "mediandenoise", "deband", "skinsmooth", "texturebands", "caradial", "distortion", "perspective", "tiltshift", "defringe", "surfaceblur", "lensblur", "motionblur", "radialblur", "diffuse", "kuwahara", "nlmeans", "bilateral", "emboss", "sketch", "halftone", "retouch", "bloom", "highlights",
     ]
 
     /// The display-referred modules: they assume 0...1 values (a curve, levels, a contrast about 0.5, a lift of the shadows) and are
@@ -411,35 +417,24 @@ extension CIModule {
                      field("red", -1, 2, 0.263), field("green", -1, 2, 0.678), field("blue", -1, 2, 0.059)],
             apply: { image, v in try CIModule.applyFused("monochrome", image, v) }),
 
-        // Vignetting: darkens the corners. Zero strength is off.
-        CIModule(
-            operation: "vignette", name: "vignetting", iopOrder: 40, defaultEnabled: false,
-            fields: [
-                field("strength", 0, 2, 0),
-                field("scale", 0, 2, 1),
-            ],
-            // DarkroomCore's Vignette: radial light turned inside out (darkroom-engine-check E-VG)
-            apply: { image, v in
-                let strength = v["strength"] ?? 0
-                guard strength > 0 else { return image }
-                var spec = Vignette.spec(scale: v["scale"] ?? 1)
-                spec.orientation = Orientation(value: Int(v["_camera"] ?? 0))
-                let g = Exposure.gain(ev: Vignette.ev(strength: strength))
-                let after = try CIBridge.gain(image, scale: SIMD3(g, g, g))
-                return try CIBridge.blendMasked(before: image, after: after, mask: try CIBridge.localMask(image, spec: spec), opacity: 1)
-            }),
-
         // Bloom: a soft glow around the bright parts. Zero strength is off.
         CIModule(
             operation: "bloom", name: "bloom", iopOrder: 42, defaultEnabled: false,
+            // glow "soft": DarkroomCore's Bloom, highlights through a soft knee, three box means, added back (E-BLM); "film": the old
+            // halation, the same highlights blurred wider and added back tinted (Halation, E-HLT). The size is in pixels of the
+            // full-size picture, so it follows the render scale.
             fields: [
+                choice("glow", "glow", "soft", [("soft", 0, "soft bloom"), ("film", 1, "film halation")]),
                 field("strength", 0, 1, 0),
-                field("size", 1, 50, 10),
+                field("size", 1, 100, 10),
+                field("hue", 0, 360, 25),
             ],
-            // DarkroomCore's Bloom: highlights through a soft knee, three box means, added back (darkroom-engine-check E-BLM). The size
-            // is in pixels of the full-size picture, so it follows the render scale.
             apply: { image, v in
-                try CIBridge.bloom(image, strength: v["strength"] ?? 0, radius: Bloom.radius(size: (v["size"] ?? 10) * (v["_scale"] ?? 1)))
+                if v["glow"] == 1 {
+                    return try CIBridge.halation(image, strength: v["strength"] ?? 0, radius: Blur.radius(px: (v["size"] ?? 30) * (v["_scale"] ?? 1)),
+                                                 tint: Halation.tint(hueDegrees: v["hue"] ?? 25))
+                }
+                return try CIBridge.bloom(image, strength: v["strength"] ?? 0, radius: Bloom.radius(size: (v["size"] ?? 10) * (v["_scale"] ?? 1)))
             }),
 
         // Invert: a negative of the image, the complement of each channel's display-encoded value. No parameters.
@@ -704,15 +699,6 @@ extension CIModule {
             operation: "texturebands", name: "texture and clarity", iopOrder: 71, defaultEnabled: false,
             fields: [field("radius", 2, 40, 6), field("amount", -1, 2, 0)],
             apply: { image, v in try CIBridge.textureBands(image, radiusPixels: (v["radius"] ?? 6) * (v["_scale"] ?? 1), amount: v["amount"] ?? 0) }),
-
-        // Halation: the highlights blurred widely and added back, tinted warm. Halation in DarkroomCore is the oracle (HLT1-HLT5, E-HLT).
-        CIModule(
-            operation: "halation", name: "halation", iopOrder: 72, defaultEnabled: false,
-            fields: [field("strength", 0, 1, 0), field("size", 5, 100, 30), field("hue", 0, 360, 25)],
-            apply: { image, v in
-                try CIBridge.halation(image, strength: v["strength"] ?? 0, radius: Blur.radius(px: (v["size"] ?? 30) * (v["_scale"] ?? 1)),
-                                      tint: Halation.tint(hueDegrees: v["hue"] ?? 25))
-            }),
 
         // Lateral chromatic aberration: the red and blue channels scaled about the centre (percent of the radius; real lenses are a few hundredths), green fixed, bilinear.
         // `fill` (on by default) magnifies just enough that no edge pixel is repeated. Remap in DarkroomCore is the oracle (CAR1-CAR4, FIL1-FIL5, E-CAR).
@@ -1077,8 +1063,7 @@ extension CIModule {
         "invert": 2,
         // merge wave 2 (2026-10-22): the survivors that grew the controls of a module folded into them
         "rgblevels": 2, "warmth": 2, "colorzones": 2, "channelcurves": 2, "highlightrolloff": 2, "lumabands": 2,
-        "vignette": 2,
-        "bloom": 2,
+        "bloom": 3,
         "distortion": 2, "perspective": 2, "caradial": 2,
         "radialblur": 2,
         "clahe": 2,

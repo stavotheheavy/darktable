@@ -40,7 +40,7 @@ public enum ParityList {
     """.split(whereSeparator: { $0 == " " || $0 == "\n" }).map(String.init)
 
     /// Modules of ours that darktable does not have under that name.
-    public static let ownModules: [String] = ["display", "graduated", "radiallight", "zones", "solarize", "gradientmap", "bleachbypass", "channelcurves", "chromalimit", "warmth", "highlightrolloff", "lumabands", "hdrtone", "lumacurve", "scurve", "deconvsharp", "chromadenoise", "mediandenoise", "deband", "skinsmooth", "texturebands", "halation", "caradial", "distortion", "perspective", "tiltshift", "surfaceblur", "lensblur", "motionblur", "radialblur", "kuwahara", "emboss", "sketch", "halftone", "selectivecolor"]
+    public static let ownModules: [String] = ["display", "graduated", "radiallight", "zones", "solarize", "gradientmap", "bleachbypass", "channelcurves", "chromalimit", "warmth", "highlightrolloff", "lumabands", "hdrtone", "lumacurve", "scurve", "deconvsharp", "chromadenoise", "mediandenoise", "deband", "skinsmooth", "texturebands", "caradial", "distortion", "perspective", "tiltshift", "surfaceblur", "lensblur", "motionblur", "radialblur", "kuwahara", "emboss", "sketch", "halftone", "selectivecolor"]
 
     public static let entries: [ParityEntry] = {
         func e(_ op: String, _ s: ParityStatus, _ note: String = "") -> ParityEntry { ParityEntry(operation: op, status: s, note: note) }
@@ -53,7 +53,7 @@ public enum ParityList {
             e("monochrome", .exact), e("invert", .exact, "deprecated in darktable, kept: the complement of the display-encoded value, so middle grey stays put"),
             e("colisa", .covered(by: "colorbalancergb"), "folded into colorbalancergb (merge 2026-10-22); an old edit still renders exactly through it"),
             e("velvia", .covered(by: "colorbalancergb"), "folded into colorbalancergb (merge 2026-10-22); an old edit still renders exactly through it"),
-            e("vignette", .exact, "a circular surround darkening: radial light turned inside out, feathered over its whole radius"),
+            e("vignette", .covered(by: "radiallight"), "folded into radial light (merge 2026-10-22): a centred, inverted ellipse; an old edit still renders exactly"),
             e("shadhi", .covered(by: "zones"), "folded into zones (merge 2026-10-22); an old edit still renders exactly through it"),
             e("bloom", .exact, "the highlights above a soft luminance knee, blurred by three box means and added back"),
             e("splittoning", .exact), e("sharpen", .exact), e("bilat", .exact, "texture and clarity (was local contrast)"),
@@ -119,7 +119,6 @@ public enum ParityList {
             e("deband", .exact, "not a darktable module: smooth gradients replaced by their blur, edges kept"),
             e("skinsmooth", .exact, "not a darktable module: an edge-aware smooth mixed in by a skin-hue matte"),
             e("texturebands", .exact, "not a darktable module: a band-pass of the luminance added back as a gain: texture, and clarity at a larger radius"),
-            e("halation", .exact, "not a darktable module: highlights blurred widely and added back tinted warm, as film halation does"),
             e("highlightrolloff", .exact, "not a darktable module: a tanh shoulder on scene luminance above a knee, colour ratios kept"),
             e("lumabands", .exact, "not a darktable module: an exposure change by the pixel's own luminance in five bands (the cheap cousin of zones)"),
             e("hdrtone", .exact, "not a darktable module: base and detail dynamic range compression with the guided filter base, as in Durand and Dorsey"),

@@ -168,7 +168,7 @@ public enum AutoTest {
             model.beginCurveDrag(); model.moveCurvePoint(0, x: 0.06, y: 0.03)
             model.beginCurveDrag(); model.moveCurvePoint(model.curvePoints.map { $0.count - 1 } ?? 4, x: 0.92, y: 0.95)
             await shot("p2b-\(label)-curve-points")
-            for op in ["zones", "vignette"] {
+            for op in ["zones", "radiallight"] {
                 if let e = model.proMenu.flatMap(\.entries).first(where: { $0.modules[0].operation == op }) { model.addToPanel(e) }
             }
             await model.preparePro()

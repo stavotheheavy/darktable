@@ -52,6 +52,8 @@ how many were folded.
 | Reinhard tone | highlight compression | curve: Reinhard, with white and amount |
 | fill light | luminosity bands | ev, center, width (one movable band) |
 | shadows and highlights | zone exposure | shadows, highlights (a slider of 100 is 2 EV) |
+| halation | bloom | glow: film halation, with size and hue |
+| vignetting | radial light | a centred circle, outside, feather 1; strength 1 is -2 EV |
 
 Ten others only changed name: color balance (OkLab) is *contrast and saturation*; color balance (shadows, mids,
 highlights) is *lift, gamma, gain*; rgb levels is *levels*; highlight roll-off is *highlight compression*; channel mixer

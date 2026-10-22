@@ -1747,7 +1747,7 @@ struct SelfTest {
                   "PP11 colour balance is back in the panel after its edit, its removal and both undos (in \(model.inProPanel(colour11)), history \(model.historyIndex) for \(s11))")
 
             // PP2 the panel runs in pipeline order whatever order its entries were added in; catches an unsorted panel
-            let picked = [entryWith("zones"), entryWith("sharpen"), entryWith("vignette"), entryWith("crop"), entryWith("invert")].compactMap { $0 }
+            let picked = [entryWith("zones"), entryWith("sharpen"), entryWith("radiallight"), entryWith("crop"), entryWith("invert")].compactMap { $0 }
             for e in picked { model.addToPanel(e) }
             await model.settle()
             let wasOrder = model.proPanelOrder
@@ -1863,17 +1863,17 @@ struct SelfTest {
             await model.settle()
 
             // PP13 the panel survives a reopen: the sidecar keeps a removal and an add (catches membership kept only in memory)
-            let tone13 = entryWith("tonecurve")!, vig13 = entryWith("vignette")!
+            let tone13 = entryWith("tonecurve")!, vig13 = entryWith("radiallight")!
             model.removeFromPanel(tone13)
             model.addToPanel(vig13)
             await model.flushSave()
             await model.open(path: copy.path)
             await model.settle()
-            let toneBack = model.inProPanel(module(model, "tonecurve")!), vigIn = model.inProPanel(module(model, "vignette")!)
+            let toneBack = model.inProPanel(module(model, "tonecurve")!), vigIn = model.inProPanel(module(model, "radiallight")!)
             check(!toneBack && vigIn,
                   "PP13 after reopen the tone curve is out and vignette is in (tone curve in \(toneBack), vignette in \(vigIn))")
             model.addToPanel(entryWith("tonecurve")!)
-            model.removeFromPanel(entryWith("vignette")!)
+            model.removeFromPanel(entryWith("radiallight")!)
             await model.settle()
 
             // PP14 the curve geometry helpers the graph uses: y is up (a flipped height fails), nodes round to the nearest quarter
