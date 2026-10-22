@@ -4,7 +4,7 @@
 // from the smoothed plane and multiplied onto all three channels.
 // Checked by darkroom-engine-check E-ZE (against the oracle, across tile seams, at two scales).
 //
-// Uniforms of zoneGainTex: u[0...9] the ten zone changes in EV (zone -7 first).
+// Uniforms of zoneGainTex: u[0...9] the ten zone node offsets in EV (zone -7 first) and u[10...19] the Hermite slopes (`ZoneExposure.prepared`).
 
 import CoreImage
 import DarkroomCore
@@ -26,7 +26,7 @@ public enum MetalZoneExposure {
         dst.write(float4(z, z, z, 1.0f), gid);
     }
 
-    // out = image * 2^gain(base), the gain a raised-cosine blend of the two zones the base falls between
+    // out = image * 2^gain(base), the gain the monotone cubic through the zone nodes (MonotoneGain)
     kernel void zoneGainTex(texture2d<float, access::read> img [[texture(0)]],
                             texture2d<float, access::read> base [[texture(1)]],
                             texture2d<float, access::write> dst [[texture(2)]],
@@ -35,11 +35,17 @@ public enum MetalZoneExposure {
         if (gid.x >= dst.get_width() || gid.y >= dst.get_height()) { return; }
         float4 c = img.read(uint2(int2(gid) + off[0]));
         float b = base.read(uint2(int2(gid) + off[1])).r;
-        b = isfinite(b) ? clamp(b, -7.0f, 2.0f) : 0.0f;
-        int k = min(int(floor(b)), 1);
-        float f = b - float(k);
-        float upper = 0.5f * (1.0f - cos(3.14159265358979f * f));
-        float g = u[k + 7] * (1.0f - upper) + u[k + 8] * upper;
+        if (!isfinite(b)) { b = 0.0f; }
+        float g;
+        if (b <= -7.0f) { g = u[0]; }
+        else if (b >= 2.0f) { g = u[9]; }
+        else {
+            int k = min(int(floor(b + 7.0f)), 8);
+            float t = (b + 7.0f) - float(k), t2 = t * t, t3 = t2 * t;
+            float f0 = float(k - 7) + u[k], f1 = float(k - 6) + u[k + 1];
+            float f = (2.0f * t3 - 3.0f * t2 + 1.0f) * f0 + (t3 - 2.0f * t2 + t) * u[10 + k] + (-2.0f * t3 + 3.0f * t2) * f1 + (t3 - t2) * u[11 + k];
+            g = f - b;
+        }
         dst.write(float4(c.rgb * exp2(g), c.a), gid);
     }
     """#
@@ -62,6 +68,6 @@ extension CIBridge {
     /// The cheap half: the gain read from `base` and multiplied onto `image`.
     public static func zoneGain(_ image: CIImage, base: CIImage, evs: [Double]) throws -> CIImage {
         guard evs.count == 10, evs.contains(where: { $0 != 0 }) else { return image }
-        return try combine([image, base], source: MetalZoneExposure.source, function: "zoneGainTex", uniforms: evs.map { Float($0) })
+        return try combine([image, base], source: MetalZoneExposure.source, function: "zoneGainTex", uniforms: ZoneExposure.prepared(evs: evs).map { Float($0) })
     }
 }

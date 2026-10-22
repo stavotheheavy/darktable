@@ -2126,6 +2126,16 @@ do {
         return worst
     }
     // ZE1 the identity at all zeros, exactly
+    // ZE-mono: no tone inversion in the zone gain either (a lift of one zone over its neighbour used to make the gain fall and draw outlines around regions)
+    var zSlope = Double.infinity
+    let zsets: [[Double]] = [[0, 0, 0, 0, 0, 3, 0, 0, 0, 0], [3, 0, 0, 0, 0, 0, 0, 0, 0, -3], [-3, 3, -3, 3, -3, 3, -3, 3, -3, 3], [0, 0, 0, 3, -3, 0, 0, 0, 0, 0], [0, 0, 0, 0, 0, 0, 0, -3, 0, 0]]
+    for evs in zsets {
+        var b = -9.0, prevOut = b + ZoneExposure.gain(base: b, evs: evs)
+        while b < 4 { b += 0.01; let out = b + ZoneExposure.gain(base: b, evs: evs); zSlope = min(zSlope, (out - prevOut) / 0.01); prevOut = out }
+    }
+    check("ZE-mono the zone curve never falls over five extreme zone sets (least slope \(zSlope))", zSlope > 0.03, "\(zSlope)")
+    check("ZE-node a zone node keeps its own change when its neighbours allow it: zone 0 at +1 over zeros gains exactly 1 EV there",
+          abs(ZoneExposure.gain(base: 0, evs: [0, 0, 0, 0, 0, 0, 0, 1, 0, 0]) - 1) < 1e-9)
     check("ZE1 all zones at zero is the identity, byte for byte", ZoneExposure.apply(fix, width: zw, height: zh, settings: .init()) == fix)
     // ZE2 the ten weights always sum to one, so the same change on every zone is exactly a global exposure
     var sumWorst = 0.0

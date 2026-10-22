@@ -73,13 +73,18 @@ public enum ZoneExposure {
         return w
     }
 
+    /// The zone centres as numbers, for `MonotoneGain`.
+    static let nodes: [Double] = centres.map { Double($0) }
+
+    /// What the GPU reads: 20 values from `MonotoneGain.prepared` (ten node offsets, ten Hermite slopes). The zones are joined by a monotone curve, the nodes kept from falling:
+    /// a strong lift in one zone over its neighbour used to make the raised-cosine gain fall, inverting local brightness and drawing hard outlines around regions.
+    public static func prepared(evs: [Double]) -> [Double] { MonotoneGain.prepared(centres: nodes, evs: evs) }
+
+    /// The exposure change in EV for base brightness `b`, from `prepared`.
+    public static func gain(base b: Double, prepared p: [Double]) -> Double { MonotoneGain.gain(b, centres: nodes, prepared: p) }
+
     /// The exposure change in EV for base brightness `b`, from the ten zone changes.
-    public static func gain(base b: Double, evs: [Double]) -> Double {
-        let w = weights(b)
-        var g = 0.0
-        for k in 0..<10 where w[k] != 0 { g += evs[k] * w[k] }
-        return g
-    }
+    public static func gain(base b: Double, evs: [Double]) -> Double { gain(base: b, prepared: prepared(evs: evs)) }
 
     /// The smoothing radius in pixels for a frame whose long side is `longSide`.
     public static func radius(scale: Double, longSide: Int) -> Int {
@@ -103,6 +108,7 @@ public enum ZoneExposure {
 
     /// The gain stage alone, from a given base (tests swap the base to prove it matters).
     public static func apply(_ rgb: [SIMD3<Double>], base: Plane, evs: [Double]) -> [SIMD3<Double>] {
-        rgb.enumerated().map { i, p in p * pow(2, gain(base: base.values[i], evs: evs)) }
+        let prepared = prepared(evs: evs)
+        return rgb.enumerated().map { i, p in p * pow(2, gain(base: base.values[i], prepared: prepared)) }
     }
 }
