@@ -777,8 +777,11 @@ do {
     metalPerPixelCheck("HRO-M highlight roll-off", source: MetalHighlightRolloff.source, function: "highlightrolloffBuf", uniforms: [0.6, 0.5, 0.9], tolerance: 1e-4,
                        oracle: { HighlightRolloff.apply($0, white: Double(Float(0.6)), knee: Double(Float(0.5)), amount: Double(Float(0.9))) })
     let lmbEV: [Double] = [0.8, -0.6, 0.4, -0.9, 0.5]
-    metalPerPixelCheck("LMB-M luminosity bands", source: MetalLumaBands.source, function: "lumabandsBuf", uniforms: lmbEV.map { Float($0) }, tolerance: 1e-4,
-                       oracle: { LumaBands.apply($0, evs: lmbEV.map { Double(Float($0)) }) })
+    metalPerPixelCheck("LMB-M luminosity bands", source: MetalLumaBands.source, function: "lumabandsBuf", uniforms: LumaBands.prepared(evs: lmbEV).map { Float($0) }, tolerance: 1e-4,
+                       oracle: { LumaBands.apply($0, evs: lmbEV) })
+    let lmbLift: [Double] = [0, 3, 0, 0, 0]   // a strong lift over its neighbours: the lifted nodes of the monotone curve
+    metalPerPixelCheck("LMB-M2 luminosity bands, shadows +3 (monotone lift)", source: MetalLumaBands.source, function: "lumabandsBuf", uniforms: LumaBands.prepared(evs: lmbLift).map { Float($0) }, tolerance: 1e-4,
+                       oracle: { LumaBands.apply($0, evs: lmbLift) })
     metalPerPixelCheck("FDL-M fade", source: MetalFadeLook.source, function: "fadelookBuf", uniforms: [0.08, 0.12], tolerance: 1e-4,
                        oracle: { FadeLook.apply($0, black: Double(Float(0.08)), white: Double(Float(0.12))) })
     let lmcY: [Double] = [0.02, 0.18, 0.6, 0.78, 0.97]

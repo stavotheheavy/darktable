@@ -3,7 +3,7 @@
 import DarkroomCore
 import Foundation
 
-/// The Metal function for `LumaBands`. Uniforms: u[0...4] the blacks, shadows, mids, highlights and whites changes in EV. A function (in the fused pass) plus standalone kernels for darkroom-metal-check.
+/// The Metal function for `LumaBands`. Uniforms: u[0...4] the node offsets and u[5...9] the Hermite slopes from `LumaBands.prepared`. A function (in the fused pass) plus standalone kernels for darkroom-metal-check.
 public enum MetalLumaBands {
     public static let function: String = {
 
@@ -14,12 +14,18 @@ public enum MetalLumaBands {
         static float3 lumabands_apply(float3 rgb, constant float *u) {
             float y = max(cc_luminance(rgb), 1e-6f);
             float b = log2(y / 0.18f);
-            float c = isfinite(b) ? clamp(b, lb_centres[0], lb_centres[4]) : 0.0f;
-            int k = 0;
-            while (k < 3 && c >= lb_centres[k + 1]) { k++; }
-            float f = (c - lb_centres[k]) / (lb_centres[k + 1] - lb_centres[k]);
-            float upper = 0.5f * (1.0f - cos(3.14159265358979f * f));
-            float g = u[k] * (1.0f - upper) + u[k + 1] * upper;
+            if (!isfinite(b)) { b = 0.0f; }
+            float g;
+            if (b <= lb_centres[0]) { g = u[0]; }
+            else if (b >= lb_centres[4]) { g = u[4]; }
+            else {
+                int k = 0;
+                while (k < 3 && b >= lb_centres[k + 1]) { k++; }
+                float h = lb_centres[k + 1] - lb_centres[k], t = (b - lb_centres[k]) / h, t2 = t * t, t3 = t2 * t;
+                float f0 = lb_centres[k] + u[k], f1 = lb_centres[k + 1] + u[k + 1];
+                float f = (2.0f * t3 - 3.0f * t2 + 1.0f) * f0 + (t3 - 2.0f * t2 + t) * h * u[5 + k] + (-2.0f * t3 + 3.0f * t2) * f1 + (t3 - t2) * h * u[5 + k + 1];
+                g = f - b;
+            }
             return rgb * exp2(g);
         }
         """
