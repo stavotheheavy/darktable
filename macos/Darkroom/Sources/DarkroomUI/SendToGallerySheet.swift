@@ -51,6 +51,10 @@ struct SendToGallerySheet: View {
     @ViewBuilder private var form: some View {
         if case .failed(let message) = send.phase {
             Text(message).font(.callout).foregroundStyle(Theme.accent).fixedSize(horizontal: false, vertical: true).rig("gallery-error")
+            if send.needsPlan {
+                Button(cloud.cloudPro ? "Manage Vantage Pro\u{2026}" : "Subscribe to Vantage Pro\u{2026}") { cloud.openSubscribe() }
+                    .buttonStyle(.glassProminent).rig("gallery-subscribe")
+            }
         }
         if send.usableSites.count > 1 {
             Picker("Site", selection: $send.siteID) {

@@ -9,6 +9,7 @@ struct AccountMenu: View {
             if let user = model.cloudUser {
                 Text(user.name.map { "\($0) \u{00B7} \(user.email)" } ?? user.email)
                 Text(model.cloudPro ? "Vantage Pro is on" : "Vantage Pro is not active")
+                Button(model.cloudPro ? "Manage Vantage Pro\u{2026}" : "Subscribe to Vantage Pro\u{2026}") { model.openSubscribe() }
                 Button("Send to gallery\u{2026}") { model.galleryRequest += 1 }
                 Divider()
                 Button("Sign out") { Task { await model.signOutOfCloud() } }

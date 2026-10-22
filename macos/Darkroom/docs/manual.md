@@ -30,7 +30,8 @@ The person icon in the header signs Vantage in to your Databit Dev account, the 
 **Sign in to Databit Dev** (or press **⌥⌘U**): a browser sheet opens on Databit Dev. If you are already signed in there, you
 only see "Allow Vantage on this Mac?" and press Allow; otherwise you sign in the usual way, two-step check included. Vantage
 never sees your password. Once signed in the icon fills in, and its menu shows who you are, whether Vantage Pro is on (it is
-not yet; cloud galleries come next) and **Sign out**.
+not yet) and **Sign out**. **Subscribe to Vantage Pro** (or **Manage** once you have it) opens Databit Dev in your browser, where
+you pay; Vantage never takes a card.
 
 - Vantage keeps one revocable token in the macOS Keychain. Signing out here, or from "Where you're signed in" on the web,
   removes it. If the web side signs this Mac out, Vantage notices on its next launch and says so.

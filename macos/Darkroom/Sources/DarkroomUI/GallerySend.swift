@@ -169,6 +169,8 @@ public final class GallerySendModel {
     public var clientEmail = ""
     public var selection: Set<String> = []
     public private(set) var sitesLoaded = false
+    /// The last failure was the plan (no gallery plan, or it ended): the sheet offers Subscribe.
+    public private(set) var needsPlan = false
 
     private var galleryID: String?
     private var uploaded: Set<String> = []
@@ -194,7 +196,7 @@ public final class GallerySendModel {
             sites = try await client.sites(token: t)
             sitesLoaded = true
             if siteID == nil { siteID = usableSites.first?.id }
-            if usableSites.isEmpty { phase = .failed("None of your sites has galleries on its plan") }
+            if usableSites.isEmpty { needsPlan = true; phase = .failed("None of your sites has galleries on its plan. Vantage Pro includes them") }
         } catch { phase = .failed((error as? GalleryError)?.errorDescription ?? error.localizedDescription) }
     }
 
@@ -253,6 +255,7 @@ public final class GallerySendModel {
             store.record(gallery: gallery, site: site, title: title.trimmingCharacters(in: .whitespaces), files: sentNames)
             phase = .done(share)
         } catch {
+            if case GalleryError.plan = error { needsPlan = true }
             phase = .failed((error as? GalleryError)?.errorDescription ?? error.localizedDescription)
         }
     }
