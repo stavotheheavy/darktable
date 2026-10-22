@@ -2006,6 +2006,68 @@ struct SelfTest {
             model.undo()
             await model.settle()
             check(model.historyIndex == before, "AE5 one undo takes Auto edit back")
+            // CL sign in to Databit Dev: PKCE, the callback checks, and the exchange against an in-process stand-in for the server
+            check(PKCE.challenge(for: "dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk") == "E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM"
+                  && PKCE.verifier().count == 43 && PKCE.verifier() != PKCE.verifier(), "CL1 PKCE matches the RFC 7636 test vector and makes fresh 43-character verifiers")
+            let cfg = URLSessionConfiguration.ephemeral
+            cfg.protocolClasses = [MockCloud.self]
+            let cloud = CloudClient(base: URL(string: "https://cloud.test")!, session: URLSession(configuration: cfg))
+            func callback(_ q: String) -> URL { URL(string: "vantage://auth?\(q)")! }
+            var errs: [CloudError] = []
+            for u in [callback("code=C&state=S2"), callback("error=access_denied&state=S1"), callback("state=S1"), URL(string: "https://evil.test/?code=C&state=S1")!] {
+                do { _ = try cloud.code(fromCallback: u, expectedState: "S1") } catch { errs.append(error as! CloudError) }
+            }
+            check((try? cloud.code(fromCallback: callback("code=C&state=S1"), expectedState: "S1")) == "C" && errs == [.stateMismatch, .denied, .badCallback, .badCallback],
+                  "CL2 the callback gives its code only for our state, and refuses another state, a denial, no code and another scheme (\(errs))")
+            let tokenIsGood = "T-GOOD"
+            nonisolated(unsafe) var seen: [String] = []
+            nonisolated(unsafe) var expectChallenge = ""
+            MockCloud.handler = { req, body in
+                seen.append("\(req.httpMethod ?? "") \(req.url!.path)")
+                let json = (try? JSONSerialization.jsonObject(with: body)) as? [String: Any] ?? [:]
+                switch req.url!.path {
+                case "/api/vantage/token":
+                    guard req.value(forHTTPHeaderField: "Content-Type") == "application/json", json["code"] as? String == "CODE1",
+                          let v = json["verifier"] as? String, PKCE.challenge(for: v) == expectChallenge else { return (400, ["error": "bad code"]) }
+                    return (200, ["token": tokenIsGood, "user": ["email": "gus@example.test", "name": "Gus"], "pro": false])
+                case "/api/vantage/me":
+                    return req.value(forHTTPHeaderField: "Authorization") == "Bearer \(tokenIsGood)"
+                        ? (200, ["user": ["email": "gus@example.test", "name": "Gus"], "pro": false]) : (401, ["error": "Unauthorized"])
+                case "/api/vantage/signout": return (200, ["ok": true])
+                default: return (404, [:])
+                }
+            }
+            model.cloudStore = MemoryTokenStore()
+            model.cloudClient = cloud
+            func approving(state override: String? = nil) -> (URL) async throws -> URL {
+                { url in
+                    let q = URLComponents(url: url, resolvingAgainstBaseURL: false)!.queryItems ?? []
+                    expectChallenge = q.first { $0.name == "challenge" }?.value ?? ""
+                    return callback("code=CODE1&state=\(override ?? q.first { $0.name == "state" }?.value ?? "")")
+                }
+            }
+            await model.signInToCloud(browser: approving(state: "FORGED"))
+            check(model.cloudUser == nil && model.cloudStore.read() == nil && model.cloudMessage != nil, "CL3 a sign-in answer with the wrong state is ignored (\(model.cloudMessage ?? "no message"))")
+            await model.signInToCloud(browser: approving())
+            check(model.cloudUser?.email == "gus@example.test" && model.cloudStore.read() == tokenIsGood && !model.cloudPro && model.cloudSignedIn,
+                  "CL4 signing in exchanges the code with the right verifier, keeps the token in the store and shows the account (\(model.cloudMessage ?? "none"))")
+            model.cloudUser = nil
+            await model.refreshCloud()
+            check(model.cloudUser?.name == "Gus", "CL5 on launch the saved token brings the account back")
+            model.cloudStore.write("T-REVOKED")
+            await model.refreshCloud()
+            check(model.cloudUser == nil && model.cloudStore.read() == nil, "CL6 a token the server no longer knows is dropped")
+            model.cloudStore.write(tokenIsGood)
+            await model.refreshCloud()
+            seen = []
+            await model.signOutOfCloud()
+            check(seen == ["POST /api/vantage/signout"] && model.cloudStore.read() == nil && !model.cloudSignedIn, "CL7 signing out tells the server and clears the token (\(seen))")
+            let kc = KeychainTokenStore(service: "com.databitdev.vantage.selftest")
+            kc.delete(); kc.write("abc"); let kcRead = kc.read(); kc.write("def"); let kcRead2 = kc.read(); kc.delete()
+            check(kcRead == "abc" && kcRead2 == "def" && kc.read() == nil, "CL8 the Keychain store writes, replaces and deletes a token")
+            MockCloud.handler = nil
+            model.cloudClient = CloudClient(base: DarkroomModel.defaultCloudBase)
+
             // the new finders run on the real photo without failing (a picture without a cat or objects answers nil)
             if let preview = EmbeddedPreview.read(path: path, maxSide: 800) {
                 for kind in [VisionMasks.Kind.animal, .object] {
@@ -2816,4 +2878,25 @@ struct SelfTest {
         print(failures.isEmpty ? "\nALL CHECKS PASSED" : "\n\(failures.count) CHECK(S) FAILED")
         if !failures.isEmpty { exit(1) }
     }
+}
+
+/// A stand-in for Databit Dev's /api/vantage routes, in process: the handler sees each request and answers it.
+final class MockCloud: URLProtocol, @unchecked Sendable {
+    nonisolated(unsafe) static var handler: ((URLRequest, Data) -> (Int, [String: Any]))?
+    override class func canInit(with request: URLRequest) -> Bool { true }
+    override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
+    override func startLoading() {
+        var body = request.httpBody ?? Data()
+        if let stream = request.httpBodyStream {
+            stream.open(); defer { stream.close() }
+            var buf = [UInt8](repeating: 0, count: 4096)
+            while stream.hasBytesAvailable { let n = stream.read(&buf, maxLength: buf.count); if n <= 0 { break }; body.append(buf, count: n) }
+        }
+        let (status, json) = Self.handler?(request, body) ?? (500, [:])
+        let data = (try? JSONSerialization.data(withJSONObject: json)) ?? Data()
+        client?.urlProtocol(self, didReceive: HTTPURLResponse(url: request.url!, statusCode: status, httpVersion: nil, headerFields: ["Content-Type": "application/json"])!, cacheStoragePolicy: .notAllowed)
+        client?.urlProtocol(self, didLoad: data)
+        client?.urlProtocolDidFinishLoading(self)
+    }
+    override func stopLoading() {}
 }

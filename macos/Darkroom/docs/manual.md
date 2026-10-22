@@ -24,6 +24,20 @@ the category's rows on the right. The top shows what you picked last.
 A merged module (one with a *method*, *mode*, *glow* or *curve* switch) shows the controls of the chosen method only. Pick
 another method and its own controls appear.
 
+## Your Databit Dev account (both modes)
+
+The person icon in the header signs Vantage in to your Databit Dev account, the same account as the web portal. Choose
+**Sign in to Databit Dev** (or press **⌥⌘U**): a browser sheet opens on Databit Dev. If you are already signed in there, you
+only see "Allow Vantage on this Mac?" and press Allow; otherwise you sign in the usual way, two-step check included. Vantage
+never sees your password. Once signed in the icon fills in, and its menu shows who you are, whether Vantage Pro is on (it is
+not yet; cloud galleries come next) and **Sign out**.
+
+- Vantage keeps one revocable token in the macOS Keychain. Signing out here, or from "Where you're signed in" on the web,
+  removes it. If the web side signs this Mac out, Vantage notices on its next launch and says so.
+- Nothing about your photos is sent. This only proves who you are.
+- The address is databitdev.com. To point Vantage at another copy (a test server), set the `DARKROOM_CLOUD_URL` environment
+  variable before launching.
+
 ## Auto edit (both modes)
 
 The wand button in the header, or **A**. It looks at the photo and makes a fair starting edit, all as one step in History
@@ -187,3 +201,4 @@ The app's shortcuts live in one table (`Sources/DarkroomUI/Shortcuts.swift`). Th
 | E | Section: switch its effect on or off (`section-power`) |
 | F | Section: fold or unfold (`section-fold`) |
 | A | Auto edit: white balance, exposure, highlights, shadows (`auto-edit`) |
+| ⌥⌘U | Sign in to Databit Dev (`sign-in`) |
