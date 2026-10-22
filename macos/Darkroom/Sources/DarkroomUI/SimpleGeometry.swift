@@ -93,12 +93,15 @@ extension DarkroomModel {
     }
 
     /// Turns the picture 90 degrees clockwise; an aspect preset in use turns with it. One history step.
-    public func rotate90() {
+    public func rotate90() { turn(.rotateCW90, label: "Rotate") }
+
+    /// A quarter turn either way, or a mirror: `then` composes it with what the picture has now. One history step each press.
+    public func turn(_ t: Orientation, label: String) {
         let aspect = simpleAspect
-        let next = currentOrientation.then(.rotateCW90)
+        let next = currentOrientation.then(t)
         let degrees = simpleStraighten
         // a button: every tap is its own step, unlike a slider's drag (`grouped` merges a repeated target)
-        grouped("Rotate", target: "simple.rotate.\(history.count)") {
+        grouped(label, target: "simple.rotate.\(history.count)") {
             writeGeometry("flip", "orientation", .option(next.name))
             if let a = aspect, a != .original { writeAspect(a, degrees: degrees, orientation: next) }
         }
@@ -111,6 +114,14 @@ extension DarkroomModel {
             writeAspect(aspect, degrees: degrees, orientation: orientation)
         }
     }
+
+    /// Crop, straighten, turn and flip all back to nothing, as one history step.
+    public func resetGeometry() {
+        let ms = Self.simpleGeometryOperations.compactMap { module($0) }
+        guard ms.contains(where: isEdited) else { return }
+        grouped("Reset crop and straighten", target: "crop.reset.\(history.count)") { ms.forEach(resetModule) }
+    }
+    public var geometryEdited: Bool { Self.simpleGeometryOperations.compactMap { module($0) }.contains(where: isEdited) }
 
     // MARK: helpers
 

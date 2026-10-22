@@ -387,6 +387,7 @@ public final class Rig {
                 case "modules": model.proMenuOpen = .modules
                 case "presets": model.proMenuOpen = .presets
                 case "history": model.proMenuOpen = .history
+                case "crop": model.proMenuOpen = .crop
                 case "close": model.proMenuOpen = nil
                 case "query": model.proMenuQuery = parts.dropFirst(2).joined(separator: " ")
                 default: return ["ok": false, "error": "menu modules|presets|history|close|query <text>"]

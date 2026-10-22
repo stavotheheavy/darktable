@@ -17,7 +17,7 @@ struct ProDropdown: View {
     @FocusState private var searching: Bool
     @State private var listHeight: CGFloat = 0
 
-    static func width(_ kind: ProMenuKind) -> CGFloat { kind == .modules ? 300 : 288 }
+    static func width(_ kind: ProMenuKind) -> CGFloat { kind == .modules ? 300 : kind == .crop ? 304 : 288 }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 2) {
@@ -25,6 +25,7 @@ struct ProDropdown: View {
             case .modules: modules
             case .presets: presets
             case .history: history
+            case .crop: CropTool(model: model)
             }
         }
         .padding(8)

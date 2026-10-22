@@ -9,11 +9,11 @@ extension DarkroomModel {
     /// The ten modules most edits use, first in the Modules menu. "Crop and straighten" is crop and ashift together.
     static let proCommon: [[String]] = [
         ["temperature"], ["exposure"], ["tonecurve"], ["zones"], ["colorbalancergb"],
-        ["splittoning"], ["monochrome"], ["sharpen"], ["denoiseprofile"], ["crop", "ashift", "flip"],
+        ["splittoning"], ["monochrome"], ["sharpen"], ["denoiseprofile"],
     ]
     /// The darktable engine has no zone exposure; its shadows and highlights stands in for it in the common ten.
     static let proCommonAlternates: [String: String] = ["zones": "shadhi"]
-    /// Shown and switched as one section: crop, straighten and the quarter turn its Rotate button writes.
+    /// Crop, straighten and the turn and flip: a tool in the header (CropTool.swift), not modules in the menu or the panel.
     static let geometryOperations: Set<String> = ["crop", "ashift", "flip"]
     /// A new photo starts with these in the panel, at neutral settings.
     public static let proBasics: Set<String> = ["temperature", "exposure", "tonecurve", "colorbalancergb", "display"]
@@ -83,23 +83,16 @@ extension DarkroomModel {
     private func entry(for operations: [String]) -> ProEntry? {
         let ms = operations.compactMap { proModule($0) ?? Self.proCommonAlternates[$0].flatMap(proModule) }
         guard let first = ms.first else { return nil }
-        let name = Set(operations) == Self.geometryOperations ? "Crop and straighten" : first.title
-        return ProEntry(id: first.id, name: name, modules: ms)
+        return ProEntry(id: first.id, name: first.title, modules: ms)
     }
 
     /// The panel's sections: by `proPanelOrder`, the one switched on last first (then the ones live since import, in
     /// engine order), or all in the order the engine applies them.
     public var proPanelEntries: [ProEntry] {
         var seen = Set<String>(), out: [(Int, ProEntry)] = []
-        for m in modules where inProPanel(m) && !seen.contains(m.id) {
-            if Self.geometryOperations.contains(m.operation) && m.multiPriority == 0 {
-                guard let e = entry(for: ["crop", "ashift", "flip"]) else { continue }
-                e.modules.forEach { seen.insert($0.id) }
-                out.append((e.modules.map(\.iopOrder).min() ?? m.iopOrder, e))
-            } else {
-                seen.insert(m.id)
-                out.append((m.iopOrder, ProEntry(id: m.id, name: m.title, modules: [m])))
-            }
+        for m in modules where inProPanel(m) && !seen.contains(m.id) && !Self.geometryOperations.contains(m.operation) {
+            seen.insert(m.id)
+            out.append((m.iopOrder, ProEntry(id: m.id, name: m.title, modules: [m])))
         }
         let pipeline = out.sorted { $0.0 < $1.0 }.map(\.1)
         guard proPanelOrder == .newest else { return pipeline }
@@ -131,7 +124,7 @@ extension DarkroomModel {
         let commonOps = Set(Self.proCommon.flatMap { $0 })
         var groups: [(String, [ProEntry])] = [("Common", common)]
         // every other module, including second instances of a common one (they get their own entries)
-        let rest = modules.filter { !(commonOps.contains($0.operation) && $0.multiPriority == 0) && !$0.deprecated }
+        let rest = modules.filter { !(commonOps.contains($0.operation) && $0.multiPriority == 0) && !$0.deprecated && !Self.geometryOperations.contains($0.operation) }
         var used = Set<String>()
         for (name, ops) in Self.proGroups {
             let items = rest.filter { ops.contains($0.operation) }
@@ -403,8 +396,6 @@ struct ProSection: View {
         let op = e.modules[0].operation
         if op == "tonecurve", e.modules[0].multiPriority == 0, model.curveNodes != nil {
             CurveSection(model: model, module: e.modules[0])
-        } else if Set(e.modules.map(\.operation)) == DarkroomModel.geometryOperations, model.proModule("ashift") != nil {
-            ProGeometry(model: model)
         } else {
             ForEach(e.modules) { m in ParamList(model: model, module: m) }
             if op == "temperature" { AutoWhiteBalanceButton(model: model, id: "pro-awb") }
@@ -424,47 +415,6 @@ struct CurveSection: View {
     var body: some View {
         CurveEditor(model: model)
             .frame(height: 244)
-    }
-}
-
-/// Straighten, rotate and the aspect presets, the same controls and API as Simple mode's.
-struct ProGeometry: View {
-    @Bindable var model: DarkroomModel
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            HStack {
-                Text("Straighten").font(.callout)
-                Spacer()
-                Text(String(format: "%+.1f\u{00B0}", model.simpleStraighten)).font(.caption.monospacedDigit()).foregroundStyle(.secondary)
-            }
-            Slider(value: Binding(get: { model.simpleStraighten }, set: { model.setStraighten($0) }),
-                   in: DarkroomModel.straightenRange, step: 0.1, onEditingChanged: { model.setDragging($0) })
-                .tint(Theme.accent)
-                .accessibilityLabel("Straighten")
-                .rig("pro-straighten")
-            HStack(spacing: 6) {
-                Button { model.rotate90() } label: { Label("Rotate 90\u{00B0}", systemImage: "rotate.right").frame(maxWidth: .infinity, minHeight: 32) }
-                    .buttonStyle(.plain)
-                    .background(Color.white.opacity(0.12), in: Capsule())
-                    .rig("pro-rotate")
-            }
-            HStack(spacing: 6) {
-                ForEach(SimpleAspect.allCases) { a in
-                    Button { model.setAspect(a) } label: {
-                        Text(a.rawValue).font(.caption.weight(.medium)).lineLimit(1).minimumScaleFactor(0.8)
-                            .frame(maxWidth: .infinity, minHeight: 30)
-                            .background(Color.white.opacity(model.simpleAspect == a ? 0.26 : 0.08), in: Capsule())
-                    }
-                    .buttonStyle(.plain)
-                    .accessibilityLabel(a.spoken)
-                    .accessibilityAddTraits(model.simpleAspect == a ? .isSelected : [])
-                    .rig("pro-aspect-\(a.slug)")
-                }
-            }
-        }
-        .disabled(!model.simpleGeometryReady)
-        .task { await model.prepareSimple() }
     }
 }
 

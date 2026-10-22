@@ -327,16 +327,21 @@ struct TopBar: View {
 
             BackdropMenu(model: model)
 
-            if model.presentsTexture {
-                Button { model.setTestCard(!model.testCard) } label: {
-                    Image(systemName: model.testCard ? "square.grid.3x1.below.line.grid.1x2.fill" : "square.grid.3x1.below.line.grid.1x2")
+            // the crop tool (Pro): crop, straighten, turn and flip, in a dropdown under this button (CropTool.swift)
+            if model.mode == .pro {
+                let open = model.proMenuOpen == .crop
+                Button { model.proMenuOpen = open ? nil : .crop } label: {
+                    Image(systemName: "crop.rotate")
                         .frame(width: 40, height: 40)
                         .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
-                .help("Display test card: HDR steps and Display P3 colours, to check this screen by eye")
-                .accessibilityLabel(model.testCard ? "Display test card on" : "Display test card off")
-                .rig("testcard")
+                .background(open ? Color.white.opacity(0.14) : .clear, in: Circle())
+                .anchorPreference(key: ProMenuAnchorKey.self, value: .bounds) { [ProMenuKind.crop: $0] }
+                .help("Crop, straighten, turn and flip (C)")
+                .accessibilityLabel("Crop and straighten")
+                .accessibilityAddTraits(open ? .isSelected : [])
+                .rig("crop-tool")
             }
 
             // HDR preview: only where a screen has headroom above SDR white

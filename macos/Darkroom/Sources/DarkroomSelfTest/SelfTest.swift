@@ -1693,16 +1693,16 @@ struct SelfTest {
             // to DarkroomUI, so the order is spelled out here); catches a dropped or duplicated module and a moved entry
             let commonOrder: [[String]] = [
                 ["temperature"], ["exposure"], ["tonecurve"], ["zones"], ["colorbalancergb"],
-                ["splittoning"], ["monochrome"], ["sharpen"], ["denoiseprofile"], ["crop", "ashift", "flip"],
+                ["splittoning"], ["monochrome"], ["sharpen"], ["denoiseprofile"],
             ]
             let groups = model.proMenu
             let commonOps = groups.first { $0.group == "Common" }?.entries.map { $0.modules.map(\.operation) } ?? []
             check(groups.first?.group == "Common" && commonOps == commonOrder,
-                  "PP1 the Common group is first, with the ten common entries in order (\(commonOps.map { $0.joined(separator: "+") }.joined(separator: ", ")))")
+                  "PP1 the Common group is first, with the nine common entries in order (\(commonOps.map { $0.joined(separator: "+") }.joined(separator: ", ")))")
             // every non-deprecated module is in exactly one menu entry: a module listed twice or not at all shows here
             var menuCount: [String: Int] = [:]
             for e in groups.flatMap(\.entries) { for m in e.modules { menuCount[m.id, default: 0] += 1 } }
-            let live = model.modules.filter { !$0.deprecated }
+            let live = model.modules.filter { !$0.deprecated && !["crop", "ashift", "flip"].contains($0.operation) }   // the crop tool holds those three
             let miscounted = live.filter { menuCount[$0.id] != 1 }
             check(miscounted.isEmpty,
                   "PP1 every non-deprecated module is in exactly one menu entry (\(live.count) modules, \(miscounted.isEmpty ? "all counted once" : miscounted.map { "\($0.operation) counted \(menuCount[$0.id] ?? 0)" }.joined(separator: ", ")))")
@@ -1753,7 +1753,7 @@ struct SelfTest {
                   "PP11 colour balance is back in the panel after its edit, its removal and both undos (in \(model.inProPanel(colour11)), history \(model.historyIndex) for \(s11))")
 
             // PP2 the panel runs in pipeline order whatever order its entries were added in; catches an unsorted panel
-            let picked = [entryWith("zones"), entryWith("sharpen"), entryWith("radiallight"), entryWith("crop"), entryWith("invert")].compactMap { $0 }
+            let picked = [entryWith("zones"), entryWith("sharpen"), entryWith("radiallight"), entryWith("invert")].compactMap { $0 }
             for e in picked { model.addToPanel(e) }
             await model.settle()
             let wasOrder = model.proPanelOrder
@@ -1761,7 +1761,7 @@ struct SelfTest {
             defer { model.setProPanelOrder(wasOrder) }
             let orders = model.proPanelEntries.map { $0.modules.map(\.iopOrder).min() ?? 0 }
             let sorted = zip(orders, orders.dropFirst()).allSatisfy { $0 <= $1 }
-            check(picked.count == 5 && picked.allSatisfy { model.inProPanel($0) } && sorted,
+            check(picked.count == 4 && picked.allSatisfy { model.inProPanel($0) } && sorted,
                   "PP2 the panel is in pipeline order (\(model.proPanelEntries.map(\.name).joined(separator: ", ")); iopOrder \(orders))")
             for e in picked { model.removeFromPanel(e) }
             await model.settle()
@@ -1809,28 +1809,45 @@ struct SelfTest {
             check(model.proEffectOn(curve) && bytes(model.frame) == curved,
                   "PP5 power on restores the edited frame (on \(model.proEffectOn(curve)))")
 
-            // PP6 crop and straighten is one section (crop, ashift and flip); a size change, then removal, leaves none of
-            // the three applied and the original frame back; catches two sections, or a removal that leaves one applied
-            let geo = entryWith("crop")!
+            // PP6 crop is a tool, not a module: no menu entry and no panel section for crop, ashift or flip; the tool's controls
+            // change the frame and Reset gives the original frame back in one step
+            let geoOps: Set<String> = ["crop", "ashift", "flip"]
+            let inMenu = model.proMenu.flatMap(\.entries).contains { $0.modules.contains { geoOps.contains($0.operation) } }
+            let inLibrary = model.libraryCategories.flatMap { model.libraryEntries($0) }.contains {
+                if case .module(let e) = $0.kind { return e.modules.contains { geoOps.contains($0.operation) } } else { return false }
+            }
+            check(!inMenu && !inLibrary, "PP6 crop, straighten and flip are not in the Modules menu or the library (menu \(inMenu), library \(inLibrary))")
             let fullW = model.frame?.width ?? 0, fullH = model.frame?.height ?? 0
-            model.addToPanel(geo)
-            await model.settle()
-            let geoSections = model.proPanelEntries.filter { $0.modules.contains { ["crop", "ashift", "flip"].contains($0.operation) } }
-            let geoOps = Set(geoSections.first?.modules.map(\.operation) ?? [])
-            check(geoSections.count == 1 && geoOps == ["crop", "ashift", "flip"],
-                  "PP6 crop and straighten is one section (\(geoSections.count) section, holds \(geoOps.sorted().joined(separator: ", ")))")
+            await model.prepareSimple()
+            let stepsBefore = model.historyIndex
             model.setStraighten(6)
-            model.rotate90()
+            model.turn(.rotateCW90, label: "Rotate right")
             await model.settle()
             let changedW = model.frame?.width ?? 0, changedH = model.frame?.height ?? 0
-            check((changedW, changedH) != (fullW, fullH),
-                  "PP6 straighten and a quarter turn change the frame (\(fullW)x\(fullH) to \(changedW)x\(changedH))")
-            model.removeFromPanel(geo)
+            check((changedW, changedH) != (fullW, fullH), "PP6 straighten and a quarter turn change the frame (\(fullW)x\(fullH) to \(changedW)x\(changedH))")
+            check(!model.proPanelEntries.contains { $0.modules.contains { geoOps.contains($0.operation) } }, "PP6 the tool's edits make no panel section")
+            model.setAspect(.square)
             await model.settle()
-            let crop = module(model, "crop")!, ashift = module(model, "ashift")!, flip = module(model, "flip")!
-            let geoOff = [crop, ashift, flip].allSatisfy { !model.inProPanel($0) && !model.isEnabled($0) }
-            check(geoOff && model.frame?.width == fullW && model.frame?.height == fullH,
-                  "PP6 removing it leaves crop, ashift and flip out of the panel and off, and the original frame (in panel \([crop, ashift, flip].map { model.inProPanel($0) }), on \([crop, ashift, flip].map { model.isEnabled($0) }), \(model.frame?.width ?? 0)x\(model.frame?.height ?? 0), was \(fullW)x\(fullH))")
+            check(model.simpleAspect == .square && model.frame.map { abs($0.width - $0.height) <= 1 } == true, "PP6 the 1:1 button crops to a square (\(model.frame?.width ?? 0)x\(model.frame?.height ?? 0))")
+            let hist = model.historyIndex
+            model.turn(.rotateCCW90, label: "Rotate left")
+            model.turn(.flipHorizontal, label: "Flip horizontally")
+            check(model.historyIndex == hist + 2, "PP6 each turn and flip press is one history step")
+            let lastStep = model.historyIndex
+            model.resetGeometry()
+            await model.settle()
+            check(model.historyIndex == lastStep + 1 && !model.geometryEdited && model.frame?.width == fullW && model.frame?.height == fullH,
+                  "PP6 Reset is one step and gives the original frame back (\(model.frame?.width ?? 0)x\(model.frame?.height ?? 0), was \(fullW)x\(fullH))")
+            check(stepsBefore < model.historyIndex, "PP6 the tool's steps are in History")
+            // the header opens the tool; the key and the Modules menu share one open menu
+            model.proMenuOpen = .crop
+            check(model.proMenuOpen == .crop, "PP6 the crop tool opens as a header dropdown")
+            model.proMenuOpen = nil
+            let ctrl = Shortcuts.all.first { $0.id == "crop-tool" }
+            ctrl?.action(model)
+            check(model.proMenuOpen == .crop, "PP6 the C key opens the crop tool")
+            ctrl?.action(model)
+            check(model.proMenuOpen == nil, "PP6 and closes it")
 
             // PP7 a basic that is on by default: taking white balance out switches it off, and undo brings it back in and on
             // (catches a removal that leaves the module applied, or a removed basic coming straight back)

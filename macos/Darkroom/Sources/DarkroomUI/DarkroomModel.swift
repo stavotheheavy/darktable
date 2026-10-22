@@ -9,7 +9,7 @@ import Observation
 import UniformTypeIdentifiers
 
 /// Pro's three header menus.
-public enum ProMenuKind: Hashable, Sendable { case modules, presets, history }
+public enum ProMenuKind: Hashable, Sendable { case modules, presets, history, crop }
 
 public enum LeftTab: String, CaseIterable, Sendable { case modules = "Modules", history = "History" }
 public enum ScopeMode: String, CaseIterable, Sendable { case histogram = "Histogram", waveform = "Waveform", vectorscope = "Vector" }

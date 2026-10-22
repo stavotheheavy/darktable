@@ -24,6 +24,22 @@ the category's rows on the right. The top shows what you picked last.
 A merged module (one with a *method*, *mode*, *glow* or *curve* switch) shows the controls of the chosen method only. Pick
 another method and its own controls appear.
 
+## The crop tool (Pro)
+
+Crop is a tool, not a module. It has its own button in the header, next to Undo and Redo, and a key: **C**. It opens a
+dropdown with:
+
+- **Straighten:** a slider, -45 to 45 degrees. The picture is cropped to the largest clean rectangle.
+- **Turn and flip:** turn left, turn right, flip horizontally, flip vertically. Each press is one step in History.
+- **Crop to:** Original (no crop), 1:1, 4:5, 3:2 and 16:9, centred. A portrait photo gets the portrait ratio.
+- **Edges:** the four crop edges by hand, left, top, right and bottom, for a crop that is none of the presets.
+- **Reset:** crop, straighten, turn and flip back to nothing, in one step.
+
+Crop, straighten and flip are no longer in the Modules menu, the library or the right panel. An older edit that used them
+opens and looks the same.
+
+The display test card (HDR steps and Display P3 colours, to check a screen by eye) moved off the header to ⌥⌘T.
+
 ## The right panel (Pro)
 
 The right panel holds the modules you are using. Each one is a section with a power button, a name and a fold arrow.
@@ -102,5 +118,7 @@ The app's shortcuts live in one table (`Sources/DarkroomUI/Shortcuts.swift`). Th
 | ⌥⌘A | Switch every section in the panel on (`all-on`) |
 | ⌥⌘0 | Switch every section in the panel off; settings stay (`all-off`) |
 | ⌥⌘O | Flip the panel between Newest and Pipeline order (`panel-order`) |
+| C | Open or close the crop tool (`crop-tool`) |
+| ⌥⌘T | Show or hide the display test card (`test-card`) |
 | ⌘⇧L | Show or hide the library (`library`) |
 | ⌘F | Search the library; opens it if hidden (`library-find`) |

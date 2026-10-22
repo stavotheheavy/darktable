@@ -88,8 +88,8 @@ extension DarkroomModel {
             switch c {
             case .masks: localMasks
             case .presets: !libraryPresets.isEmpty
-            case .other: proMenu.contains { $0.group == "Other" }
-            default: true
+            case .looks: true
+            default: c.menuGroup.map { g in proMenu.contains { $0.group == g } } ?? true
             }
         }
     }
