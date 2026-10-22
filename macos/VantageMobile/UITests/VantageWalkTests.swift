@@ -120,12 +120,33 @@ final class VantageWalkTests: XCTestCase {
         shot("ipad-pinched")
     }
 
+    /// An attached keyboard: a plain key goes through the shortcut registry, a Command key through its hidden button.
+    func testIPad_KeyboardShortcuts() throws {
+        try XCTSkipUnless(isPad)
+        let app = launchOpen(mode: "Simple", orientation: .landscapeLeft)
+        let before = picture(app)
+        app.typeKey("a", modifierFlags: [])           // A: auto edit
+        sleep(5)
+        XCTAssertNotEqual(before, picture(app), "the A key did not run auto edit")
+        app.typeKey("z", modifierFlags: .command)     // Command-Z: undo
+        sleep(2)
+        XCTAssertTrue(find(app, "redo").isEnabled, "Command-Z did not undo")
+        shot("ipad-keyboard")
+    }
+
     func testIPad_ExportAndRotate() throws {
         try XCTSkipUnless(isPad)
         let app = launchOpen(mode: "Simple", orientation: .landscapeLeft)
         tap(app, "export", "export")
-        sleep(8)
+        // export ends in the system share sheet
+        let sheet = app.otherElements["ActivityListView"]
+        XCTAssertTrue(sheet.waitForExistence(timeout: 40), "the share sheet did not open after export")
+        shot("ipad-share-sheet")
+        let close = app.buttons["Close"]
+        if close.exists { close.tap() } else { app.swipeDown() }
+        sleep(2)
         XCTAssertEqual(app.state, .runningForeground, "the app is not running after export")
+        XCTAssertFalse(sheet.exists, "the share sheet did not close")
         XCUIDevice.shared.orientation = .portrait
         sleep(2)
         must(app, "export", "export after rotating")

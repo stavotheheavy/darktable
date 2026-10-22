@@ -206,13 +206,25 @@ public enum KeyRouter {
     }
 }
 
-extension View {
-    /// Routes an attached keyboard's plain keys to the shortcut registry.
-    func hardwareKeys(_ model: DarkroomModel) -> some View {
-        focusable()
+/// Takes keyboard focus when it appears (a SwiftUI key handler only hears keys while its view has focus) and routes the plain
+/// keys to the registry.
+struct HardwareKeys: ViewModifier {
+    let model: DarkroomModel
+    @FocusState private var focused: Bool
+
+    func body(content: Content) -> some View {
+        content
+            .focusable()
+            .focused($focused)
             .focusEffectDisabled()
             .onKeyPress(phases: [.down, .repeat]) { press in KeyRouter.handle(press, model: model) }
+            .onAppear { focused = true }
     }
+}
+
+extension View {
+    /// Routes an attached keyboard's plain keys to the shortcut registry.
+    func hardwareKeys(_ model: DarkroomModel) -> some View { modifier(HardwareKeys(model: model)) }
 }
 #endif
 
