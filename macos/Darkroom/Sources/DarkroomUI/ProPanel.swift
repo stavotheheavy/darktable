@@ -288,6 +288,7 @@ struct ProPanel: View {
             // a compact scope: the sections are what Pro is for, and the curve must be on screen at 860 pt
             ScopesCard(model: model)
                 .frame(height: 204)
+            ScrollViewReader { scroll in
             ScrollView {
                 VStack(alignment: .leading, spacing: 8) {
                     let entries = model.proPanelEntries
@@ -326,6 +327,8 @@ struct ProPanel: View {
                     }
                 }
                 .padding(12)
+            }
+            .onChange(of: model.focusEntryID) { _, id in if let id { withAnimation(.easeOut(duration: 0.15)) { scroll.scrollTo(id, anchor: .top) } } }
             }
             .rig("pro-panel")
             .glassEffect(.regular, in: .rect(cornerRadius: 28))
@@ -388,7 +391,10 @@ struct ProSection: View {
         }
         .padding(.horizontal, 4)
         .background(Color.white.opacity(0.06), in: RoundedRectangle(cornerRadius: 18))
+        // the keyboard's section (KeyboardNav.swift): a full outline, not a stripe
+        .overlay { if model.focusEntryID == entry.id { RoundedRectangle(cornerRadius: 18).strokeBorder(Theme.accent.opacity(0.75), lineWidth: 1.5).allowsHitTesting(false) } }
         .opacity(dim ? 0.75 : 1)
+        .id(entry.id)
     }
 
     @ViewBuilder

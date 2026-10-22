@@ -111,6 +111,20 @@ highlights) is *lift, gamma, gain*; rgb levels is *levels*; highlight roll-off i
 (adaptation) is *channel mixer*; monochrome is *black and white*; local contrast is *texture and clarity*; median denoise is
 *hot pixels (median)*; rotate and straighten is *straighten*; dither is *posterize*.
 
+## Driving the panel from the keyboard (Pro)
+
+Press **?** at any time for the list of every shortcut. The arrow keys work on the right panel without the mouse:
+
+- **Up and Down** pick a section (an outline shows which); it opens, and its first slider is picked (a dot shows which).
+- **[ and ]** pick the previous or next slider in that section.
+- **Left and Right** nudge the slider by a hundredth of its range. **Shift** makes it ten times as much, **Option** a tenth.
+  A held key keeps going and is one step in History.
+- **Delete** puts the slider back to its default. **E** switches the section's effect on or off. **F** folds or unfolds it.
+- **M, P and H** open and close the Modules, Presets and History menus.
+
+These keys step aside while you type in a field (the library's search, a typed slider value), so typing and the field's own
+arrow keys still work.
+
 ## Keyboard shortcuts
 
 The app's shortcuts live in one table (`Sources/DarkroomUI/Shortcuts.swift`). This list mirrors it.
@@ -121,7 +135,7 @@ The app's shortcuts live in one table (`Sources/DarkroomUI/Shortcuts.swift`). Th
 | ⌘⇧Z | Redo the edit you undid (`redo`) |
 | ⌘⇧H | Hide or show the panels (`hide-ui`) |
 | ⌘\ | Compare with the original; press again to return (`original`) |
-| Esc | Close the open menu (`close-menu`) |
+| Esc | Close the shortcut list, or the open menu (`close-menu`) |
 | J | Show clipped highlights and crushed shadows (`clipping`) |
 | ⌥⌘A | Switch every section in the panel on (`all-on`) |
 | ⌥⌘0 | Switch every section in the panel off; settings stay (`all-off`) |
@@ -130,3 +144,24 @@ The app's shortcuts live in one table (`Sources/DarkroomUI/Shortcuts.swift`). Th
 | ⌥⌘T | Show or hide the display test card (`test-card`) |
 | ⌘⇧L | Show or hide the library (`library`) |
 | ⌘F | Search the library; opens it if hidden (`library-find`) |
+| ? | Show or hide the shortcut list (`help`) |
+| ⌘/ | Show or hide the shortcut list, the Mac way (`help-cmd`) |
+| ⌘0 | Zoom: fit the photo (`zoom-fit`) |
+| ⌘1 | Zoom: 100% (`zoom-100`) |
+| ⌘2 | Zoom: 200% (`zoom-200`) |
+| M | Open or close the Modules menu (`menu-modules`) |
+| P | Open or close the Presets menu (`menu-presets`) |
+| H | Open or close History (`menu-history`) |
+| ↑ | Panel: previous section (`panel-up`) |
+| ↓ | Panel: next section; it opens (`panel-down`) |
+| [ | Panel: previous slider in the section (`slider-prev`) |
+| ] | Panel: next slider in the section (`slider-next`) |
+| ← | Slider: lower by a hundredth of its range (`nudge-down`) |
+| → | Slider: raise by a hundredth of its range (`nudge-up`) |
+| ⇧← | Slider: lower ten times as much (`nudge-down-big`) |
+| ⇧→ | Slider: raise ten times as much (`nudge-up-big`) |
+| ⌥← | Slider: lower a tenth as much (`nudge-down-fine`) |
+| ⌥→ | Slider: raise a tenth as much (`nudge-up-fine`) |
+| ⌫ | Slider: back to its default (`slider-reset`) |
+| E | Section: switch its effect on or off (`section-power`) |
+| F | Section: fold or unfold (`section-fold`) |

@@ -124,6 +124,11 @@ public final class DarkroomModel {
     /// The size zoom and pan work in: the output size when known, else the processed size.
     /// Pro's unfolded sections (by module id), for this session; membership itself lives in the edits.
     public var proOpen: Set<String> = []
+    /// The keyboard's place in Pro's panel (KeyboardNav.swift): the section and the slider the arrow keys act on.
+    public var focusEntryID: String?
+    public var focusFieldName: String?
+    /// The `?` overlay listing every shortcut.
+    public var helpShown = false
     /// How Pro's panel stacks its sections: the one switched on last at the top (the owner's history view), or in the
     /// order the engine applies them (masks and geometry read better that way). Remembered across launches.
     public private(set) var proPanelOrder: ProPanelOrder =
