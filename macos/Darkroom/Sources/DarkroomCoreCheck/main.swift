@@ -2722,6 +2722,16 @@ do {
     while b < 5 { b += 0.001; let g = LumaBands.gain(logLuminance: b, evs: [1.5, -1, 2, -2, 1]); jump = max(jump, abs(g - prev)); prev = g }
     check("LMB4 the gain is continuous over luminance (no step over 0.01 per 1/1000 EV)", jump < 0.01, "\(jump)")
     let px = SIMD3(0.3, 0.2, 0.1), out = LumaBands.apply(px, evs: [0.5, -0.5, 1, -1, 0.5])
+    // LMB7 no tone inversion: the curve (log luminance out against log luminance in) never falls, whatever the band changes
+    var worstSlope = Double.infinity
+    let sets: [[Double]] = [[0, 3, 0, 0, 0], [3, 0, 0, 0, 0], [0, 0, 0, 0, -3], [3, -3, 3, -3, 3], [-3, 3, -3, 3, -3], [0, 0, 3, -3, 0], [1.5, -1, 2, -2, 1], [0, -3, 0, 0, 0]]
+    for evs in sets {
+        var b = -7.0, prevOut = b + LumaBands.gain(logLuminance: b, evs: evs)
+        while b < 5 { b += 0.01; let out = b + LumaBands.gain(logLuminance: b, evs: evs); worstSlope = min(worstSlope, (out - prevOut) / 0.01); prevOut = out }
+    }
+    check("LMB7 the band curve never falls (no tone inversion, so no contour lines): the least slope over eight extreme band sets is positive (\(worstSlope))", worstSlope > 0.05, "\(worstSlope)")
+    check("LMB8 a lifted band flattens its neighbours instead of inverting them: shadows +3 puts the shadows node 3 EV up and midtones at most 1.5 EV up",
+          abs(LumaBands.gain(logLuminance: -2, evs: [0, 3, 0, 0, 0]) - 3) < 1e-9 && LumaBands.gain(logLuminance: 0, evs: [0, 3, 0, 0, 0]) < 1.5)
     check("LMB5 colour ratios are kept; black stays finite", abs(out.x / out.y - px.x / px.y) < 1e-9 && finite(LumaBands.apply(.zero, evs: [1, 1, 1, 1, 1])))
 
     // HDT

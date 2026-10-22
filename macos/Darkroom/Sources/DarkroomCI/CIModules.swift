@@ -117,8 +117,8 @@ struct CIModule: Sendable {
             if v["curve"] == 1 { return FusedOp(.reinhard, [Float(v["white"] ?? 4), Float(amount)]) }
             return FusedOp(.highlightRolloff, [Float(v["white"] ?? 1), Float(v["knee"] ?? 0.7), Float(amount)])
         case "lumabands":
-            let u = LumaBands.names.map { Float(v[$0] ?? 0) }
-            return u.allSatisfy { $0 == 0 } ? nil : FusedOp(.lumaBands, u)
+            let evs = LumaBands.names.map { v[$0] ?? 0 }
+            return evs.allSatisfy { $0 == 0 } ? nil : FusedOp(.lumaBands, LumaBands.prepared(evs: evs).map { Float($0) })
         case "lumacurve":
             let ys: [Double] = [v["y0"] ?? 0, v["y1"] ?? 0.25, v["y2"] ?? 0.5, v["y3"] ?? 0.75, v["y4"] ?? 1]
             if ys == [0, 0.25, 0.5, 0.75, 1] { return nil }
@@ -1052,7 +1052,7 @@ extension CIModule {
         // not the working space: invert was Core Image's complement of the linear value and is now the complement of the encoded one
         "invert": 2,
         // merge wave 2 (2026-10-22): the survivors that grew the controls of a module folded into them
-        "rgblevels": 2, "warmth": 2, "colorzones": 2, "channelcurves": 2, "highlightrolloff": 2, "lumabands": 2,
+        "rgblevels": 2, "warmth": 2, "colorzones": 2, "channelcurves": 2, "highlightrolloff": 2, "lumabands": 3,   // 3 (refine 6): the bands' curve is monotone (a strong lift in one band inverted tones and drew contour lines)
         "bloom": 3,
         "distortion": 2, "perspective": 2, "caradial": 2,
         "radialblur": 2,
