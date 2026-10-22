@@ -1,6 +1,8 @@
-import AppKit
+import DarkroomEngineAPI
 import DarkroomCore
+#if os(macOS)
 import DarktableKit
+#endif
 import Foundation
 
 /// Driving Pro's panel from the keyboard: up and down pick a section, `[` and `]` pick a slider in it, the left and right
@@ -8,7 +10,7 @@ import Foundation
 /// `focusEntryID` and `focusFieldName`; the panel draws an outline on the section and a dot beside the slider.
 extension DarkroomModel {
     /// A text field is being edited: plain keys belong to it, not to the shortcuts.
-    @MainActor static var typingInText: Bool { NSApp?.keyWindow?.firstResponder is NSText }
+    @MainActor static var typingInText: Bool { Platform.typingInText }
 
     /// The sliders of a section the keys can reach: numeric fields that show a slider (a soft range), the ones the panel shows.
     public func focusableFields(_ e: ProEntry) -> [(module: ModuleInfo, field: FieldSchema)] {

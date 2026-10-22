@@ -1,4 +1,4 @@
-import AppKit
+import DarkroomEngineAPI
 import SwiftUI
 
 /// Every keyboard shortcut in the app, in one place. The window's hidden buttons (DarkroomView), the help and the
@@ -127,6 +127,7 @@ public enum Shortcuts {
 /// Routes the keys that carry no Command (letters, arrows, [ ], Delete) to the registry, once per window. It returns the event
 /// untouched while a text field is being edited, so typing and the field's own arrow keys work. Command keys and Esc are
 /// hidden buttons in DarkroomView.
+#if os(macOS)
 @MainActor
 public enum KeyRouter {
     /// The registry entry a key press means, if any; `key` is the press without Shift (an arrow is its private-use scalar).
@@ -168,3 +169,10 @@ public enum KeyRouter {
         return (0xF700...0xF703).contains(ch) || ch == 0x7F
     }
 }
+#else
+/// Hardware keys on iPad arrive through UIKit key commands; the Mac's key monitor has no iOS counterpart yet.
+@MainActor
+public enum KeyRouter {
+    public static func install(for model: DarkroomModel) {}
+}
+#endif

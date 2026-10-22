@@ -1,4 +1,4 @@
-import AppKit
+import DarkroomEngineAPI
 import SwiftUI
 
 /// What sits behind the photo. Not black by default: a smooth deep blue-black with a soft
@@ -41,10 +41,10 @@ public struct BackdropStyle: Codable, Equatable, Sendable, Identifiable {
 
     /// A custom colour keeps the texture and vignette the user already chose.
     public func with(color: Color) -> BackdropStyle {
-        let ns = NSColor(color).usingColorSpace(.sRGB) ?? NSColor(white: 0.25, alpha: 1)
+        let c = Platform.rgb(of: color)
         var s = self
         s.name = "Custom"
-        s.red = Double(ns.redComponent); s.green = Double(ns.greenComponent); s.blue = Double(ns.blueComponent)
+        s.red = c.red; s.green = c.green; s.blue = c.blue
         return s
     }
 

@@ -1,8 +1,10 @@
-import AppKit
+import DarkroomEngineAPI
 import CoreGraphics
 import DarkroomCI
 import DarkroomCore
+#if os(macOS)
 import DarktableKit
+#endif
 import Foundation
 import ImageIO
 import Observation
@@ -51,8 +53,7 @@ public final class DarkroomModel {
     /// overrides it, which the self-test uses so its pixels do not depend on the machine's screen.
     public static var workingSize: Int {
         if let s = ProcessInfo.processInfo.environment["DARKROOM_WORKING_SIZE"], let v = Int(s), v >= 200 { return v }
-        let longest = NSScreen.screens.map { max($0.frame.width, $0.frame.height) * $0.backingScaleFactor }.max() ?? 0
-        return workingSize(forScreenLongSide: Double(longest))
+        return workingSize(forScreenLongSide: Platform.largestScreenLongSide)
     }
 
     /// `workingSize` for a screen whose long edge is `pixels` backing pixels.
@@ -77,9 +78,7 @@ public final class DarkroomModel {
     public static var screenHeadroom: Double {
         if let o = headroomOverride { return o }
         if let s = ProcessInfo.processInfo.environment["DARKROOM_EDR_HEADROOM"], let v = Double(s), v >= 1 { return v }
-        let screen = NSApp?.windows.first(where: { $0.isVisible && $0.frame.width > 400 })?.screen ?? NSScreen.main
-        let current = screen?.maximumExtendedDynamicRangeColorComponentValue ?? 1
-        let potential = screen?.maximumPotentialExtendedDynamicRangeColorComponentValue ?? 1
+        let (current, potential) = Platform.screenHeadroom
         return current > 1.05 ? current : max(current, potential)
     }
     /// Whether the HDR preview can do anything here: the canvas presents textures and a screen has headroom.
@@ -293,13 +292,13 @@ public final class DarkroomModel {
     private var scopeGeneration = 0
     private var scopeJobs = 0
     private var saveTask: Task<Void, Never>?
-    public let backingScale: Double = Double(NSScreen.main?.backingScaleFactor ?? 2)
+    public let backingScale: Double = Platform.backingScale
 
-    public init(engine: any PhotoEngine = Engine()) {
+    public init(engine: any PhotoEngine = EngineChoice.make()) {
         self.engine = engine
         // the screen's headroom follows its brightness and whether a layer asks for extended range: when it moves while the HDR preview is on,
         // the frame is rendered again for the new peak
-        headroomObserver = NotificationCenter.default.addObserver(forName: NSApplication.didChangeScreenParametersNotification, object: nil, queue: .main) { [weak self] _ in
+        headroomObserver = NotificationCenter.default.addObserver(forName: Platform.screenChangedNotification, object: nil, queue: .main) { [weak self] _ in
             Task { @MainActor in
                 guard let self, self.hdrPreview, self.hdrAvailable, abs(self.previewPeak - self.lastPresentedPeak) > 0.05 else { return }
                 self.requestRender()
@@ -326,7 +325,7 @@ public final class DarkroomModel {
     public func bootstrap(openingFirstArgument: Bool = true) async {
         let env = ProcessInfo.processInfo.environment
         let prefix = URL(fileURLWithPath: env["DT_PREFIX"] ?? "/Users/Chief/darktable/build/install")
-        let home = FileManager.default.homeDirectoryForCurrentUser
+        let home = Platform.homeDirectory
         do {
             try await engine.start(
                 prefix: prefix,

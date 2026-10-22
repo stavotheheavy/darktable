@@ -1,6 +1,8 @@
 import DarkroomCI
 import DarkroomEngineAPI
+#if os(macOS)
 import DarktableKit
+#endif
 import SwiftUI
 
 /// The library, Pro's left panel (owner's rule of 2026-10-22, after Logic Pro's Sounds library): a search above, categories down

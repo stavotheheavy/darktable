@@ -1,5 +1,8 @@
+import DarkroomEngineAPI
 import DarkroomCore
+#if os(macOS)
 import DarktableKit
+#endif
 import Foundation
 
 /// Simple mode's crop presets: long side over short side, turned to match the picture (a portrait photo

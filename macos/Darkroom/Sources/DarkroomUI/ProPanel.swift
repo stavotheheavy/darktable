@@ -1,5 +1,8 @@
+import DarkroomEngineAPI
 import DarkroomCore
+#if os(macOS)
 import DarktableKit
+#endif
 import SwiftUI
 
 /// Pro mode's side panel holds the modules in use; the header's Modules menu puts them in or takes them out.

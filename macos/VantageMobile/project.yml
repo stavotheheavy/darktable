@@ -1,0 +1,45 @@
+name: VantageMobile
+options:
+  bundleIdPrefix: dev.stavo
+  deploymentTarget:
+    iOS: "26.0"
+packages:
+  Darkroom:
+    path: ../Darkroom
+targets:
+  VantageMobile:
+    type: application
+    platform: iOS
+    sources: [Sources]
+    dependencies:
+      - package: Darkroom
+        product: DarkroomUI
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: dev.stavo.vantage
+        PRODUCT_NAME: Vantage
+        TARGETED_DEVICE_FAMILY: "1,2"
+        GENERATE_INFOPLIST_FILE: YES
+        INFOPLIST_KEY_UILaunchScreen_Generation: YES
+        INFOPLIST_KEY_UISupportedInterfaceOrientations: "UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight"
+        CODE_SIGN_STYLE: Automatic
+        SWIFT_VERSION: "6.0"
+  VantageMobileUITests:
+    type: bundle.ui-testing
+    platform: iOS
+    sources: [UITests]
+    dependencies:
+      - target: VantageMobile
+    settings:
+      base:
+        GENERATE_INFOPLIST_FILE: YES
+        TARGETED_DEVICE_FAMILY: "1,2"
+schemes:
+  VantageMobile:
+    build:
+      targets:
+        VantageMobile: all
+        VantageMobileUITests: [test]
+    test:
+      targets:
+        - VantageMobileUITests

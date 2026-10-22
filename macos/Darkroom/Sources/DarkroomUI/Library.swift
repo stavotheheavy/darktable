@@ -1,4 +1,8 @@
+import DarkroomEngineAPI
+#if os(macOS)
 import DarktableKit
+#endif
+import DarkroomCore
 import ImageIO
 import SwiftUI
 import UniformTypeIdentifiers
@@ -35,7 +39,7 @@ struct RatingStore {
     struct Entry: Codable { var rating: Int; var rejected: Bool }
     static var url: URL {
         let dir = ProcessInfo.processInfo.environment["DARKROOM_CONFIG_DIR"].map { URL(fileURLWithPath: $0) }
-            ?? FileManager.default.homeDirectoryForCurrentUser.appending(path: ".config/darktable-fork")
+            ?? Platform.homeDirectory.appending(path: ".config/darktable-fork")
         return dir.appending(path: "darkroom-ratings.json")
     }
     static func load() -> [String: Entry] {
@@ -236,7 +240,7 @@ public final class LibraryModel {
 
     /// A 480 pixel developed copy, cached on disk until the file changes.
     static func developedThumbnail(for path: String, engine: any PhotoEngine) async -> CGImage? {
-        let cache = FileManager.default.homeDirectoryForCurrentUser.appending(path: ".cache/darktable-fork/thumbs")
+        let cache = Platform.homeDirectory.appending(path: ".cache/darktable-fork/thumbs")
         let mtime = ((try? FileManager.default.attributesOfItem(atPath: path)[.modificationDate]) as? Date)?.timeIntervalSince1970 ?? 0
         let key = path.utf8.reduce(UInt64(5381)) { ($0 << 5) &+ $0 &+ UInt64($1) }
         let file = cache.appending(path: "\(key)-\(Int(mtime)).jpg")
@@ -535,7 +539,7 @@ private struct EmptyLibrary: View {
             Image(systemName: "folder").font(.system(size: 30)).frame(width: 64, height: 64)
                 .background(Color.white.opacity(0.1), in: Circle())
             Text("Bring in your first photos").font(.title2.weight(.semibold))
-            Text("Choose a folder. Soft frames and near-duplicates are flagged as it loads, on this Mac.")
+            Text("Choose a folder. Soft frames and near-duplicates are flagged as it loads, on \(Platform.thisDevice).")
                 .foregroundStyle(.secondary).multilineTextAlignment(.center).frame(maxWidth: 320)
             Button(action: choose) { Text("Choose a folder") }.buttonStyle(PrimaryCapsuleStyle())
                 .rig("empty-choose")

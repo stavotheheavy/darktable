@@ -1,5 +1,9 @@
+import DarkroomEngineAPI
+#if os(macOS)
 import AppKit
+#if os(macOS)
 import DarktableKit
+#endif
 import Foundation
 import Network
 import ObjectiveC
@@ -539,3 +543,4 @@ struct RigTag: ViewModifier {
 extension View {
     func rig(_ id: String) -> some View { modifier(RigTag(id: id)) }
 }
+#endif

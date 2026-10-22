@@ -1,5 +1,9 @@
+import DarkroomEngineAPI
+#if os(macOS)
 import AppKit
+#if os(macOS)
 import DarktableKit
+#endif
 import Foundation
 import ImageIO
 import SwiftUI
@@ -330,3 +334,4 @@ public enum AutoTest {
         await model.settle()
     }
 }
+#endif

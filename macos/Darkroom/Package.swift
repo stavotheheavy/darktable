@@ -9,7 +9,7 @@ let libdir = "\(prefix)/lib/darktable"
 
 let package = Package(
     name: "Darkroom",
-    platforms: [.macOS(.v26)],
+    platforms: [.macOS(.v26), .iOS(.v26)],
     products: [
         .library(name: "DarktableKit", targets: ["DarktableKit"]),
         .library(name: "DarkroomUI", targets: ["DarkroomUI"]),
@@ -57,13 +57,19 @@ let package = Package(
         // model + SwiftUI views, a library so the self-test can render them offscreen
         .target(
             name: "DarkroomUI",
-            dependencies: ["DarktableKit", "DarkroomCI", "DarkroomCore"]
+            dependencies: [
+                "DarkroomEngineAPI", "DarkroomCI", "DarkroomCore",
+                .target(name: "DarktableKit", condition: .when(platforms: [.macOS])),
+            ]
         ),
 
         // headless check: start the engine, render, time it, write PNGs
         .executableTarget(
             name: "DarkroomSelfTest",
-            dependencies: ["DarktableKit", "DarkroomUI", "DarkroomCI"]
+            dependencies: [
+                .target(name: "DarktableKit", condition: .when(platforms: [.macOS])),
+                "DarkroomUI", "DarkroomCI",
+            ]
         ),
 
         // the SwiftUI app

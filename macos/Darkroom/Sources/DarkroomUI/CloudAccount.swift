@@ -1,4 +1,4 @@
-import AppKit
+import DarkroomEngineAPI
 import AuthenticationServices
 import CryptoKit
 import Foundation
@@ -168,7 +168,14 @@ final class WebSignIn: NSObject, ASWebAuthenticationPresentationContextProviding
         }
     }
 
-    func presentationAnchor(for session: ASWebAuthenticationSession) -> ASPresentationAnchor { NSApp.keyWindow ?? ASPresentationAnchor() }
+    func presentationAnchor(for session: ASWebAuthenticationSession) -> ASPresentationAnchor {
+        #if os(macOS)
+        return NSApp.keyWindow ?? ASPresentationAnchor()
+        #else
+        let windows = UIApplication.shared.connectedScenes.compactMap { $0 as? UIWindowScene }.flatMap(\.windows)
+        return windows.first(where: \.isKeyWindow) ?? ASPresentationAnchor()
+        #endif
+    }
 }
 
 extension DarkroomModel {
@@ -186,7 +193,7 @@ extension DarkroomModel {
         cloudBusy = true
         defer { cloudBusy = false }
         let verifier = PKCE.verifier(), state = PKCE.state()
-        let device = Host.current().localizedName ?? "this Mac"
+        let device = Platform.deviceName
         let url = cloudClient.authorizeURL(state: state, challenge: PKCE.challenge(for: verifier), device: device)
         do {
             let callback: URL
@@ -261,5 +268,5 @@ extension DarkroomModel {
     /// The Databit Dev page where Vantage Pro is bought and managed. Vantage opens it in the browser; the app never takes a card.
     public var subscribeURL: URL { cloudClient.base.appending(path: "portal/vantage") }
 
-    public func openSubscribe() { NSWorkspace.shared.open(subscribeURL) }
+    public func openSubscribe() { Platform.open(subscribeURL) }
 }

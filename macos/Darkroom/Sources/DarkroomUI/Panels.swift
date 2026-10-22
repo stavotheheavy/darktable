@@ -1,6 +1,8 @@
+import DarkroomEngineAPI
 import DarkroomCore
-import AppKit
+#if os(macOS)
 import DarktableKit
+#endif
 import SwiftUI
 
 // MARK: left: modules and history

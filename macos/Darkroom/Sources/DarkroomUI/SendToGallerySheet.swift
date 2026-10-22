@@ -1,3 +1,4 @@
+import DarkroomEngineAPI
 import SwiftUI
 
 /// Send to gallery: pick photos from the open folder, name the gallery and the client, send. See GallerySend.swift.
@@ -134,7 +135,7 @@ struct SendToGallerySheet: View {
             Text(value).font(.callout.monospaced()).textSelection(.enabled).lineLimit(2)
             Spacer()
             Button(copied == title ? "Copied" : "Copy") {
-                NSPasteboard.general.clearContents(); NSPasteboard.general.setString(value, forType: .string); copied = title
+                Platform.copy(value); copied = title
             }.buttonStyle(.glass).controlSize(.small)
         }
     }

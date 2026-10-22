@@ -1,3 +1,5 @@
+import DarkroomEngineAPI
+#if os(macOS)
 import AppKit
 import Metal
 import ScreenCaptureKit
@@ -129,3 +131,4 @@ extension Rig {
                 "texelsAboveSDRWhitePct": Double(above) / Double(w * h) * 100, "meanAbove": above > 0 ? sumAbove / Double(above) : 0, "map": out]
     }
 }
+#endif

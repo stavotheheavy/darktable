@@ -1,5 +1,8 @@
+import DarkroomEngineAPI
 import DarkroomCore
+#if os(macOS)
 import DarktableKit
+#endif
 import Foundation
 
 /// What the user changed on one module instance, on top of the imported state.

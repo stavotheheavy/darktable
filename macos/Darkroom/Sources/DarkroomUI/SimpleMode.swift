@@ -1,4 +1,7 @@
+import DarkroomEngineAPI
+#if os(macOS)
 import DarktableKit
+#endif
 import SwiftUI
 
 /// Simple and Pro are two doors into one engine (canvas board S2). Simple writes the real

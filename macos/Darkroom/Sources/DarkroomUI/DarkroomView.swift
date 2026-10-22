@@ -1,5 +1,7 @@
-import AppKit
+import DarkroomEngineAPI
+#if os(macOS)
 import DarktableKit
+#endif
 import SwiftUI
 import UniformTypeIdentifiers
 
@@ -468,6 +470,18 @@ struct TopBar: View {
     }
 
     private func export() {
+        #if os(macOS)
+        exportWithPanel()
+        #else
+        // iPad and iPhone: write a JPEG to the temporary folder for now; the share sheet comes with the touch UI.
+        let stem = URL(fileURLWithPath: model.fileName).deletingPathExtension().lastPathComponent
+        let url = FileManager.default.temporaryDirectory.appending(path: stem + ".jpg")
+        Task { await model.export(to: url, hdr: false) }
+        #endif
+    }
+
+    #if os(macOS)
+    private func exportWithPanel() {
         let panel = NSSavePanel()
         panel.allowedContentTypes = [.jpeg]
         let stem = URL(fileURLWithPath: model.fileName).deletingPathExtension().lastPathComponent
@@ -487,6 +501,7 @@ struct TopBar: View {
             if response == .OK, let url = panel.url { Task { await model.export(to: url, hdr: hdr) } }
         }
     }
+    #endif
 }
 
 // MARK: readout
