@@ -10,7 +10,7 @@ The library is where you find things, like the Sounds library in Logic. A search
 the category's rows on the right. The top shows what you picked last.
 
 - **Common, Tone, Color, Detail, Geometry, Effects, Other:** the modules by kind. A row's switch puts the module in the right
-  panel or takes it out, the same as the Modules menu.
+  panel or takes it out, the same as the Modules menu did before it was folded into the library.
 - **Looks:** the six looks. A row applies the look.
 - **Presets:** the modules that were folded into another (the table below), by their old names. A row puts the module that
   replaced it in the panel, chooses that method and sets the old module's starting values; the section unfolds so you can raise
@@ -112,8 +112,8 @@ The display test card (HDR steps and Display P3 colours, to check a screen by ey
 
 The right panel holds the modules you are using. Each one is a section with a power button, a name and a fold arrow.
 
-- **Modules menu (header):** puts a module into the panel or takes it out. Out means gone: its settings are cleared and it
-  no longer applies.
+- **Library switches (left panel):** put a module into the panel or take it out. Out means gone: its settings are cleared and it
+  no longer applies. The header's Modules button was removed because the library lists the same modules.
 - **Power button (on a section):** switches the effect off or on. The section stays, with its settings.
 - **All on / All off (top of the panel):** every section's effect at once. The sections and their settings stay. One step
   in History, so one undo brings it all back.
@@ -182,7 +182,7 @@ Press **?** at any time for the list of every shortcut. The arrow keys work on t
 - **Left and Right** nudge the slider by a hundredth of its range. **Shift** makes it ten times as much, **Option** a tenth.
   A held key keeps going and is one step in History.
 - **Delete** puts the slider back to its default. **E** switches the section's effect on or off. **F** folds or unfolds it.
-- **M, P and H** open and close the Modules, Presets and History menus.
+- **M** opens the library with its search ready. **P and H** open and close the Presets and History menus.
 
 These keys step aside while you type in a field (the library's search, a typed slider value), so typing and the field's own
 arrow keys still work.
@@ -211,7 +211,7 @@ The app's shortcuts live in one table (`Sources/DarkroomUI/Shortcuts.swift`). Th
 | ⌘0 | Zoom: fit the photo (`zoom-fit`) |
 | ⌘1 | Zoom: 100% (`zoom-100`) |
 | ⌘2 | Zoom: 200% (`zoom-200`) |
-| M | Open or close the Modules menu (`menu-modules`) |
+| M | Open the library with its search ready (`menu-modules`) |
 | P | Open or close the Presets menu (`menu-presets`) |
 | H | Open or close History (`menu-history`) |
 | ↑ | Panel: previous section (`panel-up`) |

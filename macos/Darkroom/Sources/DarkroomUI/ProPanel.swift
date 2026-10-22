@@ -424,7 +424,7 @@ struct CurveSection: View {
     }
 }
 
-/// The header's three Pro menus: Modules (in or out of the panel), Presets, History.
+/// The header's Pro buttons: the library (its module list replaces the old Modules menu), Presets, History.
 struct ProMenus: View {
     @Bindable var model: DarkroomModel
     /// The narrow header: icons with tooltips instead of words.
@@ -438,7 +438,6 @@ struct ProMenus: View {
                 .accessibilityAddTraits(model.libraryShown ? .isSelected : [])
                 .help("Show or hide the library (\u{2318}\u{21E7}L)")
                 .rig("pro-library")
-            menuButton(.modules, "Modules", "slider.horizontal.3").rig("pro-modules")
             menuButton(.presets, "Presets", "square.stack").rig("pro-presets")
             menuButton(.history, "History", "clock.arrow.circlepath").rig("pro-history")
         }
