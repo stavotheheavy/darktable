@@ -13,6 +13,7 @@ import DarkroomCI
 //   dtb-selftest <image> [--max 1400] [--out frame.png]      engine round trip + timings
 //   dtb-selftest <image> --ui                                the real model: sliders -> stack -> pixels
 //   dtb-selftest <image> --stack s.json --out f.png         one render of a stack file, on either engine
+//   dtb-selftest <image> --sweep dir [--max 800]            every module, every field at min / default / max: <dir>/<group>/<module>/<field>.<setting>.png and sweep.csv (DARKROOM_TIME_ONLY=a,b limits modules)
 //   dtb-selftest <image> --audit dir --time [--max N]       warm render time of every module (median of 5 after a warm-up) in dir/audit-time.csv
 //   dtb-selftest <image> --audit dir [--max 800]            every module of the clean engine at three strengths: PNGs and audit.csv
 //   dtb-selftest <raw> --crop-abuse                          raw crops past the frame must not crash a render
@@ -81,6 +82,7 @@ struct SelfTest {
         let stackFile = take("--stack")
         let auditDir = take("--audit")
         let auditTime = has("--time")
+        let sweepDir = take("--sweep")
         let schemaOp = take("--schema")
         let oneShot = take("--one-shot")
         let hdrJPEG = take("--hdr-jpeg")
@@ -132,6 +134,8 @@ struct SelfTest {
                 for f in try await engine.schema(for: schemaOp).fields {
                     print("\(f.name)\t\(f.kind)\tmin \(f.min)\tmax \(f.max)\tdefault \(f.defaultValue)\t\(f.options.map { "\($0)" }.joined(separator: ","))\t\(f.description)")
                 }
+            } else if let sweepDir {
+                try await runSweep(engine: engine, path: path, maxSide: maxSide, out: sweepDir)
             } else if let auditDir {
                 if auditTime {
                     try await runAuditTime(engine: engine, path: path, maxSide: maxSide, out: auditDir)
@@ -994,6 +998,69 @@ struct SelfTest {
         print("wrote \(out)/audit.csv")
     }
 
+    /// One module field at a time moved to its minimum, its default and its maximum (switches off and on, choices each option), the rest at default:
+    /// a picture per setting and a row of metrics (render time, luma change, clipped and crushed shares, border against interior change, flags).
+    static func runSweep(engine: any PhotoEngine, path: String, maxSide: Int, out: String) async throws {
+        try await engine.openSession(path: path, maxSide: maxSide)
+        let base = try await engine.sessionRender(stack: [], scale: 1)
+        let baseLuma = meanLuma(base.image), baseRGBA = rgba(base.image), w = base.width, h = base.height
+        var groupOf: [String: String] = [:]
+        for g in await MainActor.run(body: { DarkroomModel.proGroups }) { for op in g.operations where groupOf[op] == nil { groupOf[op] = g.name } }
+        let only = ProcessInfo.processInfo.environment["DARKROOM_TIME_ONLY"].map { Set($0.split(separator: ",").map(String.init)) }
+        var csv = "group,module,field,setting,value,ms,mean_luma,luma_change,clipped_pct,crushed_pct,ring_change,interior_change,flags\n"
+        for op in try await engine.moduleNames().sorted() {
+            if let only, !only.contains(op) { continue }
+            guard let schema = try? await engine.schema(for: op) else { continue }
+            let group = groupOf[op] ?? "Other"
+            for f in schema.fields {
+                var settings: [(String, ParamValue)] = []
+                switch f.kind {
+                case .float, .int:
+                    guard f.hasUsableRange else { continue }
+                    settings = [("min", .number(f.min)), ("def", f.defaultValue), ("max", .number(f.max))]
+                case .bool: settings = [("min", .bool(false)), ("max", .bool(true))]
+                case .enumeration: settings = f.options.prefix(8).map { ("opt-\($0.name)", .option($0.name)) }
+                }
+                let dir = "\(out)/\(group)/\(op)"
+                try FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true)
+                for (label, value) in settings {
+                    var flags: [String] = []
+                    var line: String
+                    do {
+                        let frame = try await engine.sessionRender(stack: [StackEntry(operation: op, params: [f.name: value])], scale: 1)
+                        let px = rgba(frame.image), luma = meanLuma(frame.image)
+                        var clipped = 0, crushed = 0, ringSum = 0.0, ringN = 0.0, inSum = 0.0, inN = 0.0
+                        if px.count == baseRGBA.count {
+                            for y in 0..<h { for x in 0..<w {
+                                let o = (y * w + x) * 4
+                                if px[o] == 255 || px[o + 1] == 255 || px[o + 2] == 255 { clipped += 1 }
+                                if px[o] == 0 && px[o + 1] == 0 && px[o + 2] == 0 { crushed += 1 }
+                                let d = (abs(Double(px[o]) - Double(baseRGBA[o])) + abs(Double(px[o + 1]) - Double(baseRGBA[o + 1])) + abs(Double(px[o + 2]) - Double(baseRGBA[o + 2]))) / 3
+                                if x < 14 || y < 14 || x >= w - 14 || y >= h - 14 { ringSum += d; ringN += 1 } else { inSum += d; inN += 1 }
+                            } }
+                        } else { flags.append("size \(frame.width)x\(frame.height)") }
+                        let ringChange = ringN > 0 ? ringSum / ringN : 0, inChange = inN > 0 ? inSum / inN : 0
+                        if luma < 0.05 * baseLuma { flags.append("BLANK") }
+                        if ringChange > 8, ringChange > 3 * max(inChange, 1) { flags.append("EDGE") }
+                        if Double(clipped) / Double(w * h) > 0.35 { flags.append("CLIPPED") }
+                        if Double(crushed) / Double(w * h) > 0.35 { flags.append("CRUSHED") }
+                        if inChange < 0.05, ringChange < 0.05 { flags.append("NO-CHANGE") }
+                        try writePNG(frame.image, to: URL(fileURLWithPath: "\(dir)/\(f.name).\(label).png"))
+                        line = String(format: "%@,%@,%@,%@,%@,%.0f,%.1f,%.1f,%.2f,%.2f,%.1f,%.1f,%@\n", group, op, f.name, label, "\(value)".replacingOccurrences(of: ",", with: ";"),
+                                      frame.milliseconds, luma, luma - baseLuma, 100 * Double(clipped) / Double(w * h), 100 * Double(crushed) / Double(w * h),
+                                      ringChange, inChange, flags.joined(separator: " "))
+                    } catch {
+                        line = "\(group),\(op),\(f.name),\(label),,,,,,,,,RENDER-FAILED \(error)\n".replacingOccurrences(of: "\n", with: " ", options: [], range: nil) + "\n"
+                    }
+                    csv += line
+                }
+            }
+            print("swept \(op)")
+        }
+        try csv.write(toFile: "\(out)/sweep.csv", atomically: true, encoding: .utf8)
+        print("wrote \(out)/sweep.csv")
+    }
+
     /// Warm render time of every golden case at its golden setting: the first render (shader compile, cache fill) is timed on its own as `cold_ms`,
     /// then the median of five more is `warm_ms`. The frame is the session render, so `--max` sets the pixel count.
     static func runAuditTime(engine: any PhotoEngine, path: String, maxSide: Int, out: String) async throws {
@@ -1005,11 +1072,23 @@ struct SelfTest {
         var rows: [(String, Double)] = []
         for c in CIEngineProbe.goldenCases() {
             guard let entry = c.stack.first else { continue }
+            // DARKROOM_TIME_ONLY=exposure,zones limits the run to those modules
+            if let only = ProcessInfo.processInfo.environment["DARKROOM_TIME_ONLY"], !only.split(separator: ",").contains(where: { $0 == entry.operation }) { continue }
             do {
                 let stack = [StackEntry(operation: entry.operation, params: entry.params)]
                 let cold = try await engine.sessionRender(stack: stack, scale: 1).milliseconds
                 var warm: [Double] = []
-                for _ in 0..<5 { warm.append(try await engine.sessionRender(stack: stack, scale: 1).milliseconds) }
+                // an identical stack is a cache hit, so each pass nudges the first magnitude by a hair (inside its range) to force a real render
+                let key = entry.params.first { $0.value.double != nil && !["fill", "spin", "colour", "scheme", "mode", "iterations", "seed"].contains($0.key) }
+                for i in 1...5 {
+                    var p = entry.params
+                    if let key, let v = key.value.double {
+                        let f = (try? await engine.schema(for: entry.operation))?.fields.first { $0.name == key.key }
+                        let nudged = v + (abs(v) > 1e-9 ? v : 1) * 1e-4 * Double(i)
+                        p[key.key] = .number(f.map { min(max(nudged, $0.min), $0.max) } ?? nudged)
+                    }
+                    warm.append(try await engine.sessionRender(stack: [StackEntry(operation: entry.operation, params: p)], scale: 1).milliseconds)
+                }
                 warm.sort()
                 csv += String(format: "%@,%d,%d,%.0f,%.0f\n", entry.operation, base.width, base.height, cold, warm[2])
                 rows.append((entry.operation, warm[2]))
