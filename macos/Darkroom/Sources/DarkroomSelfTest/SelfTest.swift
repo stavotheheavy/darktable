@@ -83,6 +83,7 @@ struct SelfTest {
         let auditDir = take("--audit")
         let auditTime = has("--time")
         let sweepDir = take("--sweep")
+        let softRanges = has("--soft-ranges")
         let schemaOp = take("--schema")
         let oneShot = take("--one-shot")
         let hdrJPEG = take("--hdr-jpeg")
@@ -135,6 +136,8 @@ struct SelfTest {
                 for f in try await engine.schema(for: schemaOp).fields {
                     print("\(f.name)\t\(f.kind)\tmin \(f.min)\tmax \(f.max)\tdefault \(f.defaultValue)\t\(f.options.map { "\($0)" }.joined(separator: ","))\t\(f.description)")
                 }
+            } else if softRanges {
+                try await runSoftRanges(engine: engine, path: path)
             } else if let sweepDir {
                 try await runSweep(engine: engine, path: path, maxSide: maxSide, out: sweepDir)
             } else if let auditDir {
@@ -1017,15 +1020,36 @@ struct SelfTest {
         print("wrote \(out)/audit.csv")
     }
 
+    /// Every entry of the slider soft-range table against the engine's schema: the module and field exist, the default lies inside the soft range and the soft range inside the
+    /// engine range. Exits non-zero on any violation.
+    static func runSoftRanges(engine: any PhotoEngine, path: String) async throws {
+        try await engine.openSession(path: path, maxSide: 400)
+        var bad = 0
+        for (key, range) in await MainActor.run(body: { SoftRange.table }).sorted(by: { $0.key < $1.key }) {
+            let parts = key.split(separator: ".", maxSplits: 1).map(String.init)
+            guard parts.count == 2, let schema = try? await engine.schema(for: parts[0]), let f = schema.fields.first(where: { $0.name == parts[1] }) else {
+                print("  FAIL  \(key): no such module or field"); bad += 1; continue
+            }
+            let def = f.defaultValue.double ?? 0
+            let ok = range.lowerBound >= f.min - 1e-9 && range.upperBound <= f.max + 1e-9 && def >= range.lowerBound - 1e-9 && def <= range.upperBound + 1e-9
+            print("  \(ok ? "ok    " : "FAIL  ")\(key): soft \(range.lowerBound)...\(range.upperBound), engine \(f.min)...\(f.max), default \(def)")
+            if !ok { bad += 1 }
+        }
+        print(bad == 0 ? "all soft ranges valid" : "\(bad) soft range(s) invalid")
+        if bad > 0 { exit(1) }
+    }
+
     /// One module field at a time moved to its minimum, its default and its maximum (switches off and on, choices each option), the rest at default:
     /// a picture per setting and a row of metrics (render time, luma change, clipped and crushed shares, border against interior change, flags).
     static func runSweep(engine: any PhotoEngine, path: String, maxSide: Int, out: String) async throws {
+        try FileManager.default.createDirectory(atPath: out, withIntermediateDirectories: true)
         try await engine.openSession(path: path, maxSide: maxSide)
         let base = try await engine.sessionRender(stack: [], scale: 1)
         let baseLuma = meanLuma(base.image), baseRGBA = rgba(base.image), w = base.width, h = base.height
         var groupOf: [String: String] = [:]
         for g in await MainActor.run(body: { DarkroomModel.proGroups }) { for op in g.operations where groupOf[op] == nil { groupOf[op] = g.name } }
         let only = ProcessInfo.processInfo.environment["DARKROOM_TIME_ONLY"].map { Set($0.split(separator: ",").map(String.init)) }
+        let steps = Int(ProcessInfo.processInfo.environment["DARKROOM_SWEEP_STEPS"] ?? "") ?? 0   // > 1: a metrics-only sweep, no pictures
         var csv = "group,module,field,setting,value,ms,mean_luma,luma_change,clipped_pct,crushed_pct,ring_change,interior_change,flags\n"
         for op in try await engine.moduleNames().sorted() {
             if let only, !only.contains(op) { continue }
@@ -1039,12 +1063,20 @@ struct SelfTest {
                 switch f.kind {
                 case .float, .int:
                     guard f.hasUsableRange else { continue }
-                    settings = [("min", .number(f.min)), ("def", f.defaultValue), ("max", .number(f.max))]
+                    if steps > 1 {
+                        // DARKROOM_SWEEP_STEPS=n: n evenly spaced values over the engine range (whole numbers for an int field), then the default
+                        settings = (0..<steps).map { i in
+                            let v = f.min + (f.max - f.min) * Double(i) / Double(steps - 1)
+                            return ("s\(i)", .number(f.kind == .int ? v.rounded() : v))
+                        } + [("def", f.defaultValue)]
+                    } else {
+                        settings = [("min", .number(f.min)), ("def", f.defaultValue), ("max", .number(f.max))]
+                    }
                 case .bool: settings = [("min", .bool(false)), ("max", .bool(true))]
                 case .enumeration: settings = f.options.prefix(8).map { ("opt-\($0.name)", .option($0.name)) }
                 }
                 let dir = "\(out)/\(group)/\(op)"
-                try FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true)
+                if steps <= 1 { try FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true) }
                 for (label, value) in settings {
                     var flags: [String] = []
                     var line: String
@@ -1067,7 +1099,7 @@ struct SelfTest {
                         if Double(clipped) / Double(w * h) > 0.35 { flags.append("CLIPPED") }
                         if Double(crushed) / Double(w * h) > 0.35 { flags.append("CRUSHED") }
                         if inChange < 0.05, ringChange < 0.05, px.count == baseRGBA.count { flags.append("NO-CHANGE") }
-                        try writePNG(frame.image, to: URL(fileURLWithPath: "\(dir)/\(f.name).\(label).png"))
+                        if steps <= 1 { try writePNG(frame.image, to: URL(fileURLWithPath: "\(dir)/\(f.name).\(label).png")) }
                         line = String(format: "%@,%@,%@,%@,%@,%.0f,%.1f,%.1f,%.2f,%.2f,%.1f,%.1f,%@\n", group, op, f.name, label, "\(value)".replacingOccurrences(of: ",", with: ";"),
                                       frame.milliseconds, luma, luma - baseLuma, 100 * Double(clipped) / Double(w * h), 100 * Double(crushed) / Double(w * h),
                                       ringChange, inChange, flags.joined(separator: " "))
