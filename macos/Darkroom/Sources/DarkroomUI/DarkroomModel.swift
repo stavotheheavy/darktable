@@ -241,6 +241,8 @@ public final class DarkroomModel {
     /// Touch devices: the photo is a canvas that fills the screen and stays where it is. A pinch scales it in place about the
     /// point between the fingers, a drag moves it when it is bigger than the screen, and the panels float over it without
     /// moving it. The scale is 1 at fit; the offset is in points from where the photo sits at fit.
+    /// The file the last export wrote, so the iPad and iPhone can offer it to the share sheet.
+    public var exportedFile: URL?
     public var canvasScale: Double = 1
     public var canvasOffset: CGSize = .zero
     public static let canvasScaleRange: ClosedRange<Double> = 0.4...8
@@ -737,10 +739,11 @@ public final class DarkroomModel {
     }
 
     /// A stroke from points on the shown picture (normalised 0...1, y down) with the current brush.
-    public func paintStroke(_ points: [CGPoint]) {
+    /// `pressures` is the pen pressure at each point (0...1), or nil for a mouse or a finger.
+    public func paintStroke(_ points: [CGPoint], pressures: [Double]? = nil) {
         guard let id = paintModuleID, let m = modules.first(where: { $0.id == id }), canPaint, !points.isEmpty else { return }
         let p = points.map { SIMD2(min(max(Double($0.x), 0), 1), min(max(Double($0.y), 0), 1)) }
-        addStroke(BrushStroke(points: p, radius: brushRadius, softness: brushSoftness, flow: brushFlow, erase: brushErase), to: m)
+        addStroke(BrushStroke(points: p, radius: brushRadius, softness: brushSoftness, flow: brushFlow, erase: brushErase, pressures: pressures), to: m)
     }
 
     /// Starts the module's brush over with an empty layer (the old one stays in the history).
@@ -1172,6 +1175,7 @@ public final class DarkroomModel {
                 if let data = try await engine.exportHDRJPEG(path: path, maxSide: bound, stack: buildStack(), headroom: 4) {
                     try data.write(to: url, options: .atomic)
                     status = "Exported \(url.lastPathComponent) with an HDR gain map"
+                    exportedFile = url
                     requestRender()
                     return
                 }
@@ -1186,6 +1190,7 @@ public final class DarkroomModel {
                 [kCGImageDestinationLossyCompressionQuality: 0.92] as CFDictionary)
             guard CGImageDestinationFinalize(dest) else { throw EngineError("cannot write \(url.lastPathComponent)") }
             status = "Exported \(result.width) x \(result.height) to \(url.lastPathComponent)"
+            exportedFile = url
         } catch {
             status = "Export failed: \(error)"
         }

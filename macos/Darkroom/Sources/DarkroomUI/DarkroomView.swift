@@ -83,6 +83,7 @@ public struct DarkroomView: View {
         PhoneEditView(model: model, choosing: $choosing)
             .background(model.backdrop.color)
             .preferredColorScheme(.dark)
+            .shareExport(model)
             .fileImporter(isPresented: $choosing, allowedContentTypes: [.rawImage, .image]) { result in
                 if case .success(let url) = result { Task { await model.open(path: url.path) } }
             }
@@ -161,6 +162,8 @@ public struct DarkroomView: View {
         .onChange(of: model.mode) { _, _ in model.proMenuOpen = nil }
         .background(model.backdrop.color)
         .preferredColorScheme(.dark)
+        .shareExport(model)
+        .hardwareKeys(model)
         .fileImporter(isPresented: $choosing, allowedContentTypes: [.rawImage, .image]) { result in
             if case .success(let url) = result { Task { await model.open(path: url.path) } }
         }
@@ -193,8 +196,9 @@ struct PhotoView: View {
     /// A pinch in progress: its scale so far and where the fingers started. It is baked into the model when the fingers lift.
     private struct Pinch { var scale: CGFloat = 1; var anchor: CGPoint = .zero }
     @GestureState private var pinch = Pinch()
-    /// The stroke being painted, in view points, until the finger lifts.
+    /// The stroke being painted, in view points, until the finger lifts, and the pen pressure at each of its points.
     @State private var live: [CGPoint] = []
+    @State private var livePressure: [Double] = []
 
     /// The canvas presents the engine's frames as Metal textures unless DARKROOM_NO_METAL_CANVAS is set.
     private static let metalCanvas = ProcessInfo.processInfo.environment["DARKROOM_NO_METAL_CANVAS"] == nil
@@ -219,6 +223,15 @@ struct PhotoView: View {
                         .accessibilityLabel("Photo")
                         .rig("photo")
                     if model.cropEditing { CropOverlay(model: model, photo: r) }
+                    #if !os(macOS)
+                    // touch: a brush stroke is read through UIKit so a Pencil's pressure is kept
+                    if usesStrokeCapture {
+                        StrokeCapture(
+                            onBegan: { q, pr in addStrokePoint(q, pressure: pr, in: r, size: size, first: true) },
+                            onMoved: { q, pr in addStrokePoint(q, pressure: pr, in: r, size: size, first: false) },
+                            onEnded: { endStroke(in: r) })
+                    }
+                    #endif
                 } else {
                     Text(model.status)
                         .font(.title3)
@@ -243,7 +256,7 @@ struct PhotoView: View {
                     model.probe = nil
                 }
             }
-            .highPriorityGesture(paintGesture(in: size), including: model.paintModuleID != nil && model.canPaint ? .all : .none)
+            .highPriorityGesture(paintGesture(in: size), including: model.paintModuleID != nil && model.canPaint && !usesStrokeCapture ? .all : .none)
             .gesture(
                 DragGesture(minimumDistance: 2)
                     .onChanged { v in
@@ -266,7 +279,9 @@ struct PhotoView: View {
                     }
                     .onEnded { _ in lastDrag = .zero }
             )
-            .simultaneousGesture(magnify(in: size), including: Platform.isTouch ? .all : .none)
+            // the crop overlay is drawn at fit, so the canvas goes back to fit while it is open and the pinch is off
+            .simultaneousGesture(magnify(in: size), including: Platform.isTouch && !model.cropEditing ? .all : .none)
+            .onChange(of: model.cropEditing) { _, editing in if editing { model.resetCanvas() } }
             .onAppear { model.viewport = size }
             .onChange(of: size) { _, new in
                 model.viewport = new
@@ -295,6 +310,32 @@ struct PhotoView: View {
         return (out, CGSize(width: min(max(o.width, -lx), lx), height: min(max(o.height, -ly), ly)))
     }
 
+    /// Whether a brush stroke is read through UIKit (with pressure) rather than the SwiftUI drag.
+    private var usesStrokeCapture: Bool {
+        Platform.isTouch && model.paintModuleID != nil && model.canPaint && model.paintTool == .brush
+    }
+
+    private func addStrokePoint(_ q: CGPoint, pressure: Double, in r: CGRect, size: CGSize, first: Bool) {
+        let l = layoutPoint(q, in: r, size: size)
+        let p = CGPoint(x: min(max(l.x, r.minX), r.maxX), y: min(max(l.y, r.minY), r.maxY))
+        if first { live = [p]; livePressure = [pressure]; return }
+        if live.last.map({ hypot($0.x - p.x, $0.y - p.y) > 1.5 }) ?? true { live.append(p); livePressure.append(pressure) }
+    }
+
+    private func endStroke(in r: CGRect) {
+        defer { live = []; livePressure = [] }
+        guard !live.isEmpty, r.width > 0, r.height > 0 else { return }
+        let unit = live.map { CGPoint(x: ($0.x - r.minX) / r.width, y: ($0.y - r.minY) / r.height) }
+        model.paintStroke(unit, pressures: livePressure.count == unit.count ? livePressure : nil)
+    }
+
+    /// A point on the screen, as a point on the photo's own layout: the inverse of the scale and offset the canvas draws with.
+    private func layoutPoint(_ q: CGPoint, in r: CGRect, size: CGSize) -> CGPoint {
+        let t = canvasTransform(Pinch(), in: r, size: size)
+        guard t.scale != 0 else { return q }
+        return CGPoint(x: r.midX + (q.x - r.midX - t.offset.width) / t.scale, y: r.midY + (q.y - r.midY - t.offset.height) / t.scale)
+    }
+
     private func magnify(in size: CGSize) -> some Gesture {
         MagnifyGesture()
             .updating($pinch) { v, state, _ in state = Pinch(scale: v.magnification, anchor: v.startLocation) }
@@ -315,11 +356,20 @@ struct PhotoView: View {
             Group {
                 if tool == .brush {
                     let width = model.brushRadius * hypot(r.width, r.height) * 2
-                    Path { p in
-                        p.move(to: pts[0])
-                        if pts.count == 1 { p.addLine(to: pts[0]) } else { p.addLines(Array(pts.dropFirst())) }
+                    let colour = Color.white.opacity(model.brushErase ? 0.25 : 0.55)
+                    if livePressure.count == pts.count && pts.count > 1 {
+                        // a pen: each segment is as wide as the pressure there, as the stroke will be when it is laid down
+                        ForEach(1..<pts.count, id: \.self) { i in
+                            Path { p in p.move(to: pts[i - 1]); p.addLine(to: pts[i]) }
+                                .stroke(colour, style: StrokeStyle(lineWidth: width * (0.2 + 0.8 * livePressure[i]), lineCap: .round))
+                        }
+                    } else {
+                        Path { p in
+                            p.move(to: pts[0])
+                            if pts.count == 1 { p.addLine(to: pts[0]) } else { p.addLines(Array(pts.dropFirst())) }
+                        }
+                        .stroke(colour, style: StrokeStyle(lineWidth: width, lineCap: .round, lineJoin: .round))
                     }
-                    .stroke(Color.white.opacity(model.brushErase ? 0.25 : 0.55), style: StrokeStyle(lineWidth: width, lineCap: .round, lineJoin: .round))
                 } else {
                     Path { p in
                         let a = pts[0], b = pts[pts.count - 1]
@@ -343,7 +393,9 @@ struct PhotoView: View {
             .onChanged { v in
                 guard let f = model.frame else { return }
                 let r = imageRect(frame: f, in: size)
-                let p = CGPoint(x: min(max(v.location.x, r.minX), r.maxX), y: min(max(v.location.y, r.minY), r.maxY))
+                // the finger is in screen points; the photo may be scaled and moved, so map it back to where the photo is laid out
+                let q = layoutPoint(v.location, in: r, size: size)
+                let p = CGPoint(x: min(max(q.x, r.minX), r.maxX), y: min(max(q.y, r.minY), r.maxY))
                 if live.last.map({ hypot($0.x - p.x, $0.y - p.y) > 1.5 }) ?? true { live.append(p) }
             }
             .onEnded { _ in
@@ -637,20 +689,27 @@ struct TopBar: View {
             Divider().frame(height: 22).padding(.horizontal, 6)
 
             ForEach(ZoomMode.allCases, id: \.self) { z in
-                Button { model.zoom = z } label: {
-                    Text(z.rawValue)
+                // touch: the three steps scale the pinch canvas (fit, 2x, 4x); the Mac keeps the engine's zoom
+                let touch = Platform.isTouch
+                let target: Double = z == .fit ? 1 : (z == .actual ? 2 : 4)
+                let label = touch ? (z == .fit ? "Fit" : "\(Int(target))\u{00D7}") : z.rawValue
+                let on = touch ? abs(model.canvasScale - target) < 0.05 : model.zoom == z
+                Button {
+                    if touch { withAnimation(.snappy) { model.canvasScale = target; model.canvasOffset = .zero } } else { model.zoom = z }
+                } label: {
+                    Text(label)
                         .font(.callout.weight(.medium))
                         // never truncated: when the row is too tight ViewThatFits drops the whole zoom group instead
                         .lineLimit(1)
                         .fixedSize(horizontal: true, vertical: false)
                         .padding(.horizontal, 12)
                         .frame(height: 44)
-                        .background(model.zoom == z ? Color.white.opacity(0.22) : .clear, in: Capsule())
+                        .background(on ? Color.white.opacity(0.22) : .clear, in: Capsule())
                 }
                 .buttonStyle(.plain)
-                .accessibilityLabel("Zoom \(z.rawValue)")
+                .accessibilityLabel("Zoom \(label)")
                 .rig("zoom-\(z.rawValue)")
-                .accessibilityAddTraits(model.zoom == z ? .isSelected : [])
+                .accessibilityAddTraits(on ? .isSelected : [])
             }
             }
         }

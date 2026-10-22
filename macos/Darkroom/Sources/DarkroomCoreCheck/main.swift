@@ -1836,6 +1836,23 @@ do {
     let back = try JSONDecoder().decode(BrushStroke.self, from: data)
     check("BR10 a stroke round-trips through its compact JSON", back.points.count == 2 && abs(back.points[1].x - 0.8) < 1e-4 && back.radius == line.radius && back.erase == false && data.count < 150, "\(data.count) bytes")
 
+    // pen pressure: the radius follows it along the stroke
+    let pressed = BrushStroke(points: [SIMD2(0.2, 0.5), SIMD2(0.8, 0.5)], radius: 0.1, softness: 0, flow: 1, erase: false, pressures: [0.0, 1.0])
+    let pressedRaster = Brush.rasterize([pressed][...], width: 100, height: 80, id: "pp")
+    func columnHeight(_ m: MaskRaster, _ x: Int) -> Int { (0..<m.height).filter { px(m, x, $0) > 127 }.count }
+    check("BR11 pen pressure: a stroke from no pressure to full is narrow at the start (\(columnHeight(pressedRaster, 24))) and wide at the end (\(columnHeight(pressedRaster, 76)))",
+          columnHeight(pressedRaster, 24) > 0 && columnHeight(pressedRaster, 24) * 2 < columnHeight(pressedRaster, 76))
+    let unpressed = BrushStroke(points: line.points, radius: line.radius, softness: line.softness, flow: line.flow, erase: false, pressures: nil)
+    check("BR12 no pressure: the stroke is exactly what it was before pressure existed",
+          Brush.rasterize([unpressed][...], width: 100, height: 80, id: "up").pixels == lined.pixels)
+    let pressedBack = try JSONDecoder().decode(BrushStroke.self, from: try JSONEncoder().encode(pressed))
+    let oldJSON = #"{"points":[0.2,0.5,0.8,0.5],"radius":0.1,"softness":0,"flow":1,"erase":false}"#.data(using: .utf8)!
+    let oldStroke = try JSONDecoder().decode(BrushStroke.self, from: oldJSON)
+    check("BR13 pressures round-trip, and a stroke saved before pressure existed still loads with none",
+          pressedBack.pressures == [0.0, 1.0] && oldStroke.pressures == nil && oldStroke.points.count == 2)
+    let mismatched = BrushStroke(points: line.points, radius: 0.1, softness: 0, flow: 1, erase: false, pressures: [0.5])
+    check("BR14 pressures that do not match the points are dropped, not guessed", mismatched.pressures == nil)
+
     // drawn selections: lasso, linear and radial
     let sq: [SIMD2<Double>] = [SIMD2(0.25, 0.25), SIMD2(0.75, 0.25), SIMD2(0.75, 0.75), SIMD2(0.25, 0.75)]
     let hardLasso = MaskShapes.rasterize(.lasso, points: sq, feather: 0, width: 100, height: 80, id: "l0")

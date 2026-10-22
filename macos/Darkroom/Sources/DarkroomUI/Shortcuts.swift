@@ -170,9 +170,55 @@ public enum KeyRouter {
     }
 }
 #else
-/// Hardware keys on iPad arrive through UIKit key commands; the Mac's key monitor has no iOS counterpart yet.
+/// Hardware keys on an iPad arrive as SwiftUI key presses instead of the Mac's key monitor, and go to the same registry:
+/// the keys that carry no Command (letters, arrows, [ ], Delete). Command keys are the hidden buttons in DarkroomView.
 @MainActor
 public enum KeyRouter {
     public static func install(for model: DarkroomModel) {}
+
+    /// The registry entry a key press means, if any; `key` is the press without Shift (an arrow is its private-use scalar).
+    static func match(key: Character, modifiers: EventModifiers) -> Shortcut? {
+        let held = modifiers.intersection([.command, .option, .shift, .control])
+        // a shifted symbol ("?") is typed with Shift on every layout: its Shift does not count
+        let symbol = "?{}|:\"<>~!@#$%^&*()_+".contains(key)
+        return Shortcuts.all.first { s in
+            guard s.viaRouter, character(s.shortcut.key) == key else { return false }
+            var want: EventModifiers = []
+            if s.shortcut.modifiers.contains(.shift) { want.insert(.shift) }
+            if s.shortcut.modifiers.contains(.option) { want.insert(.option) }
+            if s.shortcut.modifiers.contains(.control) { want.insert(.control) }
+            return symbol ? held.subtracting(.shift) == want.subtracting(.shift) : held == want
+        }
+    }
+
+    private static func character(_ k: KeyEquivalent) -> Character {
+        // SwiftUI's Delete is backspace (U+0008); the keyboard reports it as U+007F
+        k == .delete ? "\u{7F}" : Character(k.character.lowercased())
+    }
+
+    /// Holding an arrow key keeps nudging; holding a toggle key does not flicker.
+    static func handle(_ press: KeyPress, model: DarkroomModel) -> KeyPress.Result {
+        let isArrowOrDelete = [KeyEquivalent.upArrow, .downArrow, .leftArrow, .rightArrow, .delete].contains(press.key)
+        if press.phase == .repeat && !isArrowOrDelete { return .ignored }
+        guard let s = match(key: character(press.key), modifiers: press.modifiers) else { return .ignored }
+        s.action(model)
+        return .handled
+    }
+}
+
+extension View {
+    /// Routes an attached keyboard's plain keys to the shortcut registry.
+    func hardwareKeys(_ model: DarkroomModel) -> some View {
+        focusable()
+            .focusEffectDisabled()
+            .onKeyPress(phases: [.down, .repeat]) { press in KeyRouter.handle(press, model: model) }
+    }
+}
+#endif
+
+#if os(macOS)
+extension View {
+    /// The Mac routes plain keys through its key monitor (KeyRouter.install), so there is nothing to attach.
+    func hardwareKeys(_ model: DarkroomModel) -> some View { self }
 }
 #endif

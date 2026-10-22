@@ -44,12 +44,16 @@ public struct BrushStroke: Sendable, Equatable, Codable {
     /// The most weight a stroke can lay down, 0...1.
     public var flow: Double
     public var erase: Bool
+    /// How hard the pen pressed at each point, 0...1, one per point; nil for a stroke drawn with a mouse or a finger, which
+    /// has the full radius all along. The radius at a point is `radius` scaled from 20% (no pressure) to 100% (full pressure).
+    public var pressures: [Double]?
 
-    public init(points: [SIMD2<Double>], radius: Double, softness: Double, flow: Double, erase: Bool) {
+    public init(points: [SIMD2<Double>], radius: Double, softness: Double, flow: Double, erase: Bool, pressures: [Double]? = nil) {
         self.points = points; self.radius = radius; self.softness = softness; self.flow = flow; self.erase = erase
+        self.pressures = pressures?.count == points.count ? pressures : nil
     }
 
-    enum CodingKeys: String, CodingKey { case points, radius, softness, flow, erase }
+    enum CodingKeys: String, CodingKey { case points, radius, softness, flow, erase, pressure }
 
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
@@ -59,6 +63,9 @@ public struct BrushStroke: Sendable, Equatable, Codable {
         softness = try c.decode(Double.self, forKey: .softness)
         flow = try c.decode(Double.self, forKey: .flow)
         erase = try c.decode(Bool.self, forKey: .erase)
+        // strokes saved before pen pressure existed have no such key
+        let p = try c.decodeIfPresent([Double].self, forKey: .pressure)
+        pressures = p?.count == points.count ? p : nil
     }
 
     public func encode(to encoder: Encoder) throws {
@@ -66,6 +73,7 @@ public struct BrushStroke: Sendable, Equatable, Codable {
         try c.encode(points.flatMap { [($0.x * 10000).rounded() / 10000, ($0.y * 10000).rounded() / 10000] }, forKey: .points)
         try c.encode(radius, forKey: .radius); try c.encode(softness, forKey: .softness)
         try c.encode(flow, forKey: .flow); try c.encode(erase, forKey: .erase)
+        if let pressures { try c.encode(pressures.map { ($0 * 1000).rounded() / 1000 }, forKey: .pressure) }
     }
 }
 
@@ -100,23 +108,34 @@ public enum Brush {
             guard minX <= maxX, minY <= maxY else { continue }
             let bw = maxX - minX + 1
             var own = [Double](repeating: 0, count: bw * (maxY - minY + 1))
-            func stamp(_ c: SIMD2<Double>) {
-                let x0 = max(minX, Int((c.x - radius).rounded(.down))), x1 = min(maxX, Int((c.x + radius).rounded(.up)))
-                let y0 = max(minY, Int((c.y - radius).rounded(.down))), y1 = min(maxY, Int((c.y + radius).rounded(.up)))
+            // a dab's radius: the stroke's, scaled by the pen pressure there (20% light ... 100% full); a stroke with no pressure is full
+            func radiusAt(_ pressure: Double?) -> Double {
+                guard let pressure, pressure.isFinite else { return radius }
+                return max(0.5, radius * (0.2 + 0.8 * min(max(pressure, 0), 1)))
+            }
+            func stamp(_ c: SIMD2<Double>, _ r: Double) {
+                let x0 = max(minX, Int((c.x - r).rounded(.down))), x1 = min(maxX, Int((c.x + r).rounded(.up)))
+                let y0 = max(minY, Int((c.y - r).rounded(.down))), y1 = min(maxY, Int((c.y + r).rounded(.up)))
                 guard x0 <= x1, y0 <= y1 else { return }
                 for y in y0...y1 { for x in x0...x1 {
                     let d = ((Double(x) + 0.5 - c.x) * (Double(x) + 0.5 - c.x) + (Double(y) + 0.5 - c.y) * (Double(y) + 0.5 - c.y)).squareRoot()
-                    let a = dab(d, radius: radius, softness: stroke.softness) * flow
+                    let a = dab(d, radius: r, softness: stroke.softness) * flow
                     let i = (y - minY) * bw + (x - minX)
                     if a > own[i] { own[i] = a }
                 } }
             }
             let spacing = max(0.5, radius * 0.15)
-            stamp(pts[0])
+            let pressure = stroke.pressures
+            stamp(pts[0], radiusAt(pressure?.first))
             for k in 1..<max(pts.count, 1) {
                 let a = pts[k - 1], b = pts[k], len = ((b.x - a.x) * (b.x - a.x) + (b.y - a.y) * (b.y - a.y)).squareRoot()
                 let steps = max(1, Int((len / spacing).rounded(.up)))
-                for s in 1...steps { stamp(a + (b - a) * (Double(s) / Double(steps))) }
+                for s in 1...steps {
+                    let t = Double(s) / Double(steps)
+                    // the pressure runs along the segment from one point's to the next
+                    let p: Double? = pressure.map { $0[k - 1] + ($0[k] - $0[k - 1]) * t }
+                    stamp(a + (b - a) * t, radiusAt(p))
+                }
             }
             for y in minY...maxY { for x in minX...maxX {
                 let s = own[(y - minY) * bw + (x - minX)]
