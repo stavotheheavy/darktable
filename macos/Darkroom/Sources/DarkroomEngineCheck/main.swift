@@ -2104,6 +2104,8 @@ do {
         ("bilateral", ["amount": 1, "range": 0.3], { BilateralFilter.apply(src, width: bw, height: bh, radius: $0, range: 0.3, amount: 1) }),
         ("kuwahara", ["amount": 1], { Kuwahara.apply(src, width: bw, height: bh, radius: $0, amount: 1) }),
         ("lensblur", ["amount": 1, "highlights": 2], { LensBlur.apply(src, width: bw, height: bh, radius: $0, boost: 2, amount: 1) }),
+        ("chromadenoise", ["amount": 1], { ChromaDenoise.apply(src, width: bw, height: bh, radius: $0, amount: 1) }),
+        ("skinsmooth", ["amount": 1, "hue": 55, "width": 35], { SkinSmooth.apply(src, width: bw, height: bh, radius: $0, amount: 1, hueDegrees: 55, widthDegrees: 35) }),
     ]
     var bad: [String] = []
     for (op, fixed, run) in wants { for r in [5.0, 5.5] {
