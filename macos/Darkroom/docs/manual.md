@@ -201,4 +201,4 @@ The app's shortcuts live in one table (`Sources/DarkroomUI/Shortcuts.swift`). Th
 | E | Section: switch its effect on or off (`section-power`) |
 | F | Section: fold or unfold (`section-fold`) |
 | A | Auto edit: white balance, exposure, highlights, shadows (`auto-edit`) |
-\n| ⌥⌘U | Sign in to Databit Dev (`sign-in`) |\n
+| ⌥⌘U | Sign in to Databit Dev (`sign-in`) |
