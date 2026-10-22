@@ -180,6 +180,20 @@ public enum CIEngineProbe {
         }
     }
 
+    /// The modules folded into another (the merge of 2026-10-22): old operation id to its survivor, old name and parameter mapping.
+    public struct Alias: Sendable {
+        public let survivor: String
+        public let name: String
+        public let map: @Sendable ([String: ParamValue]) -> [String: ParamValue]
+    }
+    public static var aliases: [String: Alias] {
+        CIModule.aliases.mapValues { Alias(survivor: $0.survivor, name: $0.name, map: $0.map) }
+    }
+    /// The field names of a catalogue module, or nil when there is no such module.
+    public static func catalogueFields(_ operation: String) -> Set<String>? { CIModule.named(operation).map { Set($0.fields.map(\.name)) } }
+    /// A stack with every folded module rewritten onto its survivor.
+    public static func resolve(_ stack: [StackEntry]) -> [StackEntry] { CIModule.resolve(stack) }
+
     /// The engine's reading of a camera EXIF orientation value (1...8).
     public static func orientation(exif raw: UInt32) -> Orientation {
         CGImagePropertyOrientation(rawValue: raw).map(CIGeometry.orientation(exif:)) ?? .none
@@ -197,13 +211,13 @@ public enum CIEngineProbe {
     /// How many ops each fused pass of `stack` holds, in pipeline order (what the engine would dispatch). A neighbourhood module or a
     /// module that is masked or faded ends a run.
     public static func fusedRunLengths(_ stack: [StackEntry]) -> [Int] {
-        let ordered = stack.filter { $0.enabled && !CIGeometry.operations.contains($0.operation) }.compactMap { e in CIModule.named(e.operation).map { ($0, e) } }
+        let ordered = CIModule.resolve(stack).filter { $0.enabled && !CIGeometry.operations.contains($0.operation) }.compactMap { e in CIModule.named(e.operation).map { ($0, e) } }
             .sorted { CIEngine.effectiveOrder($0.0, sceneReferred: CIEngine.wantsSceneLinear(stack)) < CIEngine.effectiveOrder($1.0, sceneReferred: CIEngine.wantsSceneLinear(stack)) }
         var runs: [Int] = [], current = 0
         for (m, e) in ordered {
             let maskMode = e.blend["mask_mode"]?.double ?? 0
             if maskMode == 0, (e.blend["opacity"]?.double ?? 100) >= 100, CIModule.fusableOperations.contains(m.operation) {
-                if CIModule.fusedOp(m.operation, m.values(from: e.params)) != nil { current += 1 }
+                current += CIModule.fusedOps(m.operation, m.values(from: e.params)).count
             } else {
                 if current > 0 { runs.append(current); current = 0 }
             }

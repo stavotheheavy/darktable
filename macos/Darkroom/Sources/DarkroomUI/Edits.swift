@@ -12,6 +12,10 @@ public struct ModuleEdit: Codable, Equatable, Sendable {
     /// shows by default (a basic, applied, or edited). Kept with the edit so undo, redo and the sidecar carry it.
     public var inPanel: Bool?
 
+    public init(enabled: Bool? = nil, params: [String: ParamValue] = [:], blend: [String: ParamValue] = [:], inPanel: Bool? = nil) {
+        self.enabled = enabled; self.params = params; self.blend = blend; self.inPanel = inPanel
+    }
+
     /// A change to the picture (on/off, parameters, blend); panel membership alone is not one.
     public var changesPicture: Bool { enabled != nil || !params.isEmpty || !blend.isEmpty }
     public var isEmpty: Bool { !changesPicture && inPanel == nil }
@@ -28,6 +32,10 @@ public struct HistoryItem: Codable, Equatable, Sendable, Identifiable {
     /// What changed, so repeated drags of the same control merge into one step.
     var target: String?
     var time: Date = Date()
+
+    public init(label: String, detail: String, edits: EditMap, target: String? = nil, time: Date = Date()) {
+        self.label = label; self.detail = detail; self.edits = edits; self.target = target; self.time = time
+    }
 }
 
 /// The saved form of an image's edits, kept next to the raw like an XMP sidecar.
@@ -38,14 +46,18 @@ public struct HistoryItem: Codable, Equatable, Sendable, Identifiable {
 /// Version 2 adds `algorithms`: the algorithm version of every module the history uses, as the engine that saved it
 /// reported (roadmap T11). Version 1 files (no `algorithms`) still load. A file with a version this app does not know
 /// is never read and never overwritten: its edits belong to a newer app.
-struct Sidecar: Codable {
+public struct Sidecar: Codable {
     static let currentVersion = 3
 
     var version = 2
-    var history: [HistoryItem]
-    var index: Int
+    public var history: [HistoryItem]
+    public var index: Int
     var algorithms: [String: Int]?
     var layers: [MaskLayer]?
+
+    public init(version: Int = 3, history: [HistoryItem], index: Int, algorithms: [String: Int]? = nil, layers: [MaskLayer]? = nil) {
+        self.version = version; self.history = history; self.index = index; self.algorithms = algorithms; self.layers = layers
+    }
 
     enum Loaded {
         case none
@@ -73,12 +85,12 @@ struct Sidecar: Codable {
         return .loaded(s)
     }
 
-    static func load(for rawPath: String) -> Sidecar? {
+    public static func load(for rawPath: String) -> Sidecar? {
         if case .loaded(let s) = read(for: rawPath) { return s }
         return nil
     }
 
-    func save(for rawPath: String) throws {
+    public func save(for rawPath: String) throws {
         var s = self
         if s.layers?.isEmpty == true { s.layers = nil }
         s.version = s.layers == nil ? 2 : 3

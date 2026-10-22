@@ -1,5 +1,6 @@
 import AppKit
 import CoreGraphics
+import DarkroomCI
 import DarkroomCore
 import DarktableKit
 import Foundation
@@ -354,6 +355,7 @@ public final class DarkroomModel {
         let loaded = Sidecar.read(for: path)
         if case .loaded(let s) = loaded {
             history = s.history
+            let folded = Self.foldAliases(&history, into: modules)
             historyIndex = min(max(0, s.index), s.history.count - 1)
             let known = Set(modules.map(\.id))
             edits = history[historyIndex].edits.filter { known.contains($0.key) }
@@ -362,6 +364,7 @@ public final class DarkroomModel {
             maskLayers = s.layers ?? []
             loadedAlgorithms = s.algorithms
             loadedEdits = history[historyIndex].edits
+            if folded > 0 { versionNotices.insert("\(folded) older module\(folded == 1 ? " was" : "s were") folded into the one that replaced \(folded == 1 ? "it" : "them") (see the manual)", at: 0) }
             if let first = versionNotices.first { status = versionNotices.count == 1 ? first : "\(first) (and \(versionNotices.count - 1) more)" }
         } else {
             if case .unreadable(let why) = loaded {
@@ -380,6 +383,39 @@ public final class DarkroomModel {
         selectedID = modules.first { $0.operation == "exposure" }?.id ?? modules.first?.id
         if let sel = selectedID, let m = modules.first(where: { $0.id == sel }) { await loadSchema(for: m) }
         requestRender()
+    }
+
+    /// A sidecar that names a module folded into another (the merge of 2026-10-22, `CIEngineProbe.aliases`) is carried over: in every
+    /// history step the edit moves onto the survivor's id with its parameters mapped, so the picture is what it was and the panel shows
+    /// the module that exists. A survivor already edited in that step takes the fold as its next instance. Returns how many ids moved.
+    static func foldAliases(_ history: inout [HistoryItem], into modules: [ModuleInfo]) -> Int {
+        let aliases = CIEngineProbe.aliases
+        guard !aliases.isEmpty else { return 0 }
+        var moved = Set<String>()
+        for i in history.indices {
+            var edits = history[i].edits
+            for (id, edit) in history[i].edits {
+                let parts = id.split(separator: "#", maxSplits: 1).map(String.init)
+                guard parts.count == 2, let a = aliases[parts[0]] else { continue }
+                edits[id] = nil
+                var folded = edit
+                folded.params = a.map(edit.params)
+                let target = "\(a.survivor)#\(parts[1])"
+                if var own = edits[target] {
+                    // the survivor was edited in this step too: the fold joins it, its own values winning where both set a control
+                    own.params.merge(folded.params) { mine, _ in mine }
+                    own.blend.merge(folded.blend) { mine, _ in mine }
+                    own.enabled = (own.enabled ?? false) || (folded.enabled ?? false) ? true : own.enabled
+                    own.inPanel = own.inPanel ?? folded.inPanel
+                    edits[target] = own
+                } else {
+                    edits[target] = folded
+                }
+                moved.insert(id)
+            }
+            history[i].edits = edits
+        }
+        return moved.count
     }
 
     // MARK: module list
@@ -456,9 +492,8 @@ public final class DarkroomModel {
     static let wakes: [String: [(trigger: String, sleeper: String, wake: Double)]] = [
         "splittoning": [("shadows_hue", "shadows_saturation", 0.5), ("highlights_hue", "highlights_saturation", 0.5)],
         "monochrome": [("filter_hue", "filter_strength", 0.5), ("filter_hue", "intensity", 1), ("filter_strength", "intensity", 1)],
-        "colorize": [("hue", "strength", 0.5)],
         "gradientmap": [("*", "strength", 0.5), ("mids_hue", "mids_sat", 0.5)],
-        "photofilter": [("hue", "density", 0.5), ("preserve", "density", 0.5)],
+        "warmth": [("hue", "density", 0.5), ("preserve", "density", 0.5)],
         "skinsmooth": [("*", "amount", 0.5)],
         "halation": [("*", "strength", 0.5)],
         "defringe": [("*", "strength", 0.5)],

@@ -19,9 +19,9 @@ struct CIModule: Sendable {
     /// The modules whose work is one pixel in, one pixel out, on our own Metal functions: a run of them is one pass over the frame
     /// (see MetalFused). The engine fuses them when they are unmasked and at full opacity.
     static let fusableOperations: Set<String> = [
-        "temperature", "exposure", "colorbalancergb", "channelmixer", "tonecurve", "monochrome", "rgblevels", "splittoning", "display", "invert", "colisa", "velvia", "colorzones", "satcurvergb", "colorbalance", "rgbcurve", "colorcontrast", "colorcorrection", "basecurve", "dither", "colorize", "solarize", "negadoctor", "lowlight", "channelmixerrgb",
-        "gradientmap", "crossprocess", "bleachbypass", "photofilter", "channelcurves", "chromalimit", "huerotate", "warmth",
-        "highlightrolloff", "lumabands", "fadelook", "lumacurve", "reinhard", "scurve", "colorharmonizer", "bwmixer", "selectivecolor", "relight",
+        "temperature", "exposure", "colorbalancergb", "tonecurve", "monochrome", "rgblevels", "splittoning", "display", "invert", "colorzones", "satcurvergb", "colorbalance", "dither", "solarize", "negadoctor", "lowlight", "channelmixerrgb",
+        "gradientmap", "bleachbypass", "channelcurves", "chromalimit", "warmth",
+        "highlightrolloff", "lumabands", "lumacurve", "scurve", "colorharmonizer", "selectivecolor", 
     ]
 
     /// The fused op a fusable module stands for with these values, or nil when the module does nothing at them. This is the one place the
@@ -36,13 +36,10 @@ struct CIModule: Sendable {
             return g == 1 ? nil : FusedOp(.gain, [g, g, g])
         case "colorbalancergb":
             let u = [Float(v["contrast"] ?? 0), Float(v["saturation_global"] ?? 0), Float(v["vibrance"] ?? 0)]
+            let brightness = v["brightness"] ?? 0
+            if brightness != 0 { return FusedOp(.colisa, u + [Float(Colisa.gain(brightness: brightness))]) }
             return u.allSatisfy { $0 == 0 } ? nil : FusedOp(.colorBalance, u)
-        case "channelmixer":
-            let names = ["red_r", "red_g", "red_b", "green_r", "green_g", "green_b", "blue_r", "blue_g", "blue_b"]
-            let identity: [Double] = [1, 0, 0, 0, 1, 0, 0, 0, 1]
-            let u: [Float] = names.indices.map { Float(v[names[$0]] ?? identity[$0]) }
-            return u == identity.map { Float($0) } ? nil : FusedOp(.channelMixer, u)
-        case "tonecurve", "rgbcurve":
+        case "tonecurve":
             let n = Int((v["n"] ?? 0).rounded())
             let points: (xs: [Double], ys: [Double])
             if n >= 2 {
@@ -55,18 +52,11 @@ struct CIModule: Sendable {
         case "monochrome":
             let intensity = v["intensity"] ?? 0
             guard intensity > 0 else { return nil }
+            if v["method"] == 1 { return FusedOp(.bwMixer, [Float(v["red"] ?? 0.263), Float(v["green"] ?? 0.678), Float(v["blue"] ?? 0.059), Float(intensity)]) }
             let hue = (v["filter_hue"] ?? 30) * .pi / 180
             return FusedOp(.monochrome, [Float(intensity), Float(v["filter_strength"] ?? 0), Float(cos(hue)), Float(sin(hue))])
         case "invert":
             return FusedOp(.invert, [])
-        case "velvia":
-            // Velvia is the colour balance kernel with vibrance only
-            let strength = v["strength"] ?? 0
-            return strength == 0 ? nil : FusedOp(.colorBalance, [0, 0, Float(strength)])
-        case "colisa":
-            let brightness = v["brightness"] ?? 0
-            let u: [Double] = [v["contrast"] ?? 0, v["saturation"] ?? 0, 0, Colisa.gain(brightness: brightness)]
-            return u[0] == 0 && u[1] == 0 && brightness == 0 ? nil : FusedOp(.colisa, u.map { Float($0) })
         case "colorzones":
             let u: [Float] = ["hue", "sat", "light"].flatMap { kind in ColorZones.bandNames.map { Float(v["\($0)_\(kind)"] ?? 0) } }
             return u.allSatisfy { $0 == 0 } ? nil : FusedOp(.colorZones, u)
@@ -77,21 +67,8 @@ struct CIModule: Sendable {
             let t = LiftGammaGain.terms(v)
             let u: [Float] = [t.slope, t.offset, t.power].flatMap { [Float($0.x), Float($0.y), Float($0.z)] }
             return u == [1, 1, 1, 0, 0, 0, 1, 1, 1] ? nil : FusedOp(.liftGammaGain, u)
-        case "colorcontrast":
-            let saturation = v["saturation"] ?? 0
-            return saturation == 0 ? nil : FusedOp(.colorBalance, [0, Float(saturation), 0])
-        case "colorcorrection":
-            let brightness = v["brightness"] ?? 0, contrast = v["contrast"] ?? 0
-            return contrast == 0 && brightness == 0 ? nil : FusedOp(.colisa, [Float(contrast), 0, 0, Float(Colisa.gain(brightness: brightness))])
-        case "basecurve":
-            let gamma = v["gamma"] ?? 1
-            return gamma == 1 ? nil : FusedOp(.baseCurve, [Float(gamma)])
         case "dither":
             return FusedOp(.posterize, [Float(max((v["levels"] ?? 64).rounded(), 2) - 1)])
-        case "colorize":
-            let strength = v["strength"] ?? 0
-            let t = Colorize.tint(hue: v["hue"] ?? 0)
-            return strength == 0 ? nil : FusedOp(.colorize, [Float(strength), Float(t.x), Float(t.y)])
         case "solarize":
             let strength = v["strength"] ?? 0
             return strength == 0 ? nil : FusedOp(.solarize, [Float(v["threshold"] ?? 0.5), Float(strength)])
@@ -115,17 +92,9 @@ struct CIModule: Sendable {
                          GradientMap.stop(hueDegrees: v["mids_hue"] ?? 0, saturation: v["mids_sat"] ?? 0),
                          GradientMap.stop(hueDegrees: v["highlights_hue"] ?? 60, saturation: v["highlights_sat"] ?? 0.6)]
             return FusedOp(.gradientMap, [Float(strength)] + stops.flatMap { [Float($0.x), Float($0.y)] })
-        case "crossprocess":
-            let amount = v["amount"] ?? 0
-            return amount == 0 ? nil : FusedOp(.crossProcess, [Float(amount)])
         case "bleachbypass":
             let strength = v["strength"] ?? 0
             return strength == 0 ? nil : FusedOp(.bleachBypass, [Float(strength)])
-        case "photofilter":
-            let density = v["density"] ?? 0
-            guard density != 0 else { return nil }
-            let gain = LiftGammaGain.tint(hueDegrees: v["hue"] ?? 45, strength: 1)
-            return FusedOp(.photoFilter, [Float(gain.x), Float(gain.y), Float(gain.z), Float(density), Float(v["preserve"] ?? 1)])
         case "channelcurves":
             let identity: [Double] = [0.25, 0.5, 0.75, 0.25, 0.5, 0.75, 0.25, 0.5, 0.75]
             let heights = ChannelCurves.channels.flatMap { c in (1...3).map { v["\(c)_y\($0)"] ?? identity[$0 - 1] } }
@@ -133,30 +102,28 @@ struct CIModule: Sendable {
         case "chromalimit":
             let limit = v["limit"] ?? ChromaLimit.off
             return limit >= ChromaLimit.off ? nil : FusedOp(.chromaLimit, [Float(limit)])
-        case "huerotate":
-            let degrees = v["degrees"] ?? 0
-            let t = degrees * .pi / 180
-            return degrees == 0 ? nil : FusedOp(.hueRotate, [Float(cos(t)), Float(sin(t))])
         case "warmth":
+            if v["method"] == 1 {
+                let density = v["density"] ?? 0
+                guard density != 0 else { return nil }
+                let gain = LiftGammaGain.tint(hueDegrees: v["hue"] ?? 45, strength: 1)
+                return FusedOp(.photoFilter, [Float(gain.x), Float(gain.y), Float(gain.z), Float(density), Float(v["preserve"] ?? 1)])
+            }
             let u = [Float(v["warmth"] ?? 0), Float(v["tint"] ?? 0)]
             return u.allSatisfy { $0 == 0 } ? nil : FusedOp(.warmth, u)
         case "highlightrolloff":
             let amount = v["amount"] ?? 0
-            return amount == 0 ? nil : FusedOp(.highlightRolloff, [Float(v["white"] ?? 1), Float(v["knee"] ?? 0.7), Float(amount)])
+            guard amount != 0 else { return nil }
+            if v["curve"] == 1 { return FusedOp(.reinhard, [Float(v["white"] ?? 4), Float(amount)]) }
+            return FusedOp(.highlightRolloff, [Float(v["white"] ?? 1), Float(v["knee"] ?? 0.7), Float(amount)])
         case "lumabands":
             let u = LumaBands.names.map { Float(v[$0] ?? 0) }
             return u.allSatisfy { $0 == 0 } ? nil : FusedOp(.lumaBands, u)
-        case "fadelook":
-            let black = v["black"] ?? 0, white = v["white"] ?? 0
-            return black == 0 && white == 0 ? nil : FusedOp(.fadeLook, [Float(black), Float(white)])
         case "lumacurve":
             let ys: [Double] = [v["y0"] ?? 0, v["y1"] ?? 0.25, v["y2"] ?? 0.5, v["y3"] ?? 0.75, v["y4"] ?? 1]
             if ys == [0, 0.25, 0.5, 0.75, 1] { return nil }
             let p = ToneCurve.sanitized(xs: ToneCurve.legacyXs, ys: ys)
             return FusedOp(.lumaCurve, ToneCurve.uniforms(xs: p.xs, ys: p.ys))
-        case "reinhard":
-            let amount = v["amount"] ?? 0
-            return amount == 0 ? nil : FusedOp(.reinhard, [Float(v["white"] ?? 4), Float(amount)])
         case "scurve":
             let contrast = v["contrast"] ?? 0
             return contrast == 0 ? nil : FusedOp(.sCurve, [Float(SCurve.exponent(contrast: contrast)), Float(v["pivot"] ?? 0.5)])
@@ -166,15 +133,9 @@ struct CIModule: Sendable {
             let sch = ColorHarmony.scheme(Int((v["scheme"] ?? 0).rounded()), baseDegrees: v["base"] ?? 0)
             let hues = (sch.hues + [0, 0, 0, 0]).prefix(4).map { Float($0) }
             return FusedOp(.colorHarmony, [Float(sch.hues.count)] + hues + [Float(sch.halfGap), Float(amount)])
-        case "bwmixer":
-            let amount = v["amount"] ?? 0
-            return amount == 0 ? nil : FusedOp(.bwMixer, [Float(v["red"] ?? 0.263), Float(v["green"] ?? 0.678), Float(v["blue"] ?? 0.059), Float(amount)])
         case "selectivecolor":
             let u: [Float] = SelectiveColor.families.flatMap { f in SelectiveColor.inks.map { Float(v["\(f)_\($0)"] ?? 0) } }
             return u.allSatisfy { $0 == 0 } ? nil : FusedOp(.selectiveColor, u)
-        case "relight":
-            let ev = v["ev"] ?? 0
-            return ev == 0 ? nil : FusedOp(.relight, [Float(ev), Float(v["center"] ?? -1), Float(v["width"] ?? 4)])
         case "rgblevels":
             let black = v["black"] ?? 0
             let white = max(v["white"] ?? 1, black + 0.01)
@@ -205,8 +166,102 @@ struct CIModule: Sendable {
 
     /// A fusable module on its own (masked, partly faded, or the only one in its run): the same op through the same kernel.
     static func applyFused(_ operation: String, _ image: CIImage, _ v: [String: Double]) throws -> CIImage {
-        guard let op = fusedOp(operation, v) else { return image }
-        return try CIBridge.fused(image, ops: [op])
+        let ops = fusedOps(operation, v)
+        guard !ops.isEmpty else { return image }
+        return try CIBridge.fused(image, ops: ops)
+    }
+
+    /// Every fused op a module stands for: a merged module runs the kernels of the modules it absorbed before or after its own, in the
+    /// pipeline order those modules had, so an old edit folded into it renders the same. The engine's fused pass takes the list as is.
+    static func fusedOps(_ operation: String, _ v: [String: Double]) -> [FusedOp] {
+        var ops: [FusedOp] = []
+        switch operation {
+        case "colorzones":   // hue rotate (was iopOrder 17) ran before the bands (24)
+            let degrees = v["hue_all"] ?? 0
+            if degrees != 0 { let t = degrees * .pi / 180; ops.append(FusedOp(.hueRotate, [Float(cos(t)), Float(sin(t))])) }
+        case "lumabands":    // fill light (26) ran before the bands (39)
+            let ev = v["ev"] ?? 0
+            if ev != 0 { ops.append(FusedOp(.relight, [Float(ev), Float(v["center"] ?? -1), Float(v["width"] ?? 4)])) }
+        default: break
+        }
+        if let own = fusedOp(operation, v) { ops.append(own) }
+        switch operation {
+        case "rgblevels":    // base curve (34) ran after levels (33); fade (67) last
+            let gamma = v["gamma"] ?? 1
+            if gamma != 1 { ops.append(FusedOp(.baseCurve, [Float(gamma)])) }
+            let black = v["fade_black"] ?? 0, white = v["fade_white"] ?? 0
+            if black != 0 || white != 0 { ops.append(FusedOp(.fadeLook, [Float(black), Float(white)])) }
+        case "channelcurves":   // cross process (57) ran after the curves (37)
+            let amount = v["cross_process"] ?? 0
+            if amount != 0 { ops.append(FusedOp(.crossProcess, [Float(amount)])) }
+        default: break
+        }
+        return ops
+    }
+
+    /// A choice field: the option's `value` is what `values(from:)` hands the module.
+    static func choice(_ name: String, _ description: String, _ initial: String, _ options: [(String, Int, String)]) -> FieldSchema {
+        FieldSchema(name: name, description: description, kind: .enumeration, min: 0, max: 0, defaultValue: .option(initial),
+                    options: options.map { EnumOption(name: $0.0, value: $0.1, label: $0.2) })
+    }
+
+    // MARK: aliases: the modules folded into another (merge of 2026-10-22)
+
+    /// An operation that no longer exists on its own: the survivor it became a setting of, its old name (the Library's presets will
+    /// carry it), and how its old parameters become the survivor's. An old sidecar, an old check stack or a `--stack` file that names
+    /// it renders exactly as before, through the survivor.
+    struct CIAlias: Sendable {
+        let survivor: String
+        let name: String
+        let map: @Sendable ([String: ParamValue]) -> [String: ParamValue]
+    }
+
+    static let aliases: [String: CIAlias] = {
+        @Sendable func n(_ p: [String: ParamValue], _ k: String, _ d: Double) -> Double { p[k]?.double ?? d }
+        @Sendable func num(_ d: Double) -> ParamValue { .number(d) }
+        var a: [String: CIAlias] = [:]
+        a["colisa"] = CIAlias(survivor: "colorbalancergb", name: "contrast brightness saturation") { p in
+            ["contrast": num(n(p, "contrast", 0)), "brightness": num(n(p, "brightness", 0)), "saturation_global": num(n(p, "saturation", 0))] }
+        a["velvia"] = CIAlias(survivor: "colorbalancergb", name: "velvia") { p in ["vibrance": num(n(p, "strength", 0))] }
+        a["colorcontrast"] = CIAlias(survivor: "colorbalancergb", name: "color contrast") { p in ["saturation_global": num(n(p, "saturation", 0))] }
+        a["colorcorrection"] = CIAlias(survivor: "colorbalancergb", name: "color correction") { p in
+            ["brightness": num(n(p, "brightness", 0)), "contrast": num(n(p, "contrast", 0))] }
+        a["rgbcurve"] = CIAlias(survivor: "tonecurve", name: "rgb curve") { p in
+            var out: [String: ParamValue] = ["n": num(0)]
+            for (i, d) in [0, 0.25, 0.5, 0.75, 1].enumerated() { out["y\(i)"] = num(n(p, "y\(i)", d)) }
+            return out }
+        a["basecurve"] = CIAlias(survivor: "rgblevels", name: "base curve (gamma)") { p in ["gamma": num(n(p, "gamma", 1))] }
+        a["fadelook"] = CIAlias(survivor: "rgblevels", name: "fade") { p in ["fade_black": num(n(p, "black", 0)), "fade_white": num(n(p, "white", 0))] }
+        a["channelmixer"] = CIAlias(survivor: "channelmixerrgb", name: "channel mixer (plain)") { p in
+            var out: [String: ParamValue] = ["strength": num(0), "temperature": num(6500)]
+            for (i, k) in ["red_r", "red_g", "red_b", "green_r", "green_g", "green_b", "blue_r", "blue_g", "blue_b"].enumerated() { out[k] = num(n(p, k, i % 4 == 0 ? 1 : 0)) }
+            return out }
+        a["bwmixer"] = CIAlias(survivor: "monochrome", name: "black and white mixer") { p in
+            ["method": .option("weights"), "intensity": num(n(p, "amount", 0)), "red": num(n(p, "red", 0.263)), "green": num(n(p, "green", 0.678)), "blue": num(n(p, "blue", 0.059))] }
+        // colorize is the gradient map with one tint on every stop: Colorize.chroma / GradientMap.chroma of saturation (core-check GMP-CZ)
+        a["colorize"] = CIAlias(survivor: "gradientmap", name: "colorize") { p in
+            let hue = n(p, "hue", 0) * 360, sat = Colorize.chroma / GradientMap.chroma
+            return ["strength": num(n(p, "strength", 0)), "shadows_hue": num(hue), "mids_hue": num(hue), "highlights_hue": num(hue),
+                    "shadows_sat": num(sat), "mids_sat": num(sat), "highlights_sat": num(sat)] }
+        a["photofilter"] = CIAlias(survivor: "warmth", name: "photo filter") { p in
+            ["method": .option("filter"), "hue": num(n(p, "hue", 45)), "density": num(n(p, "density", 0)), "preserve": num(n(p, "preserve", 1))] }
+        a["huerotate"] = CIAlias(survivor: "colorzones", name: "hue rotate") { p in ["hue_all": num(n(p, "degrees", 0))] }
+        a["crossprocess"] = CIAlias(survivor: "channelcurves", name: "cross process") { p in ["cross_process": num(n(p, "amount", 0))] }
+        a["reinhard"] = CIAlias(survivor: "highlightrolloff", name: "Reinhard tone") { p in
+            ["curve": .option("reinhard"), "white": num(n(p, "white", 4)), "amount": num(n(p, "amount", 0))] }
+        a["relight"] = CIAlias(survivor: "lumabands", name: "fill light") { p in
+            ["ev": num(n(p, "ev", 0)), "center": num(n(p, "center", -1)), "width": num(n(p, "width", 4))] }
+        a["shadhi"] = CIAlias(survivor: "zones", name: "shadows and highlights") { p in
+            ["shadows": num(n(p, "shadows", 0) / Shadhi.sliderPerEV), "highlights": num(n(p, "highlights", 0) / Shadhi.sliderPerEV)] }
+        return a
+    }()
+
+    /// The stack with every aliased entry rewritten onto its survivor (blend and enabled kept).
+    static func resolve(_ stack: [StackEntry]) -> [StackEntry] {
+        stack.map { e in
+            guard let a = aliases[e.operation] else { return e }
+            return StackEntry(operation: a.survivor, params: a.map(e.params), blend: e.blend, enabled: e.enabled)
+        }
     }
 
     /// Modules that read a neighbourhood (a blur radius, a guided filter, wavelet levels): the expensive ones. The segment cache keeps
@@ -220,8 +275,7 @@ struct CIModule: Sendable {
     /// (a gain, a colour balance, white balance, neighbourhood filters, vignette, masks) and runs before the display transform.
     /// `invert` is raw-level negative inversion and stays early; `bloom` is glow from over-bright light, a scene-light effect. Checked, module by module, by darkroom-engine-check E-DOM.
     static let displayReferredOperations: Set<String> = [
-        "tonecurve", "rgblevels", "rgbcurve", "basecurve", "colisa", "colorcorrection", "colorcontrast", "velvia", "shadhi",
-        "dither", "colorize", "clahe", "splittoning", "solarize", "grain", "highpass", "crossprocess", "bleachbypass", "channelcurves", "fadelook", "lumacurve", "scurve",
+        "tonecurve", "rgblevels", "dither", "clahe", "splittoning", "solarize", "grain", "highpass", "bleachbypass", "channelcurves", "lumacurve", "scurve",
         // a negative is of what is on screen: complemented before the tone map, the dark scene values come out bright and the picture washes out
         "invert",
     ]
@@ -240,6 +294,12 @@ struct CIModule: Sendable {
     func values(from params: [String: ParamValue]) -> [String: Double] {
         var out: [String: Double] = [:]
         for f in fields {
+            // a choice field hands the module its option's value (its default option's when unset or unknown)
+            if f.kind == .enumeration {
+                let name = params[f.name]?.option ?? f.defaultValue.option
+                out[f.name] = Double(f.options.first { $0.name == name }?.value ?? f.options.first?.value ?? 0)
+                continue
+            }
             let fallback = f.defaultValue.double ?? 0
             var v = params[f.name]?.double ?? fallback
             // params come from sidecars and history: a value that is not a number falls back to the default, and a
@@ -283,6 +343,8 @@ extension CIModule {
                             min: -1, max: 1, defaultValue: .number(0), options: []),
                 FieldSchema(name: "saturation_global", description: "global saturation", kind: .float,
                             min: -1, max: 1, defaultValue: .number(0), options: []),
+                // brightness is contrast brightness saturation's third slider: an exposure gain of 2^(2b) after the colour step (the colisa kernel)
+                field("brightness", -1, 1, 0),
             ],
             apply: { image, v in try CIModule.applyFused("colorbalancergb", image, v) }),
 
@@ -322,33 +384,6 @@ extension CIModule {
                 try CIBridge.noiseReduction(image, luma: (v["luma"] ?? 0) * (v["_scale"] ?? 1), chroma: (v["chroma"] ?? 0) * (v["_scale"] ?? 1))
             }),
 
-        // Channel mixer: a 3x3 matrix on RGB; the identity leaves the image unchanged.
-        CIModule(
-            operation: "channelmixer", name: "channel mixer", iopOrder: 22, defaultEnabled: false,
-            fields: [
-                field("red_r", -2, 2, 1), field("red_g", -2, 2, 0), field("red_b", -2, 2, 0),
-                field("green_r", -2, 2, 0), field("green_g", -2, 2, 1), field("green_b", -2, 2, 0),
-                field("blue_r", -2, 2, 0), field("blue_g", -2, 2, 0), field("blue_b", -2, 2, 1),
-            ],
-            // DarkroomCore's ChannelMixer on the oracle-checked per-pixel kernel (darkroom-engine-check E-CM)
-            apply: { image, v in try CIModule.applyFused("channelmixer", image, v) }),
-
-        // Shadows and highlights: lift or hold the two ends of the tonal range.
-        CIModule(
-            operation: "shadhi", name: "shadows and highlights", iopOrder: 35, defaultEnabled: false,
-            fields: [
-                field("shadows", -100, 100, 0),
-                field("highlights", -100, 100, 0),
-            ],
-            // DarkroomCore's Shadhi: the zone exposure's shadows and highlights controls (darkroom-engine-check E-SHD)
-            apply: { image, v in
-                let settings = Shadhi.settings(shadows: v["shadows"] ?? 0, highlights: v["highlights"] ?? 0)
-                guard !settings.isIdentity else { return image }
-                let e = image.extent
-                let r = ZoneExposure.radius(scale: settings.scale, longSide: Int(max(e.width, e.height)))
-                return try CIBridge.zoneExposure(image, evs: settings.zoneEVs, radius: r)
-            }),
-
         // Tone curve: five nodes across the tonal range; the identity curve has each node at
         // its own input value.
         CIModule(
@@ -365,31 +400,15 @@ extension CIModule {
             // DarkroomCore's ToneCurve on the oracle-checked per-pixel kernel (darkroom-engine-check E-TC)
             apply: { image, v in try CIModule.applyFused("tonecurve", image, v) }),
 
-        // Contrast, brightness and saturation, as darktable's contrast brightness saturation
-        // module names them.
-        CIModule(
-            operation: "colisa", name: "contrast brightness saturation", iopOrder: 28,
-            defaultEnabled: false,
-            fields: [
-                field("contrast", -1, 1, 0), field("brightness", -1, 1, 0), field("saturation", -1, 1, 0),
-            ],
-            // DarkroomCore's Colisa on the oracle-checked per-pixel kernel (darkroom-engine-check E-CL): contrast about middle grey,
-            // OkLab saturation, brightness as 2^(2 * brightness) of exposure
-            apply: { image, v in try CIModule.applyFused("colisa", image, v) }),
-
-        // Velvia: boosts the less saturated colours more than the saturated ones.
-        CIModule(
-            operation: "velvia", name: "velvia", iopOrder: 27, defaultEnabled: false,
-            fields: [field("strength", 0, 1, 0)],
-            // DarkroomCore's Velvia (the colour balance vibrance) on the oracle-checked per-pixel kernel (darkroom-engine-check E-VE)
-            apply: { image, v in try CIModule.applyFused("velvia", image, v) }),
-
         // Monochrome: black and white with a colour filter. Intensity 0 leaves the image unchanged; greys stay grey.
         CIModule(
             operation: "monochrome", name: "black and white", iopOrder: 45,
             defaultEnabled: false,
-            fields: [field("intensity", 0, 1, 0), field("filter_hue", 0, 360, 30), field("filter_strength", 0, 1, 0)],
-            // DarkroomCore's Monochrome on the oracle-checked per-pixel kernel (darkroom-engine-check E-MO)
+            // method "filter": the OkLab colour filter (Monochrome); "weights": the grey as a weighted sum of the scene-linear channels
+            // (BWMixer, the old black and white mixer). Both on their own oracle-checked kernels (E-MO, E-BWM).
+            fields: [field("intensity", 0, 1, 0), choice("method", "method", "filter", [("filter", 0, "colour filter"), ("weights", 1, "channel weights")]),
+                     field("filter_hue", 0, 360, 30), field("filter_strength", 0, 1, 0),
+                     field("red", -1, 2, 0.263), field("green", -1, 2, 0.678), field("blue", -1, 2, 0.059)],
             apply: { image, v in try CIModule.applyFused("monochrome", image, v) }),
 
         // Vignetting: darkens the corners. Zero strength is off.
@@ -430,28 +449,16 @@ extension CIModule {
             // DarkroomCore's Invert on the oracle-checked per-pixel kernel (darkroom-engine-check E-IV)
             apply: { image, v in try CIModule.applyFused("invert", image, v) }),
 
-        // Base curve: a power curve on the encoded value, out = e^gamma (1 is the identity). BaseCurve in DarkroomCore is the oracle
-        // (BSC1-BSC5, basecurveBuf in darkroom-metal-check, E-BSC in darkroom-engine-check).
-        CIModule(
-            operation: "basecurve", name: "base curve (gamma)", iopOrder: 34,
-            defaultEnabled: false,
-            fields: [field("gamma", 0.2, 3, 1)],
-            apply: { image, v in try CIModule.applyFused("basecurve", image, v) }),
-
         // Levels: black, grey and white points on the encoded value, one kernel per pixel. Checked by
         // LV1-LV5 (darkroom-core-check), the levels Metal check (darkroom-metal-check) and E-LV (darkroom-engine-check).
         CIModule(
             operation: "rgblevels", name: "levels", iopOrder: 33,
             defaultEnabled: false,
-            fields: [field("black", 0, 0.5, 0), field("grey", 0.1, 0.9, 0.5), field("white", 0.5, 1, 1)],
+            // gamma is the old base curve (out = e^gamma, after the levels); fade black and white are the old fade look (output levels,
+            // the matte print), the last per-pixel step. Each runs on its own kernel, so an old edit renders the same.
+            fields: [field("black", 0, 0.5, 0), field("grey", 0.1, 0.9, 0.5), field("white", 0.5, 1, 1),
+                     field("gamma", 0.2, 3, 1), field("fade_black", 0, 0.3, 0), field("fade_white", 0, 0.3, 0)],
             apply: { image, v in try CIModule.applyFused("rgblevels", image, v) }),
-
-        // Colorize: every pixel's OkLab a and b mixed toward a fixed tint at a hue, by the strength; lightness is kept. Colorize in
-        // DarkroomCore is the oracle (COZ1-COZ5, colorizeBuf in darkroom-metal-check, E-COZ in darkroom-engine-check).
-        CIModule(
-            operation: "colorize", name: "colorize", iopOrder: 46, defaultEnabled: false,
-            fields: [field("strength", 0, 1, 0), field("hue", 0, 1, 0)],
-            apply: { image, v in try CIModule.applyFused("colorize", image, v) }),
 
         // Blur: three box means in a row (a Gaussian-like blur at any radius), the radius in pixels of the full-size picture.
         // Blur in DarkroomCore is the oracle (BLR1-BLR6, E-BLR in darkroom-engine-check).
@@ -499,7 +506,8 @@ extension CIModule {
         CIModule(
             operation: "colorzones", name: "color zones", iopOrder: 24,
             defaultEnabled: false,
-            fields: ["hue", "sat", "light"].flatMap { kind in ColorZones.bandNames.map { field("\($0)_\(kind)", -1, 1, 0) } },
+            // hue_all turns every hue alike (the old hue rotate, its own kernel, before the bands)
+            fields: [field("hue_all", -180, 180, 0)] + ["hue", "sat", "light"].flatMap { kind in ColorZones.bandNames.map { field("\($0)_\(kind)", -1, 1, 0) } },
             apply: { image, v in try CIModule.applyFused("colorzones", image, v) }),
 
         // Saturation by lightness: a saturation change for the shadows, the mids and the highlights, blended smoothly over OkLab
@@ -547,7 +555,7 @@ extension CIModule {
         // Channel mixer with chromatic adaptation: the mixer's 3x3 after an adaptation from a black-body illuminant of the given temperature
         // to D65 (Bradford), blended by the strength. ChannelMixerRGB in DarkroomCore is the oracle (CMX1-CMX6, E-CMX); it runs on the mixer kernel.
         CIModule(
-            operation: "channelmixerrgb", name: "channel mixer (adaptation)", iopOrder: 15, defaultEnabled: false,
+            operation: "channelmixerrgb", name: "channel mixer", iopOrder: 15, defaultEnabled: false,
             fields: [field("temperature", 1700, 25000, 6500), field("strength", 0, 1, 0)]
                 + ["red_r", "red_g", "red_b", "green_r", "green_g", "green_b", "blue_r", "blue_g", "blue_b"].enumerated().map { i, n in field(n, -2, 2, i % 4 == 0 ? 1 : 0) },
             apply: { image, v in try CIModule.applyFused("channelmixerrgb", image, v) }),
@@ -579,29 +587,19 @@ extension CIModule {
                      field("mids_sat", 0, 1, 0), field("highlights_hue", 0, 360, 60), field("highlights_sat", 0, 1, 0.6)],
             apply: { image, v in try CIModule.applyFused("gradientmap", image, v) }),
 
-        // Cross process: the cross-processing look as three channel curves on the encoded value. CrossProcess in DarkroomCore is the oracle (CRP1-CRP4, E-CRP).
-        CIModule(
-            operation: "crossprocess", name: "cross process", iopOrder: 57, defaultEnabled: false,
-            fields: [field("amount", 0, 1, 0)],
-            apply: { image, v in try CIModule.applyFused("crossprocess", image, v) }),
-
         // Bleach bypass: partial desaturation plus an overlay of the luminance, on the encoded value. BleachBypass in DarkroomCore is the oracle (BLB1-BLB4, E-BLB).
         CIModule(
             operation: "bleachbypass", name: "bleach bypass", iopOrder: 58, defaultEnabled: false,
             fields: [field("strength", 0, 1, 0)],
             apply: { image, v in try CIModule.applyFused("bleachbypass", image, v) }),
 
-        // Photo filter: a coloured filter on the scene light with the luminosity kept. PhotoFilter in DarkroomCore is the oracle (PFT1-PFT5, E-PFT).
-        CIModule(
-            operation: "photofilter", name: "photo filter", iopOrder: 18, defaultEnabled: false,
-            fields: [field("hue", 0, 360, 45), field("density", 0, 1, 0), field("preserve", 0, 1, 1)],
-            apply: { image, v in try CIModule.applyFused("photofilter", image, v) }),
-
         // Channel curves: a monotone curve of its own on each of red, green and blue (three movable nodes each). ChannelCurves in DarkroomCore is the
         // oracle (CHC1-CHC5, E-CHC).
         CIModule(
             operation: "channelcurves", name: "channel curves", iopOrder: 37, defaultEnabled: false,
-            fields: ChannelCurves.channels.flatMap { c in [field("\(c)_y1", 0, 1, 0.25), field("\(c)_y2", 0, 1, 0.5), field("\(c)_y3", 0, 1, 0.75)] },
+            // cross_process is the old cross process look (fixed contrasty curves with lifted blue), its own kernel after the curves
+            fields: ChannelCurves.channels.flatMap { c in [field("\(c)_y1", 0, 1, 0.25), field("\(c)_y2", 0, 1, 0.5), field("\(c)_y3", 0, 1, 0.75)] }
+                + [field("cross_process", 0, 1, 0)],
             apply: { image, v in try CIModule.applyFused("channelcurves", image, v) }),
 
         // Chroma limit: a soft tanh limit on OkLab chroma so very saturated colours stop short of clipping. ChromaLimit in DarkroomCore is the oracle (CHL1-CHL5, E-CHL).
@@ -610,28 +608,30 @@ extension CIModule {
             fields: [field("limit", 0.05, 0.4, 0.4)],
             apply: { image, v in try CIModule.applyFused("chromalimit", image, v) }),
 
-        // Hue rotate: every colour's hue turned about the grey axis in OkLab. HueRotate in DarkroomCore is the oracle (HRT1-HRT4, E-HRT).
-        CIModule(
-            operation: "huerotate", name: "hue rotate", iopOrder: 17, defaultEnabled: false,
-            fields: [field("degrees", -180, 180, 0)],
-            apply: { image, v in try CIModule.applyFused("huerotate", image, v) }),
-
         // Warmth: a warm / cool and a magenta / green look slider in OkLab, after white balance. Warmth in DarkroomCore is the oracle (WRM1-WRM4, E-WRM).
         CIModule(
             operation: "warmth", name: "warmth and tint", iopOrder: 16, defaultEnabled: false,
-            fields: [field("warmth", -1, 1, 0), field("tint", -1, 1, 0)],
+            // method "offset": the OkLab warm/cool and magenta/green look; "filter": the old photo filter, a coloured filter on the scene
+            // light with the luminosity kept (hue, density, preserve). Each on its own oracle-checked kernel (E-WRM, E-PFT).
+            fields: [choice("method", "method", "offset", [("offset", 0, "warm and tint"), ("filter", 1, "colour filter")]),
+                     field("warmth", -1, 1, 0), field("tint", -1, 1, 0),
+                     field("hue", 0, 360, 45), field("density", 0, 1, 0), field("preserve", 0, 1, 1)],
             apply: { image, v in try CIModule.applyFused("warmth", image, v) }),
 
         // Highlight roll-off: a tanh shoulder on scene luminance above a knee, colour ratios kept. HighlightRolloff in DarkroomCore is the oracle (HRO1-HRO5, E-HRO).
         CIModule(
             operation: "highlightrolloff", name: "highlight compression", iopOrder: 27, defaultEnabled: false,
-            fields: [field("white", 0.5, 8, 1), field("knee", 0.3, 0.95, 0.7), field("amount", 0, 1, 0)],
+            // curve "shoulder": the tanh roll-off above the knee; "reinhard": the old Reinhard tone (extended Reinhard on scene
+            // luminance, white only). Each on its own oracle-checked kernel (E-HRO, E-RNH).
+            fields: [choice("curve", "curve", "shoulder", [("shoulder", 0, "soft shoulder"), ("reinhard", 1, "Reinhard")]),
+                     field("white", 0.5, 16, 1), field("knee", 0.3, 0.95, 0.7), field("amount", 0, 1, 0)],
             apply: { image, v in try CIModule.applyFused("highlightrolloff", image, v) }),
 
         // Luminosity bands: an exposure change by the pixel's own luminance in five bands. LumaBands in DarkroomCore is the oracle (LMB1-LMB5, E-LMB).
         CIModule(
             operation: "lumabands", name: "luminosity bands", iopOrder: 39, defaultEnabled: false,
-            fields: LumaBands.names.map { field($0, -3, 3, 0) },
+            // ev, center and width are the old fill light: one movable band (a Gaussian window of tone), its own kernel before the fixed bands
+            fields: LumaBands.names.map { field($0, -3, 3, 0) } + [field("ev", -2, 2, 0), field("center", -5, 3, -1), field("width", 1, 10, 4)],
             apply: { image, v in try CIModule.applyFused("lumabands", image, v) }),
 
         // HDR tone: base and detail compression, the base (guided filter of the log luminance) pulled toward middle grey. HdrTone in DarkroomCore is the
@@ -645,23 +645,11 @@ extension CIModule {
                 return try CIBridge.hdrTone(image, amount: v["amount"] ?? 0, radius: r)
             }),
 
-        // Fade look: black lifted and white pulled down on the encoded value, the matte print look. FadeLook in DarkroomCore is the oracle (FDL1-FDL4, E-FDL).
-        CIModule(
-            operation: "fadelook", name: "fade", iopOrder: 67, defaultEnabled: false,
-            fields: [field("black", 0, 0.3, 0), field("white", 0, 0.3, 0)],
-            apply: { image, v in try CIModule.applyFused("fadelook", image, v) }),
-
         // Luminosity curve: a monotone cubic on OkLab lightness, chroma kept. LumaCurve in DarkroomCore is the oracle (LMC1-LMC5, E-LMC).
         CIModule(
             operation: "lumacurve", name: "luminosity curve", iopOrder: 68, defaultEnabled: false,
             fields: [field("y0", 0, 1, 0), field("y1", 0, 1, 0.25), field("y2", 0, 1, 0.5), field("y3", 0, 1, 0.75), field("y4", 0, 1, 1)],
             apply: { image, v in try CIModule.applyFused("lumacurve", image, v) }),
-
-        // Reinhard: the extended Reinhard operator on scene luminance. Reinhard in DarkroomCore is the oracle (RHD1-RHD5, E-RHD).
-        CIModule(
-            operation: "reinhard", name: "Reinhard tone", iopOrder: 14, defaultEnabled: false,
-            fields: [field("white", 1, 16, 4), field("amount", 0, 1, 0)],
-            apply: { image, v in try CIModule.applyFused("reinhard", image, v) }),
 
         // S-curve: a bias-and-gain contrast curve about a pivot on the encoded value. SCurve in DarkroomCore is the oracle (SCC1-SCC5, E-SCC).
         CIModule(
@@ -814,12 +802,6 @@ extension CIModule {
             operation: "kuwahara", name: "painterly (Kuwahara)", iopOrder: 79, defaultEnabled: false,
             fields: [field("amount", 0, 1, 0), field("radius", 1, 8, 3)],
             apply: { image, v in try CIBridge.fractionalWindow(image, radius: (v["radius"] ?? 3) * (v["_scale"] ?? 1)) { img, n in try CIBridge.kuwahara(img, radius: n, amount: v["amount"] ?? 0) } }),
-
-        // B&W mixer: the grey is a weighted sum of the scene-linear channels (a colour filter on the lens). BWMixer in DarkroomCore is the oracle (BWM1-BWM4, E-BWM).
-        CIModule(
-            operation: "bwmixer", name: "black and white mixer", iopOrder: 46, defaultEnabled: false,
-            fields: [field("amount", 0, 1, 0), field("red", -1, 2, 0.263), field("green", -1, 2, 0.678), field("blue", -1, 2, 0.059)],
-            apply: { image, v in try CIModule.applyFused("bwmixer", image, v) }),
 
         // Selective colour: cyan, magenta, yellow and black sliders for each of six colour families, relative, on the encoded value. SelectiveColor in DarkroomCore is the oracle
         // (SLC1-SLC5, E-SLC).
@@ -982,39 +964,6 @@ extension CIModule {
                 return try CIBridge.zoneExposure(image, evs: settings.zoneEVs, radius: r)
             }),
 
-        // RGB curve: the five-node curve of the tone curve (monotone cubic, on the encoded value), the same on every channel. The tone
-        // curve's oracle and kernel run it; checked by E-RC (darkroom-engine-check).
-        CIModule(
-            operation: "rgbcurve", name: "rgb curve", iopOrder: 32, defaultEnabled: false,
-            fields: [
-                field("y0", 0, 1, 0), field("y1", 0, 1, 0.25), field("y2", 0, 1, 0.5),
-                field("y3", 0, 1, 0.75), field("y4", 0, 1, 1),
-            ],
-            apply: { image, v in try CIModule.applyFused("rgbcurve", image, v) }),
-
-        // Relight (fill light): an exposure change through a Gaussian window of tone (centre and width in EV over middle grey), per pixel. Relight in DarkroomCore is the oracle
-        // (RLT1-RLT4, E-RLT, relightBuf in darkroom-metal-check).
-        CIModule(
-            operation: "relight", name: "fill light", iopOrder: 26, defaultEnabled: false,
-            fields: [field("ev", -2, 2, 0), field("center", -5, 3, -1), field("width", 1, 10, 4)],
-            apply: { image, v in try CIModule.applyFused("relight", image, v) }),
-
-        // Colour contrast: the OkLab saturation step of colour balance on its own. ColorContrast in DarkroomCore is the oracle (CCT1-CCT4,
-        // E-CCT); it runs on the colour balance kernel.
-        CIModule(
-            operation: "colorcontrast", name: "color contrast", iopOrder: 29,
-            defaultEnabled: false,
-            fields: [field("saturation", -1, 1, 0)],
-            apply: { image, v in try CIModule.applyFused("colorcontrast", image, v) }),
-
-        // Colour correction: brightness (2^(2b) of exposure) and contrast (a power about middle grey). ColorCorrection in DarkroomCore
-        // is the oracle (CCR1-CCR4, E-CCR); it runs on the colisa kernel.
-        CIModule(
-            operation: "colorcorrection", name: "color correction", iopOrder: 31,
-            defaultEnabled: false,
-            fields: [field("brightness", -1, 1, 0), field("contrast", -1, 1, 0)],
-            apply: { image, v in try CIModule.applyFused("colorcorrection", image, v) }),
-
         // Clahe: contrast limited adaptive histogram equalisation on a grid of tiles (Zuiderveld 1994), the new luminance given back as a gain. Clahe in DarkroomCore is the oracle
         // (CLH1-CLH6, E-CLH); the GPU twin builds each tile's mapping in a threadgroup.
         CIModule(
@@ -1122,39 +1071,20 @@ extension CIModule {
     /// in the working primaries): a saved edit made before shows the "maths changed" notice. The other modules (gains, curves, levels,
     /// the curves, levels) are per channel and did not move. `colorize` is a Core Image filter that weighs the channels, so it moved too (3: then Core Image's CIColorMonochrome became the OkLab tint mix).
     static let workingSpaceVersions: [String: Int] = [
-        "display": 3, "colorbalancergb": 2, "monochrome": 2, "splittoning": 2, "sharpen": 3, "bilat": 2, "atrous": 2,
-        "denoiseprofile": 2, "hazeremoval": 2, "zones": 2, "colorize": 3,
+        "display": 3, "colorbalancergb": 3, "monochrome": 3, "splittoning": 2, "sharpen": 3, "bilat": 2, "atrous": 2,
+        "denoiseprofile": 2, "hazeremoval": 2, "zones": 2,
         // not the working space: invert was Core Image's complement of the linear value and is now the complement of the encoded one
         "invert": 2,
-        // same: colisa was Core Image's colour controls (pivot 0.5, additive brightness) and is now scene-referred
-        "colisa": 2,
-        // same: velvia was Core Image's vibrance and is now the OkLab vibrance step of colour balance
-        "velvia": 2,
-        // same: vignette was Core Image's CIVignette and is now a scene-referred exposure change through the radial light matte
+        // merge wave 2 (2026-10-22): the survivors that grew the controls of a module folded into them
+        "rgblevels": 2, "warmth": 2, "colorzones": 2, "channelcurves": 2, "highlightrolloff": 2, "lumabands": 2,
         "vignette": 2,
-        // same: shadhi was Core Image's CIHighlightShadowAdjust and is now the zone exposure's shadows and highlights
-        "shadhi": 2,
-        // same: bloom was Core Image's CIBloom and is now the blurred highlights added back
         "bloom": 2,
-        // same: rgbcurve was Core Image's CIToneCurve and is now the tone curve's monotone cubic on the encoded value
-        "rgbcurve": 2,
-        // refine 1: the remap modules magnify to fill the frame (their edge pixels were repeated into streaks), and caradial's range is in real-lens units
         "distortion": 2, "perspective": 2, "caradial": 2,
-        // refine 1: the radial blur takes as many samples as its length needs (it was a fixed 25, which showed as ghost arcs)
         "radialblur": 2,
-        // refine 2: lowpass is a low-pass of the tone with colour kept (3, was the same blur as blurs), and relight is shadhi's shadows control (was Core Image's shadow adjust)
-        "relight": 2,
-        // refine 3: clahe is real tile-histogram equalisation (was an unsharp mask)
         "clahe": 2,
-        // same: colorcontrast and colorcorrection were Core Image's colour controls and are now the OkLab saturation and the colisa maths
-        "colorcontrast": 2, "colorcorrection": 2,
-        // same: basecurve (CIGammaAdjust), dither (CIColorPosterize) and colorize (CIColorMonochrome) are now their own maths on the encoded value or in OkLab
-        "basecurve": 2, "dither": 2,
-        // same: blurs, lowpass, soften and censorize were Core Image filters (a Gaussian, a pixellate) and are now the box-cascade blur and the mosaic
+        "dither": 2,
         "blurs": 3, "lowpass": 4, "soften": 3, "censorize": 2,
-        // refine 5: the blur radius is fractional (it was rounded to whole box pixels, so every radius under about 4.5 px was 1 and the sliders were dead at preview scale)
         "defringe": 2, "highpass": 2, "retouch": 2, "texturebands": 2,
-        // refine 5b: the gather windows (bilateral, kuwahara, lens blur, chroma denoise, skin smooth) blend whole radii by the fraction, surface blur's guided filter and bloom take it directly
         "kuwahara": 2,
     ]
 

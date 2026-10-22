@@ -40,7 +40,7 @@ public enum ParityList {
     """.split(whereSeparator: { $0 == " " || $0 == "\n" }).map(String.init)
 
     /// Modules of ours that darktable does not have under that name.
-    public static let ownModules: [String] = ["display", "graduated", "radiallight", "zones", "solarize", "gradientmap", "crossprocess", "bleachbypass", "photofilter", "channelcurves", "chromalimit", "huerotate", "warmth", "highlightrolloff", "lumabands", "hdrtone", "fadelook", "lumacurve", "reinhard", "scurve", "deconvsharp", "chromadenoise", "mediandenoise", "deband", "skinsmooth", "texturebands", "halation", "caradial", "distortion", "perspective", "tiltshift", "surfaceblur", "lensblur", "motionblur", "radialblur", "kuwahara", "emboss", "sketch", "halftone", "bwmixer", "selectivecolor"]
+    public static let ownModules: [String] = ["display", "graduated", "radiallight", "zones", "solarize", "gradientmap", "bleachbypass", "channelcurves", "chromalimit", "warmth", "highlightrolloff", "lumabands", "hdrtone", "lumacurve", "scurve", "deconvsharp", "chromadenoise", "mediandenoise", "deband", "skinsmooth", "texturebands", "halation", "caradial", "distortion", "perspective", "tiltshift", "surfaceblur", "lensblur", "motionblur", "radialblur", "kuwahara", "emboss", "sketch", "halftone", "selectivecolor"]
 
     public static let entries: [ParityEntry] = {
         func e(_ op: String, _ s: ParityStatus, _ note: String = "") -> ParityEntry { ParityEntry(operation: op, status: s, note: note) }
@@ -49,21 +49,21 @@ public enum ParityList {
             e("temperature", .exact, "coefficient gains; kelvin/tint oracle exists, not wired"),
             e("exposure", .exact), e("tonecurve", .exact), e("rgblevels", .exact),
             e("colorbalancergb", .exact, "contrast, saturation, vibrance only; the 4-way grading is not built"),
-            e("channelmixer", .exact, "deprecated in darktable, kept: it is the 3x3 mixer; channelmixerrgb is a different maths"),
+            e("channelmixer", .covered(by: "channelmixerrgb"), "folded into channelmixerrgb (merge 2026-10-22); an old edit still renders exactly through it"),
             e("monochrome", .exact), e("invert", .exact, "deprecated in darktable, kept: the complement of the display-encoded value, so middle grey stays put"),
-            e("colisa", .exact, "deprecated in darktable, kept; Simple does not use it. Contrast about middle grey, OkLab saturation, brightness as 2^(2b) of exposure"),
-            e("velvia", .exact, "the OkLab vibrance step of colour balance on its own: pale colours gain most, vivid ones are left alone"),
+            e("colisa", .covered(by: "colorbalancergb"), "folded into colorbalancergb (merge 2026-10-22); an old edit still renders exactly through it"),
+            e("velvia", .covered(by: "colorbalancergb"), "folded into colorbalancergb (merge 2026-10-22); an old edit still renders exactly through it"),
             e("vignette", .exact, "a circular surround darkening: radial light turned inside out, feathered over its whole radius"),
-            e("shadhi", .exact, "shadows and highlights: the zone exposure's two controls, a slider of 100 is 2 EV"),
+            e("shadhi", .covered(by: "zones"), "folded into zones (merge 2026-10-22); an old edit still renders exactly through it"),
             e("bloom", .exact, "the highlights above a soft luminance knee, blurred by three box means and added back"),
             e("splittoning", .exact), e("sharpen", .exact), e("bilat", .exact, "texture and clarity (was local contrast)"),
             e("atrous", .exact, "contrast equalizer: three groups of wavelet scales"), e("denoiseprofile", .exact, "wavelet shrinkage; no camera noise profiles"),
             e("hazeremoval", .exact), e("flip", .exact), e("ashift", .exact, "rotate and straighten only"), e("crop", .exact),
             // Core Image stand-ins
-            e("basecurve", .exact, "a power curve on the encoded value, out = e^gamma; not darktable's multi-node curve"), e("colorize", .exact, "every pixel's OkLab a and b mixed toward a fixed tint at a hue, lightness kept"), e("blurs", .exact, "three box means in a row, a Gaussian-like blur at any radius"), e("lowpass", .exact, "a low-pass of the tone: the blurred square-root luminance given back as a gain, colour detail kept; darktable's low-pass has more settings"),
-            e("dither", .exact, "posterize: the encoded value quantised to N levels per channel, no noise"), e("censorize", .exact, "a mosaic: each block of the chosen size shows its centre pixel"), e("soften", .exact, "the picture mixed toward its own blur"), e("rgbcurve", .exact, "one curve of five nodes on every channel (darktable's linked mode); the tone curve's oracle and kernel"),
-            e("relight", .exact, "deprecated in darktable; an exposure change through a Gaussian window of tone (centre and width in EV), per pixel; not darktable's exact mask"), e("colorcontrast", .exact, "the OkLab saturation step of colour balance on its own"),
-            e("colorcorrection", .exact, "brightness as 2^(2b) of exposure and contrast about middle grey: colisa without the saturation"), e("clahe", .exact, "contrast limited adaptive histogram equalisation on a tile grid (Zuiderveld), luminance given back as a gain"),
+            e("basecurve", .covered(by: "rgblevels"), "folded into rgblevels (merge 2026-10-22); an old edit still renders exactly through it"), e("colorize", .covered(by: "gradientmap"), "folded into gradientmap (merge 2026-10-22); an old edit still renders exactly through it"), e("blurs", .exact, "three box means in a row, a Gaussian-like blur at any radius"), e("lowpass", .exact, "a low-pass of the tone: the blurred square-root luminance given back as a gain, colour detail kept; darktable's low-pass has more settings"),
+            e("dither", .exact, "posterize: the encoded value quantised to N levels per channel, no noise"), e("censorize", .exact, "a mosaic: each block of the chosen size shows its centre pixel"), e("soften", .exact, "the picture mixed toward its own blur"), e("rgbcurve", .covered(by: "tonecurve"), "folded into tonecurve (merge 2026-10-22); an old edit still renders exactly through it"),
+            e("relight", .covered(by: "lumabands"), "folded into lumabands (merge 2026-10-22); an old edit still renders exactly through it"), e("colorcontrast", .covered(by: "colorbalancergb"), "folded into colorbalancergb (merge 2026-10-22); an old edit still renders exactly through it"),
+            e("colorcorrection", .covered(by: "colorbalancergb"), "folded into colorbalancergb (merge 2026-10-22); an old edit still renders exactly through it"), e("clahe", .exact, "contrast limited adaptive histogram equalisation on a tile grid (Zuiderveld), luminance given back as a gain"),
             // the job is done by something we have
             e("filmicrgb", .covered(by: "display"), "the scene-referred display transform is the tone mapper"),
             e("sigmoid", .covered(by: "display")), e("agx", .covered(by: "display")),
@@ -103,7 +103,6 @@ public enum ParityList {
             e("emboss", .exact, "not a darktable module: the directional derivative of the encoded luminance on mid-grey: a stamped relief"),
             e("sketch", .exact, "not a darktable module: Sobel edges of the encoded luminance as dark lines on white paper"),
             e("halftone", .exact, "not a darktable module: ink dots on a turned grid, the dot area following the darkness"),
-            e("bwmixer", .exact, "not a darktable module: the grey as a weighted sum of the scene-linear channels, like a colour filter on the lens"),
             e("selectivecolor", .exact, "not a darktable module: cyan, magenta, yellow and black sliders for each of six colour families, relative, on the encoded value"),
             e("surfaceblur", .exact, "not a darktable module: an edge-preserving blur over the whole picture: the guided filter, guided by luminance"),
             e("lensblur", .exact, "not a darktable module: a disc (bokeh) blur whose highlights spread into bright discs"),
@@ -124,17 +123,12 @@ public enum ParityList {
             e("highlightrolloff", .exact, "not a darktable module: a tanh shoulder on scene luminance above a knee, colour ratios kept"),
             e("lumabands", .exact, "not a darktable module: an exposure change by the pixel's own luminance in five bands (the cheap cousin of zones)"),
             e("hdrtone", .exact, "not a darktable module: base and detail dynamic range compression with the guided filter base, as in Durand and Dorsey"),
-            e("fadelook", .exact, "not a darktable module: black lifted and white pulled down on the encoded value: the matte print look"),
             e("lumacurve", .exact, "not a darktable module: a monotone cubic on OkLab lightness with chroma kept"),
-            e("reinhard", .exact, "not a darktable module: the extended Reinhard operator on scene luminance"),
             e("scurve", .exact, "not a darktable module: a bias-and-gain contrast curve about a pivot on the encoded value"),
             e("gradientmap", .exact, "not a darktable module: three OkLab gradient stops picked by lightness; a duotone or tritone print"),
-            e("crossprocess", .exact, "not a darktable module: the cross-processing look: contrasty channel curves with lifted blue"),
             e("bleachbypass", .exact, "not a darktable module: partial desaturation plus an overlay of the luminosity"),
-            e("photofilter", .exact, "not a darktable module: a coloured filter on the scene light with luminosity preserved"),
             e("channelcurves", .exact, "not a darktable module: a monotone cubic of its own on each of red, green and blue"),
             e("chromalimit", .exact, "not a darktable module: a soft tanh limit on OkLab chroma"),
-            e("huerotate", .exact, "not a darktable module: every hue turned about the grey axis in OkLab"),
             e("warmth", .exact, "not a darktable module: a warm / cool and magenta / green look in OkLab, after white balance"),
             e("solarize", .exact, "not a darktable module: tones above a threshold mirrored about it on the encoded value, the Sabattier effect"),
             e("display", .exact, "not a darktable module: the scene-referred display transform, with an HDR peak"),

@@ -388,6 +388,8 @@ public actor CIEngine: PhotoEngine {
     static func applyStack(_ image: CIImage, _ stack: [StackEntry], hdrPeak: Double? = nil, scale: Double = 1,
                            camera: Orientation = .none, rasters: [String: MaskRaster] = [:], segments: Segments? = nil,
                            fuse: Bool = true, target: OutputGamut = .sRGB) throws -> CIImage {
+        // a module folded into another (CIModule.aliases) renders through its survivor, exactly as before
+        let stack = CIModule.resolve(stack)
         let sceneReferred = wantsSceneLinear(stack)
         let ordered = try stack.filter { $0.enabled && !CIGeometry.operations.contains($0.operation) }.map { entry -> (CIModule, StackEntry) in
             guard let m = CIModule.named(entry.operation) else {
@@ -437,7 +439,7 @@ public actor CIEngine: PhotoEngine {
             if let hdrPeak, m.operation == "display" { values["peak"] = hdrPeak }
             if m.operation == "display" { values["_target"] = Double(target.rawValue) }   // the gamut the display transform maps into
             if fuse, maskMode == 0, (entry.blend["opacity"]?.double ?? 100) >= 100, CIModule.fusableOperations.contains(m.operation) {
-                if let op = CIModule.fusedOp(m.operation, values) { pending.append(op) }
+                pending.append(contentsOf: CIModule.fusedOps(m.operation, values))
                 continue
             }
             try flush()
@@ -580,7 +582,7 @@ public actor CIEngine: PhotoEngine {
     }
 
     static func wantsSceneLinear(_ stack: [StackEntry]) -> Bool {
-        stack.contains { $0.enabled && CIModule.named($0.operation)?.sceneReferred == true }
+        CIModule.resolve(stack).contains { $0.enabled && CIModule.named($0.operation)?.sceneReferred == true }
     }
 
     /// Renders `image` into the next texture of the ring (16-bit float, linear, extended Display P3) and a small 8-bit copy of it for the

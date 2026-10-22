@@ -28,6 +28,36 @@ control for you: drag the hue and the saturation comes up to half. A note under 
 *Chroma* in noise reduction removes colour noise. On a clean, low-ISO photo there is none to remove, so the slider shows
 nothing. Try it on a photo shot at ISO 3200 or above.
 
+## Modules that were folded into another (22 October 2026)
+
+The catalogue had modules that did the same job under two names. They became a setting of the one that stayed. An old
+edit that used one still opens and looks the same; the panel shows the module that replaced it, and the status line says
+how many were folded.
+
+| Was | Now | Where its controls went |
+| --- | --- | --- |
+| contrast brightness saturation | contrast and saturation | contrast, brightness, global saturation |
+| velvia | contrast and saturation | vibrance |
+| color contrast | contrast and saturation | global saturation |
+| color correction | contrast and saturation | brightness, contrast |
+| rgb curve | tone curve | the five-node curve |
+| base curve (gamma) | levels | gamma |
+| fade | levels | fade black, fade white |
+| channel mixer (plain) | channel mixer | the 3x3 matrix, adaptation strength 0 |
+| black and white mixer | black and white | method: channel weights, with red, green, blue |
+| colorize | gradient map | one tint on all three stops |
+| photo filter | warmth and tint | method: colour filter, with hue, density, preserve |
+| hue rotate | color zones | hue (all) |
+| cross process | channel curves | cross process amount |
+| Reinhard tone | highlight compression | curve: Reinhard, with white and amount |
+| fill light | luminosity bands | ev, center, width (one movable band) |
+| shadows and highlights | zone exposure | shadows, highlights (a slider of 100 is 2 EV) |
+
+Ten others only changed name: color balance (OkLab) is *contrast and saturation*; color balance (shadows, mids,
+highlights) is *lift, gamma, gain*; rgb levels is *levels*; highlight roll-off is *highlight compression*; channel mixer
+(adaptation) is *channel mixer*; monochrome is *black and white*; local contrast is *texture and clarity*; median denoise is
+*hot pixels (median)*; rotate and straighten is *straighten*; dither is *posterize*.
+
 ## Keyboard shortcuts
 
 The app's shortcuts live in one table (`Sources/DarkroomUI/Shortcuts.swift`). This list mirrors it.

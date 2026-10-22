@@ -3346,5 +3346,32 @@ do {
     check("FRW4 the further the radius, the further from the picture: every fractional step moves it more", zip(ds, ds.dropFirst()).allSatisfy { $0 < $1 }, "\(ds)")
 }
 
+// merge 2026-10-22: a module folded into another must be the same maths through its survivor
+do {
+    let px: [SIMD3<Double>] = [SIMD3(0.2, 0.5, 0.8), SIMD3(0.9, 0.1, 0.1), SIMD3(0.02, 0.03, 0.01), SIMD3(0.5, 0.5, 0.5), SIMD3(1.2, 0.7, 0.3)]
+    // colorize is the gradient map with one tint on every stop
+    var same = true
+    for hue in [0.0, 0.13, 0.5, 0.87] {
+        let stop = GradientMap.stop(hueDegrees: hue * 360, saturation: Colorize.chroma / GradientMap.chroma)
+        for p in px {
+            let a = Colorize.apply(p, strength: 0.7, hue: hue), b = GradientMap.apply(p, strength: 0.7, stops: [stop, stop, stop])
+            same = same && near(a, b, 1e-12)
+        }
+    }
+    check("MRG-CZ colorize equals the gradient map with one tint on every stop", same)
+    // shadows and highlights is the zone exposure's two controls, a slider of 50 per EV
+    let sh = Shadhi.settings(shadows: 80, highlights: -60)
+    let zn = ZoneExposure.Settings(values: ["shadows": 80 / Shadhi.sliderPerEV, "highlights": -60 / Shadhi.sliderPerEV])
+    check("MRG-SHD shadows and highlights maps onto zone exposure", sh.zoneEVs == zn.zoneEVs && sh.scale == zn.scale)
+    // colour contrast, velvia and colour correction are the colour balance and colisa steps
+    var steps = true
+    for p in px {
+        steps = steps && near(ColorContrast.apply(p, saturation: 0.4), ColorBalance.apply(p, contrast: 0, saturation: 0.4, vibrance: 0), 1e-12)
+        steps = steps && near(Velvia.apply(p, strength: 0.6), ColorBalance.apply(p, contrast: 0, saturation: 0, vibrance: 0.6), 1e-12)
+        steps = steps && near(ColorCorrection.apply(p, brightness: 0.3, contrast: 0.2), Colisa.apply(p, contrast: 0.2, brightness: 0.3, saturation: 0), 1e-12)
+    }
+    check("MRG-CB colour contrast, velvia and colour correction are colour balance and colisa steps", steps)
+}
+
 print(failures == 0 ? "\nall checks passed" : "\n\(failures) failed")
 exit(failures == 0 ? 0 : 1)

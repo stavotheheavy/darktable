@@ -8,9 +8,11 @@ import SwiftUI
 extension DarkroomModel {
     /// The ten modules most edits use, first in the Modules menu. "Crop and straighten" is crop and ashift together.
     static let proCommon: [[String]] = [
-        ["temperature"], ["exposure"], ["tonecurve"], ["shadhi"], ["colorbalancergb"],
+        ["temperature"], ["exposure"], ["tonecurve"], ["zones"], ["colorbalancergb"],
         ["splittoning"], ["monochrome"], ["sharpen"], ["denoiseprofile"], ["crop", "ashift", "flip"],
     ]
+    /// The darktable engine has no zone exposure; its shadows and highlights stands in for it in the common ten.
+    static let proCommonAlternates: [String: String] = ["zones": "shadhi"]
     /// Shown and switched as one section: crop, straighten and the quarter turn its Rotate button writes.
     static let geometryOperations: Set<String> = ["crop", "ashift", "flip"]
     /// A new photo starts with these in the panel, at neutral settings.
@@ -20,11 +22,11 @@ extension DarkroomModel {
     public static let proGroups: [(name: String, operations: Set<String>)] = [
         ("Tone", ["temperature", "exposure", "tonecurve", "rgbcurve", "rgblevels", "basecurve", "shadhi", "relight",
                   "zonesystem", "basicadj", "display", "toneequal", "filmicrgb", "sigmoid", "agx", "highlights",
-                  "highlightrolloff", "lumabands", "hdrtone", "fadelook", "lumacurve", "reinhard", "scurve"]),
+                  "highlightrolloff", "lumabands", "hdrtone", "lumacurve", "scurve"]),
         ("Color", ["colorbalancergb", "channelmixer", "channelmixerrgb", "velvia", "vibrance", "colorize", "colorcontrast",
                    "colorcorrection", "splittoning", "monochrome", "primaries", "satcurvergb", "colorequal", "colisa",
-                   "invert", "negadoctor", "colorzones", "lut3d", "gradientmap", "crossprocess", "bleachbypass", "photofilter",
-                   "channelcurves", "chromalimit", "huerotate", "warmth", "colorharmonizer", "bwmixer", "selectivecolor"]),
+                   "invert", "negadoctor", "colorzones", "lut3d", "gradientmap", "bleachbypass",
+                   "channelcurves", "chromalimit", "warmth", "colorharmonizer", "selectivecolor"]),
         ("Detail", ["sharpen", "denoiseprofile", "bilat", "clahe", "atrous", "highpass", "lowpass", "blurs", "diffuse",
                     "nlmeans", "hotpixels", "rawdenoise", "defringe", "nlmeans", "bilateral", "surfaceblur", "lensblur", "motionblur", "radialblur", "diffuse", "deconvsharp", "chromadenoise", "mediandenoise", "deband", "skinsmooth", "texturebands"]),
         ("Geometry", ["flip", "ashift", "crop", "lens", "liquify", "retouch", "spots", "caradial", "distortion", "perspective"]),
@@ -79,7 +81,7 @@ extension DarkroomModel {
     }
 
     private func entry(for operations: [String]) -> ProEntry? {
-        let ms = operations.compactMap(proModule)
+        let ms = operations.compactMap { proModule($0) ?? Self.proCommonAlternates[$0].flatMap(proModule) }
         guard let first = ms.first else { return nil }
         let name = Set(operations) == Self.geometryOperations ? "Crop and straighten" : first.title
         return ProEntry(id: first.id, name: name, modules: ms)

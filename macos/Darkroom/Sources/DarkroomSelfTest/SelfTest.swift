@@ -1686,7 +1686,7 @@ struct SelfTest {
             // PP1 the Common group holds the ten common entries in their order (DarkroomModel.proCommon is internal
             // to DarkroomUI, so the order is spelled out here); catches a dropped or duplicated module and a moved entry
             let commonOrder: [[String]] = [
-                ["temperature"], ["exposure"], ["tonecurve"], ["shadhi"], ["colorbalancergb"],
+                ["temperature"], ["exposure"], ["tonecurve"], ["zones"], ["colorbalancergb"],
                 ["splittoning"], ["monochrome"], ["sharpen"], ["denoiseprofile"], ["crop", "ashift", "flip"],
             ]
             let groups = model.proMenu
@@ -1703,7 +1703,7 @@ struct SelfTest {
 
             // PP9 undoing an add takes the module back out and returns the history to where it was; catches an add
             // that is not one undoable step
-            let shadhi9 = entryWith("shadhi")!
+            let shadhi9 = entryWith("zones")!
             let s9 = model.historyIndex
             let before9 = model.inProPanel(shadhi9)
             model.addToPanel(shadhi9)
@@ -1747,7 +1747,7 @@ struct SelfTest {
                   "PP11 colour balance is back in the panel after its edit, its removal and both undos (in \(model.inProPanel(colour11)), history \(model.historyIndex) for \(s11))")
 
             // PP2 the panel runs in pipeline order whatever order its entries were added in; catches an unsorted panel
-            let picked = [entryWith("shadhi"), entryWith("sharpen"), entryWith("vignette"), entryWith("crop"), entryWith("invert")].compactMap { $0 }
+            let picked = [entryWith("zones"), entryWith("sharpen"), entryWith("vignette"), entryWith("crop"), entryWith("invert")].compactMap { $0 }
             for e in picked { model.addToPanel(e) }
             await model.settle()
             let wasOrder = model.proPanelOrder
@@ -2507,6 +2507,40 @@ struct SelfTest {
                 model.setProPanelOrder(.newest)
             } else { skip("panel order", "fewer than two modules left to switch on") }
             await model.flushSave()
+
+            // an old sidecar naming modules folded into others (merge 2026-10-22) opens onto their survivors, same picture
+            print("folded modules")
+            let copy3 = work.appending(path: "fold-" + URL(fileURLWithPath: path).lastPathComponent)
+            try FileManager.default.copyItem(atPath: path, toPath: copy3.path)
+            let oldEdits: EditMap = [
+                "velvia#0": ModuleEdit(enabled: true, params: ["strength": .number(0.6)], blend: [:], inPanel: nil),
+                "shadhi#0": ModuleEdit(enabled: true, params: ["shadows": .number(80), "highlights": .number(-40)], blend: [:], inPanel: nil),
+                "colorize#0": ModuleEdit(enabled: true, params: ["strength": .number(0.5), "hue": .number(0.3)], blend: [:], inPanel: true),
+                "colorbalancergb#0": ModuleEdit(enabled: true, params: ["contrast": .number(0.2)], blend: [:], inPanel: nil),
+            ]
+            let oldSidecar = Sidecar(version: 3, history: [HistoryItem(label: "original", detail: "", edits: [:]), HistoryItem(label: "old", detail: "", edits: oldEdits)],
+                                     index: 1, algorithms: nil, layers: nil)
+            try oldSidecar.save(for: copy3.path)
+            // what the old stack renders through the engine's alias path is the yardstick
+            let yardstick = try await engine.render(path: copy3.path, maxSide: 600, stack: oldEdits.map { id, e in
+                StackEntry(operation: String(id.split(separator: "#")[0]), params: e.params, blend: [:], enabled: true) })
+            let fm = DarkroomModel(engine: engine)
+            await fm.open(path: copy3.path)
+            await fm.settle()
+            let ids = Set(fm.edits.keys)
+            check(!ids.contains("velvia#0") && !ids.contains("shadhi#0") && !ids.contains("colorize#0"), "the folded ids are gone (\(ids.sorted()))")
+            check(ids.contains("zones#0") && ids.contains("gradientmap#0") && ids.contains("colorbalancergb#0"), "their survivors carry them (\(ids.sorted()))")
+            check(fm.edits["colorbalancergb#0"]?.params["vibrance"]?.double == 0.6 && fm.edits["colorbalancergb#0"]?.params["contrast"]?.double == 0.2,
+                  "the velvia joined the colour balance edit of the same step as its vibrance (\(fm.edits["colorbalancergb#0"]?.params as Any))")
+            check(fm.edits["zones#0"]?.params["shadows"]?.double == 80 / 50, "shadows 80 became zone exposure shadows 1.6 EV (\(fm.edits["zones#0"]?.params["shadows"] as Any))")
+            check(fm.edits["gradientmap#0"]?.inPanel == true, "panel membership rides along")
+            check(fm.versionNotices.contains { $0.contains("folded") }, "the notices say what happened: \(fm.versionNotices)")
+            let now = try await engine.render(path: copy3.path, maxSide: 600, stack: fm.stack(for: fm.edits))
+            check(SelfTest.meanDiff(SelfTest.fingerprint(yardstick.image), SelfTest.fingerprint(now.image)) < 0.5,
+                  "the folded edit renders as the old stack did (mean diff \(SelfTest.meanDiff(SelfTest.fingerprint(yardstick.image), SelfTest.fingerprint(now.image))))")
+            await fm.flushSave()
+            let reread = Sidecar.load(for: copy3.path)
+            check(reread?.history.last?.edits.keys.contains("zones#0") == true && reread?.history.last?.edits.keys.contains("shadhi#0") == false, "the saved sidecar carries the survivors' ids")
         }
 
         if !notApplicable.isEmpty { print("\n\(notApplicable.count) check(s) n/a on this engine: \(notApplicable.joined(separator: "; "))") }

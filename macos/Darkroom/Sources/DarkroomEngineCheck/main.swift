@@ -791,7 +791,8 @@ do {
         if gap(engineOrder, after) > 1e-4 { wrong.append("\(c.operation) \(gap(engineOrder, after))") }
         if gap(engineOrder, before) < 4.0 / 255 { commute.append(c.operation) }
     }
-    check("E-DOM all \(order.count) display-referred modules run after the display transform", wrong.isEmpty && order.count == 23, "\(wrong)")
+    // 13 since the merge of 2026-10-22 folded ten display-referred modules into their survivors (was 23)
+    check("E-DOM all \(order.count) display-referred modules run after the display transform", wrong.isEmpty && order.count == 13, "\(wrong)")
     check("E-DOM for each of them the other order gives a visibly different picture (those that do not: \(commute))", commute.isEmpty, "\(commute)")
     check("E-DOM zones and the scene modules are not in the display set", !CIEngineProbe.displayReferredOperations.contains("zones")
           && !CIEngineProbe.displayReferredOperations.contains("exposure") && !CIEngineProbe.displayReferredOperations.contains("bloom") && !CIEngineProbe.displayReferredOperations.contains("colorbalancergb"))
@@ -1262,6 +1263,20 @@ do {
     check("E-SC6 blurs: radius 8 at scale 0.5 renders as radius 4 at scale 1", same(img(bl(8), scale: 0.5), img(bl(4), scale: 1)) && !same(img(bl(8), scale: 0.5), img(bl(8), scale: 1)))
     check("E-SC5 a hostile scale (NaN, 0, 99) is held to 0.001...1 and renders",
           [Double.nan, 0, 99].allSatisfy { img(lc(10), scale: $0).count == detailW * detailH })
+}
+
+// E-ALIAS: every module folded into another (merge 2026-10-22) names a survivor in the catalogue, and its mapping writes only
+// fields that survivor has; a stack naming the old module renders (through the survivor) and is not the untouched input.
+do {
+    var bad: [String] = []
+    for (old, a) in CIEngineProbe.aliases.sorted(by: { $0.key < $1.key }) {
+        guard let fields = CIEngineProbe.catalogueFields(a.survivor) else { bad.append("\(old): no survivor \(a.survivor)"); continue }
+        let mapped = a.map([:])
+        for k in mapped.keys where !fields.contains(k) { bad.append("\(old): \(a.survivor) has no field \(k)") }
+        let resolved = CIEngineProbe.resolve([StackEntry(operation: old, params: [:])])
+        if resolved.first?.operation != a.survivor { bad.append("\(old): did not resolve") }
+    }
+    check("E-ALIAS every folded module maps onto fields its survivor has (\(CIEngineProbe.aliases.count) folded)", bad.isEmpty, bad.joined(separator: "; "))
 }
 
 // T11 version stability: every module, at its current algorithm version, renders the fixture exactly as its stored golden
