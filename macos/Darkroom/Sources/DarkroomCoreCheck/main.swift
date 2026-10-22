@@ -2894,6 +2894,16 @@ do {
     // SKS
     var skin = [SIMD3<Double>](repeating: .zero, count: w * h)
     for i in skin.indices { skin[i] = OkLab.toWorking(SIMD3(0.65 + 0.03 * rnd(), 0.06 + 0.01 * rnd(), 0.08 + 0.01 * rnd())) }
+    // SKS-dark: dark, finely textured skin-hued detail (hair, shadow) keeps its texture. On scene-linear values the absolute eps called it flat and averaged it into clumps.
+    var darkHair = [SIMD3<Double>](repeating: .zero, count: w * h)
+    for y in 0..<h { for x in 0..<w { darkHair[y * w + x] = OkLab.toWorking(SIMD3(0.22 + ((x + y) % 2 == 0 ? 0.05 : -0.05), 0.04, 0.05)) } }
+    func lumaSpread(_ img: [SIMD3<Double>]) -> Double {
+        let ys = img.map { sqrt(ColorCommon.luminance($0)) }; let m = ys.reduce(0, +) / Double(ys.count)
+        return (ys.reduce(0) { $0 + ($1 - m) * ($1 - m) } / Double(ys.count)).squareRoot()
+    }
+    let hairKept = lumaSpread(SkinSmooth.apply(darkHair, width: w, height: h, radius: 5, amount: 1, hueDegrees: 55, widthDegrees: 35)) / lumaSpread(darkHair)
+    print("      SKS-dark texture kept: \(hairKept)")
+    check("SKS-dark dark fine texture keeps at least 35 percent of its contrast (\(hairKept))", hairKept > 0.35, "\(hairKept)")
     check("SKS1 amount 0 or radius 0 is the identity", SkinSmooth.apply(skin, width: w, height: h, radius: 5, amount: 0, hueDegrees: 55, widthDegrees: 35) == skin
           && SkinSmooth.apply(skin, width: w, height: h, radius: 0, amount: 1, hueDegrees: 55, widthDegrees: 35) == skin)
     let blue = [SIMD3<Double>](repeating: OkLab.toWorking(SIMD3(0.5, -0.03, -0.12)), count: w * h)

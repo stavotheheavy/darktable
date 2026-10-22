@@ -154,12 +154,21 @@ extension CIBridge {
 
     private static let skinSource = MetalColorCommon.source + MetalMask.prelude + MetalMaskColour.source + #"""
 
+    kernel void skinSqrtTex(texture2d<float, access::read> src [[texture(0)]], texture2d<float, access::write> dst [[texture(1)]],
+                            constant float *u [[buffer(0)]], constant int2 *off [[buffer(1)]], uint2 gid [[thread_position_in_grid]]) {
+        if (gid.x >= dst.get_width() || gid.y >= dst.get_height()) { return; }
+        float4 c = src.read(uint2(int2(gid) + off[0]));
+        float3 e = sqrt(max(c.rgb, float3(0.0f)));
+        dst.write(float4(isfinite(e.x) ? e.x : 0.0f, isfinite(e.y) ? e.y : 0.0f, isfinite(e.z) ? e.z : 0.0f, c.a), gid);
+    }
+
     kernel void skinMixTex(texture2d<float, access::read> src [[texture(0)]], texture2d<float, access::read> smooth [[texture(1)]],
                            texture2d<float, access::write> dst [[texture(2)]],
                            constant float *u [[buffer(0)]], constant int2 *off [[buffer(1)]], uint2 gid [[thread_position_in_grid]]) {
         if (gid.x >= dst.get_width() || gid.y >= dst.get_height()) { return; }
         float4 c = src.read(uint2(int2(gid) + off[0]));
-        float3 s = smooth.read(uint2(int2(gid) + off[1])).rgb;
+        float3 e = max(smooth.read(uint2(int2(gid) + off[1])).rgb, float3(0.0f));
+        float3 s = e * e;
         float m = mask_colour(u + 1, c.rgb);
         dst.write(float4(c.rgb + u[0] * m * (s - c.rgb), c.a), gid);
     }
@@ -168,7 +177,9 @@ extension CIBridge {
     /// DarkroomCore.SkinSmooth.apply on the GPU.
     public static func skinSmooth(_ image: CIImage, radius: Int, amount: Double, hueDegrees: Double, widthDegrees: Double) throws -> CIImage {
         guard amount != 0, radius > 0 else { return image }
-        let smooth = try guided(image, radius: radius, eps: SkinSmooth.eps)
+        // the guided filter runs on the square root of the channels, squared back in the mix kernel
+        let encoded = try combine([image], source: skinSource, function: "skinSqrtTex", uniforms: [])
+        let smooth = try guided(encoded, radius: radius, eps: SkinSmooth.eps)
         let p = SkinSmooth.params(hueDegrees: hueDegrees, widthDegrees: widthDegrees).map { Float($0) }
         return try combine([image, smooth], source: skinSource, function: "skinMixTex", uniforms: [Float(amount)] + p)
     }
