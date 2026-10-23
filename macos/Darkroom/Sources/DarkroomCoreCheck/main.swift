@@ -3498,5 +3498,29 @@ do {
     check("RD7 deleting a file that is not there fails instead of pretending", missing)
 }
 
+// recently deleted: a manifest that names paths outside the library must never delete or move them
+do {
+    let fm = FileManager.default
+    let dir = fm.temporaryDirectory.appendingPathComponent("rd-sec-\(UUID().uuidString)")
+    let outside = fm.temporaryDirectory.appendingPathComponent("rd-outside-\(UUID().uuidString)")
+    try? fm.createDirectory(at: dir.appendingPathComponent(RecentlyDeleted.folderName), withIntermediateDirectories: true)
+    try? fm.createDirectory(at: outside, withIntermediateDirectories: true)
+    defer { try? fm.removeItem(at: dir); try? fm.removeItem(at: outside) }
+    let victim = outside.appendingPathComponent("precious.txt").path
+    fm.createFile(atPath: victim, contents: Data([1]))
+    let old = Date(timeIntervalSince1970: 1_000_000_000)
+    let forged = [DeletedPhoto(originalPath: dir.appendingPathComponent("x.NEF").path, storedPath: victim, deletedAt: old),
+                  DeletedPhoto(originalPath: dir.appendingPathComponent("../escape.NEF").path,
+                               storedPath: dir.appendingPathComponent(RecentlyDeleted.folderName + "/../../" + (victim as NSString).lastPathComponent).path,
+                               deletedAt: old)]
+    let enc = JSONEncoder(); enc.dateEncodingStrategy = .iso8601
+    try? enc.encode(forged).write(to: dir.appendingPathComponent(RecentlyDeleted.folderName + "/manifest.json"))
+    check("RD8 a forged manifest entry is ignored and never purged", RecentlyDeleted.list(in: dir).isEmpty
+          && RecentlyDeleted.purge(in: dir) == 0 && fm.fileExists(atPath: victim))
+    var refused = false
+    do { try RecentlyDeleted.restore(forged[0], libraryFolder: dir) } catch { refused = true }
+    check("RD9 restore refuses an entry that points outside the library", refused && fm.fileExists(atPath: victim))
+}
+
 print(failures == 0 ? "\nall checks passed" : "\n\(failures) failed")
 exit(failures == 0 ? 0 : 1)

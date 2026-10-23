@@ -7,6 +7,12 @@ public struct DeletedPhoto: Codable, Equatable, Sendable, Identifiable {
     public let storedPath: String
     public let deletedAt: Date
     public var name: String { (originalPath as NSString).lastPathComponent }
+
+    public init(originalPath: String, storedPath: String, deletedAt: Date) {
+        self.originalPath = originalPath
+        self.storedPath = storedPath
+        self.deletedAt = deletedAt
+    }
 }
 
 /// Deleting a photo moves it out of the library instead of erasing it. The Mac uses the system Trash; the iPhone and iPad have
@@ -23,7 +29,7 @@ public enum RecentlyDeleted {
     public static let systemTrash = false
     #endif
 
-    public enum Failure: Error { case missing, nameTaken }
+    public enum Failure: Error { case missing, nameTaken, outside }
 
     public static func remove(_ path: String, libraryFolder: URL, now: Date = Date(), fileManager fm: FileManager = .default,
                               useSystemTrash: Bool = RecentlyDeleted.systemTrash) throws -> DeletedPhoto {
@@ -46,8 +52,12 @@ public enum RecentlyDeleted {
         return entry
     }
 
-    /// Puts the photo (and its edits) back where it was; refuses when another file has taken the name.
+    /// Puts the photo (and its edits) back where it was; refuses when another file has taken the name, or when the entry points
+    /// anywhere but into this library (a manifest in a folder someone else made could name any path).
     public static func restore(_ entry: DeletedPhoto, libraryFolder: URL, fileManager fm: FileManager = .default) throws {
+        guard isInside(entry.originalPath, folder: libraryFolder),
+              isInside(entry.storedPath, folder: libraryFolder.appendingPathComponent(folderName))
+                || isInside(entry.storedPath, folder: systemTrashFolder(fm)) else { throw Failure.outside }
         guard fm.fileExists(atPath: entry.storedPath) else { throw Failure.missing }
         guard !fm.fileExists(atPath: entry.originalPath) else { throw Failure.nameTaken }
         try fm.moveItem(atPath: entry.storedPath, toPath: entry.originalPath)
@@ -61,7 +71,10 @@ public enum RecentlyDeleted {
     public static func list(in libraryFolder: URL, fileManager fm: FileManager = .default) -> [DeletedPhoto] {
         guard let data = try? Data(contentsOf: manifestURL(libraryFolder)),
               let all = try? decoder.decode([DeletedPhoto].self, from: data) else { return [] }
-        return all.filter { fm.fileExists(atPath: $0.storedPath) }.sorted { $0.deletedAt > $1.deletedAt }
+        let holding = libraryFolder.appendingPathComponent(folderName)
+        // an entry must stay inside this library; one that names any other path is dropped, never acted on
+        return all.filter { isInside($0.storedPath, folder: holding) && isInside($0.originalPath, folder: libraryFolder) && fm.fileExists(atPath: $0.storedPath) }
+            .sorted { $0.deletedAt > $1.deletedAt }
     }
 
     /// Erases what has waited longer than `keepDays`; returns how many photos went.
@@ -76,6 +89,17 @@ public enum RecentlyDeleted {
         }
         if !old.isEmpty { writeManifest(all.filter { $0.deletedAt >= cutoff }, libraryFolder: libraryFolder, fileManager: fm) }
         return old.count
+    }
+
+    /// True when `path` is strictly inside `folder` once `.` and `..` are resolved (symlinks too).
+    static func isInside(_ path: String, folder: URL) -> Bool {
+        let base = folder.resolvingSymlinksInPath().standardizedFileURL.path
+        let target = URL(fileURLWithPath: path).resolvingSymlinksInPath().standardizedFileURL.path
+        return target.hasPrefix(base.hasSuffix("/") ? base : base + "/")
+    }
+
+    private static func systemTrashFolder(_ fm: FileManager) -> URL {
+        fm.urls(for: .trashDirectory, in: .userDomainMask).first ?? URL(fileURLWithPath: "/nonexistent-trash")
     }
 
     private static func manifestURL(_ folder: URL) -> URL { folder.appendingPathComponent(folderName).appendingPathComponent("manifest.json") }
