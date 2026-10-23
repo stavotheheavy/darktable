@@ -77,6 +77,9 @@ struct PhoneEditView: View {
                             .opacity(model.dragging ? 0.35 : 1)
                             .animation(.easeOut(duration: 0.15), value: model.dragging)
                             .transition(.opacity.combined(with: .move(edge: .bottom)))
+                            // a cancelled touch (Control Center, a call) never reports "let go"; a card that opens or
+                            // goes away must not inherit a drag that is no longer happening
+                            .onDisappear { model.setDragging(false) }
                     }
                     tray(landscape: landscape)
                 }
@@ -85,6 +88,7 @@ struct PhoneEditView: View {
                 .animation(.snappy(duration: 0.22), value: open)
             }
         }
+        .onChange(of: open) { _, _ in model.setDragging(false) }
         .task(id: model.modules.count) { await model.prepareSimple() }
     }
 
@@ -248,7 +252,8 @@ struct PhoneEditView: View {
                 LooksRow(model: model)
             case .control(let c):
                 Slider(value: Binding(get: { model.simpleValue(c) }, set: { model.setSimple(c, to: $0) }),
-                       in: c.range, step: 1, onEditingChanged: { model.setDragging($0) })
+                       in: c.range, step: 1)
+                    .modifier(DragTracking(model: model))
                     .tint(Theme.accent)
                     .frame(height: compact ? 32 : 44)
                     .accessibilityLabel(c.rawValue)
@@ -271,7 +276,8 @@ struct PhoneEditView: View {
                 Text(String(format: "%+.1f°", model.simpleStraighten)).font(.caption.monospacedDigit()).foregroundStyle(.secondary)
             }
             Slider(value: Binding(get: { model.simpleStraighten }, set: { model.setStraighten($0) }),
-                   in: DarkroomModel.straightenRange, step: 0.1, onEditingChanged: { model.setDragging($0) })
+                   in: DarkroomModel.straightenRange, step: 0.1)
+                .modifier(DragTracking(model: model))
                 .tint(Theme.accent)
                 .frame(height: 44)
                 .accessibilityLabel("Straighten")
@@ -312,5 +318,19 @@ enum DarkroomExport {
         let stem = URL(fileURLWithPath: model.fileName).deletingPathExtension().lastPathComponent
         let url = FileManager.default.temporaryDirectory.appending(path: stem + ".jpg")
         Task { await model.export(to: url, hdr: false) }
+    }
+}
+
+/// Tells the model a slider is held, from the touch itself. `Slider.onEditingChanged` can miss the "let go"
+/// (a cancelled touch, a card that closes mid-drag), which left the card dimmed and the engine on draft frames;
+/// a GestureState goes back to false on end and on cancel, so it cannot stick.
+private struct DragTracking: ViewModifier {
+    let model: DarkroomModel
+    @GestureState private var held = false
+
+    func body(content: Content) -> some View {
+        content
+            .simultaneousGesture(DragGesture(minimumDistance: 0).updating($held) { _, state, _ in state = true })
+            .onChange(of: held) { _, on in model.setDragging(on) }
     }
 }

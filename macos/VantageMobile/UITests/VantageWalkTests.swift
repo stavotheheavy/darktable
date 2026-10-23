@@ -74,6 +74,7 @@ final class VantageWalkTests: XCTestCase {
         try XCTSkipUnless(isPad)
         let app = XCUIApplication()
         app.terminate()
+        app.launchArguments = ["-darkroom.welcomed", "NO"]
         app.launch()
         XCTAssertTrue(app.staticTexts["Welcome to Vantage"].waitForExistence(timeout: 20), "welcome did not appear")
         XCTAssertTrue(app.staticTexts.matching(NSPredicate(format: "label CONTAINS %@", "this iPad")).firstMatch.exists, "welcome does not say this iPad")

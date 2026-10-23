@@ -59,12 +59,22 @@ final class LibraryMenuTests: XCTestCase {
 
     func testLayoutMenuSwitchesGridSmallGridAndList() throws {
         let app = launch()
-        let picker = app.buttons["Layout"].firstMatch
-        XCTAssertTrue(picker.waitForExistence(timeout: 10), "no layout menu")
+        // a wide screen shows the layout button; a phone folds it into the Options menu
+        let direct = app.buttons["Layout"].firstMatch
+        let options = app.buttons["Options"].firstMatch
+        XCTAssertTrue(direct.waitForExistence(timeout: 10) || options.exists, "no layout menu")
         let big = cell(app, "A.NEF").frame
         shot("layout-grid")
         for (choice, id) in [("Small grid", "layout-small"), ("List", "layout-list")] {
-            picker.tap()
+            if direct.exists { direct.tap() } else {
+                options.tap()
+                // the choices sit inline in the menu on some systems and behind a Layout row on others
+                if !app.buttons[choice].waitForExistence(timeout: 3) {
+                    let layoutRow = app.buttons["Layout"].firstMatch
+                    XCTAssertTrue(layoutRow.waitForExistence(timeout: 5), "the Options menu has no Layout")
+                    layoutRow.tap()
+                }
+            }
             let item = app.buttons[choice]
             XCTAssertTrue(item.waitForExistence(timeout: 5), "the layout menu has no \(choice)")
             item.tap(); sleep(2)

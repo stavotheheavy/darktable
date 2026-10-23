@@ -85,7 +85,7 @@ public struct DarkroomView: View {
             .preferredColorScheme(.dark)
             .shareExport(model)
             .fileImporter(isPresented: $choosing, allowedContentTypes: [.rawImage, .image]) { result in
-                if case .success(let url) = result { Task { await model.open(path: url.path) } }
+                if case .success(let url) = result { Task { await model.open(path: await PhotoImport.localPath(for: url)) } }
             }
     }
 
@@ -165,7 +165,7 @@ public struct DarkroomView: View {
         .shareExport(model)
         .hardwareKeys(model)
         .fileImporter(isPresented: $choosing, allowedContentTypes: [.rawImage, .image]) { result in
-            if case .success(let url) = result { Task { await model.open(path: url.path) } }
+            if case .success(let url) = result { Task { await model.open(path: await PhotoImport.localPath(for: url)) } }
         }
         .onDrop(of: [.fileURL], isTargeted: nil) { providers in
             guard let p = providers.first else { return false }

@@ -21,6 +21,8 @@ final class VantageFlowTests: XCTestCase {
     /// Welcome names the device it runs on, not the Mac.
     func testWelcomeNamesThisDevice() {
         let app = XCUIApplication()
+        // Welcome shows only until it has been finished once on the device, so the test starts from "not yet"
+        app.launchArguments = ["-darkroom.welcomed", "NO"]
         app.launch()
         XCTAssertTrue(app.staticTexts["Welcome to Vantage"].waitForExistence(timeout: 20), "welcome did not appear")
         let copy = app.staticTexts.matching(NSPredicate(format: "label CONTAINS %@", "Editing works on this")).firstMatch

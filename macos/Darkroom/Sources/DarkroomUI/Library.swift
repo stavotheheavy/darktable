@@ -62,7 +62,11 @@ public final class LibraryModel {
     public var softBelow = 50.0
     public var groupStacks = true
     public var sharpestFirst = false
-    public private(set) var status = "Choose a folder of photos"
+    #if os(iOS)
+    public internal(set) var status = "Add photos to begin"
+    #else
+    public internal(set) var status = "Choose a folder of photos"
+    #endif
     public private(set) var scored = 0
     /// Files the engine could not develop; they still count as handled, so the status can finish.
     public private(set) var failed = 0
@@ -87,7 +91,7 @@ public final class LibraryModel {
     private let engine: any PhotoEngine
     private var store = RatingStore.load()
     private var loading: Task<Void, Never>?
-    static let extensions: Set<String> = ["cr2", "cr3", "nef", "arw", "dng", "raf", "orf", "rw2", "jpg", "jpeg", "tif", "tiff", "png"]
+    nonisolated static let extensions: Set<String> = ["cr2", "cr3", "nef", "arw", "dng", "raf", "orf", "rw2", "jpg", "jpeg", "heic", "heif", "tif", "tiff", "png"]
     static let lastFolderKey = "darkroom.library.folder"
 
     public init(engine: any PhotoEngine) {
@@ -104,7 +108,17 @@ public final class LibraryModel {
     }
 
     public var restoredFolder: URL? {
-        UserDefaults.standard.string(forKey: Self.lastFolderKey).map { URL(fileURLWithPath: $0) }
+        #if os(iOS)
+        // the app's container can move between installs, so when the saved folder is gone the imports are found by name
+        if let saved = UserDefaults.standard.string(forKey: Self.lastFolderKey), FileManager.default.fileExists(atPath: saved) {
+            return URL(fileURLWithPath: saved)
+        }
+        let imports = PhotoImport.folder
+        if ((try? FileManager.default.contentsOfDirectory(atPath: imports.path)) ?? []).contains(where: { Self.extensions.contains(($0 as NSString).pathExtension.lowercased()) }) {
+            return imports
+        }
+        #endif
+        return UserDefaults.standard.string(forKey: Self.lastFolderKey).map { URL(fileURLWithPath: $0) }
     }
 
     public func load(folder: URL) {
@@ -332,7 +346,7 @@ public struct LibraryView: View {
             Color(red: 0.08, green: 0.085, blue: 0.105).ignoresSafeArea()
 
             if library.items.isEmpty {
-                EmptyLibrary(choose: { choosing = true }, restore: library.restoredFolder.map { f in { library.load(folder: f) } })
+                EmptyLibrary(library: library, choose: { choosing = true }, restore: library.restoredFolder.map { f in { library.load(folder: f) } })
             } else {
                 ScrollViewReader { proxy in
                 ScrollView {
@@ -418,9 +432,11 @@ public struct LibraryView: View {
         .preferredColorScheme(.dark)
         .librarySheets(library)
         .animation(.snappy, value: library.lastDeleted)
+        #if os(macOS)
         .fileImporter(isPresented: $choosing, allowedContentTypes: [.folder]) { result in
             if case .success(let url) = result { library.load(folder: url) }
         }
+        #endif
         .rig("library")
     }
 
@@ -428,22 +444,83 @@ public struct LibraryView: View {
         library.columns = library.layout == .list ? 1 : max(1, Int((gridWidth - 28 + 12) / (library.layout.tileWidth + 12)))
     }
 
+    /// The full row when it fits; on a phone the tools fold into one Options dropdown.
     private var header: some View {
-        HStack(spacing: 12) {
-            HStack(spacing: 10) {
-                Button { choosing = true } label: { Image(systemName: "folder").frame(width: 44, height: 44).contentShape(Rectangle()) }
-                    .buttonStyle(.plain).accessibilityLabel("Choose a folder").rig("choose-folder")
-                VStack(alignment: .leading, spacing: 0) {
-                    Text(library.folder?.lastPathComponent ?? "Library").font(.callout.weight(.medium))
-                    Text(library.status).font(.caption.monospaced()).foregroundStyle(.secondary)
+        ViewThatFits(in: .horizontal) {
+            HStack(spacing: 12) {
+                folderPill
+                Spacer()
+                tools.glassEffect(.regular, in: .capsule)
+            }
+            HStack(spacing: 12) {
+                folderPill
+                Spacer(minLength: 0)
+                optionsMenu
+            }
+        }
+    }
+
+    /// The tools row as a dropdown. A slider cannot live in a menu, so "Soft below" is a short list of steps.
+    private var optionsMenu: some View {
+        Menu {
+            if let send {
+                Button { send() } label: { Label("Send to gallery", systemImage: "paperplane") }
+            }
+            if refreshPicks != nil || !library.clientPicks.isEmpty {
+                Picker("Client picks", selection: $library.pickFilter) {
+                    ForEach(PickFilter.allCases, id: \.self) { Text($0.rawValue).tag($0) }
+                }
+                if let refreshPicks { Button("Refresh client picks") { refreshPicks() } }
+                if let picksMessage { Text(picksMessage) }
+            }
+            Picker("Layout", selection: $library.layout) {
+                ForEach(LibraryLayout.allCases, id: \.self) { Label($0.rawValue, systemImage: $0.icon).tag($0) }
+            }
+            #if !os(macOS)
+            Button { library.showingDeleted = true } label: { Label("Recently Deleted", systemImage: "trash") }
+            #endif
+            Toggle(isOn: $library.groupStacks) { Label("Stacks", systemImage: "square.stack") }
+            Toggle(isOn: $library.sharpestFirst) { Label("Sharpest first", systemImage: "arrow.up.arrow.down") }
+            Menu("Soft frames below \(Int(library.softBelow))") {
+                Picker("Soft frames below", selection: Binding(get: { Int(library.softBelow) }, set: { library.softBelow = Double($0) })) {
+                    ForEach([20, 30, 40, 50, 60, 70, 80], id: \.self) { Text("\($0)").tag($0) }
                 }
             }
-            .padding(.leading, 12).padding(.trailing, 18).padding(.vertical, 8)
-            .glassEffect(.regular, in: .capsule)
-
-            Spacer()
-
+        } label: {
             HStack(spacing: 8) {
+                Image(systemName: "slider.horizontal.3")
+                Text("Options").font(.callout.weight(.medium))
+                Image(systemName: "chevron.down").font(.caption.weight(.semibold))
+            }
+            .foregroundStyle(.primary)
+            .padding(.horizontal, 16).frame(height: 60)
+            .glassEffect(.regular, in: .capsule)
+        }
+        .tint(.white)
+        .accessibilityLabel("Options")
+        .rig("library-options")
+    }
+
+    private var folderPill: some View {
+        HStack(spacing: 10) {
+            #if os(iOS)
+            ImportMenu(library: library) { Image(systemName: "photo.badge.plus").foregroundStyle(.primary).frame(width: 44, height: 44).contentShape(Rectangle()) }
+                .tint(.white).accessibilityLabel("Add photos")
+            #else
+            Button { choosing = true } label: { Image(systemName: "folder").frame(width: 44, height: 44).contentShape(Rectangle()) }
+                .buttonStyle(.plain).accessibilityLabel("Choose a folder").rig("choose-folder")
+            #endif
+            VStack(alignment: .leading, spacing: 0) {
+                Text(library.folder?.lastPathComponent ?? "Library").font(.callout.weight(.medium)).lineLimit(1)
+                Text(library.status).font(.caption.monospaced()).foregroundStyle(.secondary).lineLimit(1)
+            }
+        }
+        .padding(.leading, 12).padding(.trailing, 18).padding(.vertical, 8)
+        .glassEffect(.regular, in: .capsule)
+    }
+
+    private var tools: some View {
+        HStack(spacing: 8) {
                 if let send {
                     Button { send() } label: { Label("Send to gallery", systemImage: "paperplane") }
                         .buttonStyle(FlatCapsuleStyle())
@@ -488,46 +565,81 @@ public struct LibraryView: View {
                     Text("\(Int(library.softBelow))").font(.caption.monospacedDigit()).frame(width: 24)
                 }
             }
-            .modifier(PhoneToolsScroll())
-            .padding(8)
+        .padding(8)
+    }
+
+    /// One row when it fits; two rows on a phone (name and actions above, stars and Open below).
+    private var selectionBar: some View {
+        let sel = library.items.first { $0.path == library.selected }
+        return ViewThatFits(in: .horizontal) {
+            HStack(spacing: 10) {
+                selectionName(sel).frame(minWidth: 150, alignment: .leading)
+                stars(sel)
+                rejectButton(sel)
+                compareButton(sel)
+                openButton(sel)
+            }
+            .padding(.horizontal, 12).padding(.vertical, 8)
             .glassEffect(.regular, in: .capsule)
+
+            VStack(spacing: 6) {
+                HStack(spacing: 10) {
+                    selectionName(sel)
+                    Spacer(minLength: 0)
+                    rejectButton(sel)
+                    compareButton(sel)
+                }
+                HStack(spacing: 10) {
+                    stars(sel)
+                    Spacer(minLength: 0)
+                    openButton(sel, title: "Open")
+                }
+            }
+            .padding(.horizontal, 14).padding(.vertical, 10)
+            .glassEffect(.regular, in: .rect(cornerRadius: 30))
         }
     }
 
-    private var selectionBar: some View {
-        let sel = library.items.first { $0.path == library.selected }
-        return HStack(spacing: 10) {
-            VStack(alignment: .leading, spacing: 0) {
-                Text(sel?.name ?? "").font(.callout.monospaced().weight(.medium))
-                Text(sel?.sharpness.map { "sharpness \(Int($0))" } ?? "scoring").font(.caption.monospaced()).foregroundStyle(.secondary)
-            }
-            .frame(minWidth: 150, alignment: .leading)
-            HStack(spacing: 0) {
-                ForEach(1...5, id: \.self) { n in
-                    Button { if let p = sel?.path { library.setRating(n, for: p) } } label: {
-                        Image(systemName: n <= (sel?.rating ?? 0) ? "star.fill" : "star")
-                            .foregroundStyle(n <= (sel?.rating ?? 0) ? Theme.accent : .secondary)
-                            .frame(width: 36, height: 44)
-                            .contentShape(Rectangle())
-                    }
-                    .buttonStyle(.plain).accessibilityLabel("\(n) stars")
-                }
-            }
-            Button { if let p = sel?.path { library.toggleReject(p) } } label: {
-                Label(sel?.rejected == true ? "Restore" : "Reject", systemImage: "xmark")
-            }
-            .buttonStyle(FlatCapsuleStyle(on: sel?.rejected == true))
-            if let sel, sel.stack != nil {
-                Button { comparing = sel.path } label: { Label("Compare stack", systemImage: "square.split.2x1") }
-                    .buttonStyle(FlatCapsuleStyle())
-                    .rig("compare-stack")
-            }
-            Button { if let p = sel?.path { open(p) } } label: { Text("Open in darkroom") }
-                .buttonStyle(PrimaryCapsuleStyle())
-                .rig("open-selected")
+    private func selectionName(_ sel: LibraryItem?) -> some View {
+        VStack(alignment: .leading, spacing: 0) {
+            Text(sel?.name ?? "").font(.callout.monospaced().weight(.medium)).lineLimit(1).truncationMode(.middle)
+            Text(sel?.sharpness.map { "sharpness \(Int($0))" } ?? "scoring").font(.caption.monospaced()).foregroundStyle(.secondary).lineLimit(1)
         }
-        .padding(.horizontal, 12).padding(.vertical, 8)
-        .glassEffect(.regular, in: .capsule)
+    }
+
+    private func stars(_ sel: LibraryItem?) -> some View {
+        HStack(spacing: 0) {
+            ForEach(1...5, id: \.self) { n in
+                Button { if let p = sel?.path { library.setRating(n, for: p) } } label: {
+                    Image(systemName: n <= (sel?.rating ?? 0) ? "star.fill" : "star")
+                        .foregroundStyle(n <= (sel?.rating ?? 0) ? Theme.accent : .secondary)
+                        .frame(width: 36, height: 44)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain).accessibilityLabel("\(n) stars")
+            }
+        }
+    }
+
+    private func rejectButton(_ sel: LibraryItem?) -> some View {
+        Button { if let p = sel?.path { library.toggleReject(p) } } label: {
+            Label(sel?.rejected == true ? "Restore" : "Reject", systemImage: "xmark")
+        }
+        .buttonStyle(FlatCapsuleStyle(on: sel?.rejected == true))
+    }
+
+    @ViewBuilder private func compareButton(_ sel: LibraryItem?) -> some View {
+        if let sel, sel.stack != nil {
+            Button { comparing = sel.path } label: { Label("Compare stack", systemImage: "square.split.2x1") }
+                .buttonStyle(FlatCapsuleStyle())
+                .rig("compare-stack")
+        }
+    }
+
+    private func openButton(_ sel: LibraryItem?, title: String = "Open in darkroom") -> some View {
+        Button { if let p = sel?.path { open(p) } } label: { Text(title).lineLimit(1) }
+            .buttonStyle(PrimaryCapsuleStyle())
+            .rig("open-selected")
     }
 }
 
@@ -540,17 +652,18 @@ private struct Cell: View {
     var body: some View {
         let soft = (item.sharpness ?? 100) < library.softBelow
         VStack(spacing: 4) {
-            // the picture sits in an overlay so its fill size never widens the column (it made touch-width tiles overlap)
-            Color.clear.overlay {
-                if let t = item.thumb {
-                    Image(decorative: t, scale: 1).resizable().scaledToFill()
-                } else {
-                    Rectangle().fill(Color.white.opacity(0.06)).overlay(ProgressView().controlSize(.small))
+            // the picture is an overlay so a filled image cannot widen the cell past its column
+            Color.clear
+                .frame(height: library.layout.tileHeight)
+                .frame(maxWidth: .infinity)
+                .overlay {
+                    if let t = item.thumb {
+                        Image(decorative: t, scale: 1).resizable().scaledToFill()
+                    } else {
+                        Rectangle().fill(Color.white.opacity(0.06)).overlay(ProgressView().controlSize(.small))
+                    }
                 }
-            }
-            .frame(height: library.layout.tileHeight)
-            .frame(maxWidth: .infinity)
-            .clipShape(RoundedRectangle(cornerRadius: 14))
+                .clipShape(RoundedRectangle(cornerRadius: 14))
             .overlay {
                 if item.rejected || soft { RoundedRectangle(cornerRadius: 14).fill(.black.opacity(item.rejected ? 0.6 : 0.28)) }
             }
@@ -611,6 +724,7 @@ private struct Cell: View {
 }
 
 private struct EmptyLibrary: View {
+    let library: LibraryModel
     let choose: () -> Void
     let restore: (() -> Void)?
 
@@ -619,10 +733,17 @@ private struct EmptyLibrary: View {
             Image(systemName: "folder").font(.system(size: 30)).frame(width: 64, height: 64)
                 .background(Color.white.opacity(0.1), in: Circle())
             Text("Bring in your first photos").font(.title2.weight(.semibold))
+            #if os(iOS)
+            Text("Pick from your Photos library, or from Files, iCloud Drive, Google Drive, Dropbox and other cloud apps. Soft frames and near-duplicates are flagged as it loads.")
+                .foregroundStyle(.secondary).multilineTextAlignment(.center).frame(maxWidth: 320)
+            ImportMenu(library: library) { Text("Add photos") }.buttonStyle(PrimaryCapsuleStyle())
+                .rig("empty-choose")
+            #else
             Text("Choose a folder. Soft frames and near-duplicates are flagged as it loads, on \(Platform.thisDevice).")
                 .foregroundStyle(.secondary).multilineTextAlignment(.center).frame(maxWidth: 320)
             Button(action: choose) { Text("Choose a folder") }.buttonStyle(PrimaryCapsuleStyle())
                 .rig("empty-choose")
+            #endif
             if let restore { Button("Open the last folder", action: restore).buttonStyle(.plain).foregroundStyle(.secondary) }
         }
     }

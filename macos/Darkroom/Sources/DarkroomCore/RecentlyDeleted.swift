@@ -93,9 +93,20 @@ public enum RecentlyDeleted {
 
     /// True when `path` is strictly inside `folder` once `.` and `..` are resolved (symlinks too).
     static func isInside(_ path: String, folder: URL) -> Bool {
-        let base = folder.resolvingSymlinksInPath().standardizedFileURL.path
-        let target = URL(fileURLWithPath: path).resolvingSymlinksInPath().standardizedFileURL.path
-        return target.hasPrefix(base.hasSuffix("/") ? base : base + "/")
+        let base = canonical(folder.path)
+        return canonical(path).hasPrefix(base.hasSuffix("/") ? base : base + "/")
+    }
+
+    /// The path with `.`/`..` and symlinks resolved, also when the file itself is gone (a deleted photo's original path):
+    /// the deepest folder that exists is resolved and the rest is appended, so `/private/tmp/x` and `/tmp/x` compare equal.
+    private static func canonical(_ path: String) -> String {
+        var url = URL(fileURLWithPath: path).standardizedFileURL
+        var rest: [String] = []
+        while !FileManager.default.fileExists(atPath: url.path), url.pathComponents.count > 1 {
+            rest.insert(url.lastPathComponent, at: 0)
+            url = url.deletingLastPathComponent()
+        }
+        return rest.reduce(url.resolvingSymlinksInPath()) { $0.appendingPathComponent($1) }.standardizedFileURL.path
     }
 
     private static func systemTrashFolder(_ fm: FileManager) -> URL {

@@ -34,8 +34,9 @@ struct WelcomeView: View {
                 }
             }
             .padding(34)
-            .frame(width: 600)
+            .frame(maxWidth: 600)
             .glassEffect(.regular, in: .rect(cornerRadius: 40))
+            .padding(.horizontal, 16)
         }
         .preferredColorScheme(.dark)
         .fileImporter(isPresented: $choosing, allowedContentTypes: [.folder]) { result in
@@ -45,7 +46,7 @@ struct WelcomeView: View {
 
     private var account: some View {
         VStack(alignment: .leading, spacing: 10) {
-            Text("Welcome to Vantage").font(.largeTitle.weight(.semibold))
+            Text("Welcome to Vantage").font(.largeTitle.weight(.semibold)).minimumScaleFactor(0.7).fixedSize(horizontal: false, vertical: true)
             Text("Sign in with your Databit Dev account to share galleries and sell photos. Editing works on \(Platform.thisDevice) without it.")
                 .foregroundStyle(.secondary)
             VStack(spacing: 10) {
@@ -66,7 +67,7 @@ struct WelcomeView: View {
 
     private var modeChoice: some View {
         VStack(alignment: .leading, spacing: 10) {
-            Text("How do you like to edit?").font(.largeTitle.weight(.semibold))
+            Text("How do you like to edit?").font(.largeTitle.weight(.semibold)).minimumScaleFactor(0.7).fixedSize(horizontal: false, vertical: true)
             Text("Change it any time from the header. Your edits carry across.").foregroundStyle(.secondary)
             HStack(spacing: 12) {
                 card(.simple, "A few big sliders and one-tap looks.")
@@ -102,7 +103,18 @@ struct WelcomeView: View {
 
     private var folder: some View {
         VStack(alignment: .leading, spacing: 10) {
-            Text("Where are your photos?").font(.largeTitle.weight(.semibold))
+            Text("Where are your photos?").font(.largeTitle.weight(.semibold)).minimumScaleFactor(0.7).fixedSize(horizontal: false, vertical: true)
+            #if os(iOS)
+            Text("Pick photos from your Photos library, Files, iCloud Drive, Google Drive, Dropbox and other cloud apps on the next screen. Vantage keeps a copy inside the app. Your originals stay where they are and nothing is uploaded.")
+                .foregroundStyle(.secondary)
+            HStack {
+                Button("Back") { step = .mode }.buttonStyle(.plain).foregroundStyle(.secondary)
+                Spacer()
+                Button { finish(mode, nil) } label: { Text("Add photos") }.buttonStyle(PrimaryCapsuleStyle())
+                    .rig("welcome-folder")
+            }
+            .padding(.top, 20)
+            #else
             Text("Originals stay where they are. Nothing is uploaded. Soft frames and near-duplicates are flagged as the folder loads.")
                 .foregroundStyle(.secondary)
             HStack {
@@ -113,6 +125,7 @@ struct WelcomeView: View {
                     .rig("welcome-folder")
             }
             .padding(.top, 20)
+            #endif
         }
     }
 }

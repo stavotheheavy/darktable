@@ -220,14 +220,3 @@ struct PhotoRow: View {
         s < library.softBelow ? Color(red: 1, green: 0.54, blue: 0.44) : s < library.softBelow + 25 ? .yellow : Color(red: 0.44, green: 0.88, blue: 0.69)
     }
 }
-
-/// On a phone the tools row is wider than the screen, so it scrolls sideways inside its capsule instead of widening the page.
-struct PhoneToolsScroll: ViewModifier {
-    func body(content: Content) -> some View {
-        if Platform.isPhone {
-            ScrollView(.horizontal, showsIndicators: false) { content }.frame(maxWidth: .infinity)
-        } else {
-            content
-        }
-    }
-}
