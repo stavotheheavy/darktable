@@ -17,6 +17,15 @@ tiles past the fifth (Color, Warmth, Detail, Balance, Crop) could not be hit; it
 that did run (the Looks, Light, Shadows, Highlights and Contrast tiles with sliders at 0.1 and 0.9, Reset, Done, Auto edit,
 Undo, Redo, Hide UI and Show UI, rotation) caused no crash or hang.
 
+## Final runs driven by the Haiku agent (10-22, after the sidecar reset)
+
+| Run | Device | Result | Log |
+|---|---|---|---|
+| Walk + flow + exploration | iPhone 17 Pro simulator | TEST SUCCEEDED: 16 tests, 7 iPad-only skipped, 0 failures (exploration 166 s) | `haiku-final-iphone2.log` (scratchpad) |
+| Walk + flow + exploration | iPad Pro 13" simulator | walk and flow tests passed incl. brush and keyboard; the iPhone exploration wrongly ran on the iPad and failed, now skipped there (5369d07a23) | `haiku-final-ipad.log` (scratchpad) |
+
+The lead session's own full runs on both devices also had 0 failures (7/7 iPad walk, 5/5 iPhone walk, 3/3 flow each).
+
 ## What the lead session fixed and reran
 
 | Run | Device | Result | Log |
