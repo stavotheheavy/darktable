@@ -3520,6 +3520,15 @@ do {
     var refused = false
     do { try RecentlyDeleted.restore(forged[0], libraryFolder: dir) } catch { refused = true }
     check("RD9 restore refuses an entry that points outside the library", refused && fm.fileExists(atPath: victim))
+    // a symlinked folder inside the library, then `..` out of it: lexically inside, really outside
+    let link = dir.appendingPathComponent("link").path
+    try? fm.createSymbolicLink(atPath: link, withDestinationPath: outside.path)
+    let sneaky = DeletedPhoto(originalPath: dir.appendingPathComponent("y.NEF").path,
+                              storedPath: dir.appendingPathComponent(RecentlyDeleted.folderName + "/../link/../" + (victim as NSString).lastPathComponent).path,
+                              deletedAt: old)
+    var refusedDots = false
+    do { try RecentlyDeleted.restore(sneaky, libraryFolder: dir) } catch { refusedDots = true }
+    check("RD10 an entry with .. through a symlink is refused", refusedDots && fm.fileExists(atPath: victim))
 }
 
 print(failures == 0 ? "\nall checks passed" : "\n\(failures) failed")

@@ -93,6 +93,9 @@ public enum RecentlyDeleted {
 
     /// True when `path` is strictly inside `folder` once `.` and `..` are resolved (symlinks too).
     static func isInside(_ path: String, folder: URL) -> Bool {
+        // a `..` is refused before anything is normalized: after a symlinked folder it means a different place to the
+        // file system than to the lexical clean-up below, and the move and delete act on the raw string
+        guard !path.split(separator: "/").contains("..") else { return false }
         let base = canonical(folder.path)
         return canonical(path).hasPrefix(base.hasSuffix("/") ? base : base + "/")
     }
