@@ -22,7 +22,7 @@ Undo, Redo, Hide UI and Show UI, rotation) caused no crash or hang.
 | Run | Device | Result | Log |
 |---|---|---|---|
 | Walk + flow + exploration | iPhone 17 Pro simulator | TEST SUCCEEDED: 16 tests, 7 iPad-only skipped, 0 failures (exploration 166 s) | `haiku-final-iphone2.log` (scratchpad) |
-| Walk + flow + exploration | iPad Pro 13" simulator | walk and flow tests passed incl. brush and keyboard; the iPhone exploration wrongly ran on the iPad and failed, now skipped there (5369d07a23) | `haiku-final-ipad.log` (scratchpad) |
+| Walk + flow + exploration | iPad Pro 13" simulator | TEST SUCCEEDED: 16 tests, 6 phone-only skipped, 0 failures (7 iPad walk, 3 flow) | `haiku-final-ipad2.log` (scratchpad) |
 
 The lead session's own full runs on both devices also had 0 failures (7/7 iPad walk, 5/5 iPhone walk, 3/3 flow each).
 
