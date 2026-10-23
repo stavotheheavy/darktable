@@ -58,7 +58,8 @@ final class HaikuExploreTests: XCTestCase {
         return app
     }
 
-    func testIPhoneExplore() {
+    func testIPhoneExplore() throws {
+        try XCTSkipIf(UIDevice.current.userInterfaceIdiom == .pad, "the phone's tray exists only on the iPhone")
         let app = launch()
         guard find(app, "export").waitForExistence(timeout: 90) else {
             XCTFail("darkroom did not open")
