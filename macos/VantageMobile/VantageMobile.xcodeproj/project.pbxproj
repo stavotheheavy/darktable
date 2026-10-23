@@ -10,6 +10,7 @@
 		118F57D23AD6EC630167556C /* DarkroomUI in Frameworks */ = {isa = PBXBuildFile; productRef = BCD6B598D5124869072C7523 /* DarkroomUI */; };
 		2448D74EFD5649D44FAD6B1A /* VantageMobileApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 247DB61361DFDE991999521A /* VantageMobileApp.swift */; };
 		354DAD76FB19E401F90B4098 /* TestSupport.swift in Sources */ = {isa = PBXBuildFile; fileRef = 430BAC3843E7F0CD4A1B9D5E /* TestSupport.swift */; };
+		6BDFEEA103A796E1393A64CB /* LibraryMenuTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = DC3DA1E7832A8C120D8C0271 /* LibraryMenuTests.swift */; };
 		94C756CD1121D0AA26AABBAA /* VantageWalkTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E71AC996EFEFBA3848DE4A7A /* VantageWalkTests.swift */; };
 		A6FB3BA71FDE26092E089FDA /* VantageFlowTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 49405C90E50C987265DA3119 /* VantageFlowTests.swift */; };
 		B23C2EBABD1885B6D1EFEA62 /* ShotTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = FC616B3E19C0784F7C2BD3EB /* ShotTests.swift */; };
@@ -33,6 +34,7 @@
 		49405C90E50C987265DA3119 /* VantageFlowTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VantageFlowTests.swift; sourceTree = "<group>"; };
 		7FFD9077A869E1228A0FDD46 /* Darkroom */ = {isa = PBXFileReference; lastKnownFileType = folder; name = Darkroom; path = ../Darkroom; sourceTree = SOURCE_ROOT; };
 		D3A357CF2518386500D38304 /* HaikuExploreTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HaikuExploreTests.swift; sourceTree = "<group>"; };
+		DC3DA1E7832A8C120D8C0271 /* LibraryMenuTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LibraryMenuTests.swift; sourceTree = "<group>"; };
 		E651BF77DC4B5FA313D47AE5 /* VantageMobileUITests.xctest */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.cfbundle; path = VantageMobileUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		E71AC996EFEFBA3848DE4A7A /* VantageWalkTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = VantageWalkTests.swift; sourceTree = "<group>"; };
 		FC616B3E19C0784F7C2BD3EB /* ShotTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ShotTests.swift; sourceTree = "<group>"; };
@@ -80,6 +82,7 @@
 			isa = PBXGroup;
 			children = (
 				D3A357CF2518386500D38304 /* HaikuExploreTests.swift */,
+				DC3DA1E7832A8C120D8C0271 /* LibraryMenuTests.swift */,
 				FC616B3E19C0784F7C2BD3EB /* ShotTests.swift */,
 				430BAC3843E7F0CD4A1B9D5E /* TestSupport.swift */,
 				49405C90E50C987265DA3119 /* VantageFlowTests.swift */,
@@ -183,6 +186,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				D838741ECBCF513DC9FDDD02 /* HaikuExploreTests.swift in Sources */,
+				6BDFEEA103A796E1393A64CB /* LibraryMenuTests.swift in Sources */,
 				B23C2EBABD1885B6D1EFEA62 /* ShotTests.swift in Sources */,
 				354DAD76FB19E401F90B4098 /* TestSupport.swift in Sources */,
 				A6FB3BA71FDE26092E089FDA /* VantageFlowTests.swift in Sources */,

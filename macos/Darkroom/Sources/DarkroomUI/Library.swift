@@ -76,6 +76,13 @@ public final class LibraryModel {
     }
     /// Grid columns as drawn, so up and down arrows move a row.
     public var columns = 5
+    /// Grid, smaller grid, or list; remembered between launches.
+    public var layout: LibraryLayout = .saved { didSet { UserDefaults.standard.set(layout.rawValue, forKey: LibraryLayout.key) } }
+    /// The photo just deleted, while its Undo is on offer.
+    public private(set) var lastDeleted: DeletedPhoto?
+    public var showingDeleted = false
+    /// The photo whose share sheet is open (iPhone and iPad).
+    public var sharing: URL?
 
     private let engine: any PhotoEngine
     private var store = RatingStore.load()
@@ -104,6 +111,7 @@ public final class LibraryModel {
         loading?.cancel()
         self.folder = folder
         UserDefaults.standard.set(folder.path, forKey: Self.lastFolderKey)
+        RecentlyDeleted.purge(in: folder)
         let files = ((try? FileManager.default.contentsOfDirectory(at: folder, includingPropertiesForKeys: nil)) ?? [])
             .filter { Self.extensions.contains($0.pathExtension.lowercased()) }
             .sorted { $0.lastPathComponent.localizedStandardCompare($1.lastPathComponent) == .orderedAscending }
@@ -211,6 +219,45 @@ public final class LibraryModel {
         persist(items[i])
     }
 
+    public var deletedPhotos: [DeletedPhoto] { folder.map { RecentlyDeleted.list(in: $0) } ?? [] }
+
+    /// Moves a photo and its edits out of the library (to the Trash on the Mac, Recently Deleted elsewhere); Undo brings it back.
+    public func delete(_ path: String) {
+        guard let folder, let i = items.firstIndex(where: { $0.path == path }) else { return }
+        do {
+            let gone = try RecentlyDeleted.remove(path, libraryFolder: folder)
+            let order = shown.map(\.path)
+            let at = order.firstIndex(of: path)
+            if items[i].unreadable { failed = max(0, failed - 1) } else if items[i].thumb != nil { scored = max(0, scored - 1) }
+            items.remove(at: i)
+            regroup()
+            if selected == path {
+                let rest = order.filter { $0 != path }
+                selected = at.flatMap { rest.indices.contains($0) ? rest[$0] : rest.last } ?? rest.last
+            }
+            lastDeleted = gone
+            status = summary()
+        } catch {
+            status = "Could not delete \(items[i].name)"
+        }
+    }
+
+    public func undoDelete() { if let d = lastDeleted { restoreDeleted(d) } }
+
+    public func dismissUndo() { lastDeleted = nil }
+
+    public func restoreDeleted(_ d: DeletedPhoto) {
+        guard let folder else { return }
+        do {
+            try RecentlyDeleted.restore(d, libraryFolder: folder)
+            if lastDeleted == d { lastDeleted = nil }
+            load(folder: folder)
+            selected = d.originalPath
+        } catch {
+            status = "Could not restore \(d.name)"
+        }
+    }
+
     private func persist(_ it: LibraryItem) {
         store[it.path] = .init(rating: it.rating, rejected: it.rejected)
         RatingStore.save(store)
@@ -267,6 +314,7 @@ public struct LibraryView: View {
     var refreshPicks: (() -> Void)?
     var picksMessage: String?
     @State private var choosing = false
+    @State private var gridWidth: CGFloat = 0
     @State private var comparing: String? { didSet { Rig.comparing = comparing != nil } }
     @FocusState private var focused: Bool
 
@@ -288,9 +336,19 @@ public struct LibraryView: View {
             } else {
                 ScrollViewReader { proxy in
                 ScrollView {
-                    LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 12), count: library.columns), spacing: 12) {
-                        ForEach(library.shown) { item in
-                            Cell(library: library, item: item, open: open)
+                    Group {
+                        if library.layout == .list {
+                            LazyVStack(spacing: 8) {
+                                ForEach(library.shown) { item in
+                                    PhotoRow(library: library, item: item, open: open, compare: { comparing = $0 })
+                                }
+                            }
+                        } else {
+                            LazyVGrid(columns: Array(repeating: GridItem(.flexible(), spacing: 12), count: library.columns), spacing: 12) {
+                                ForEach(library.shown) { item in
+                                    Cell(library: library, item: item, open: open, compare: { comparing = $0 })
+                                }
+                            }
                         }
                     }
                     .padding(.horizontal, 14)
@@ -298,8 +356,10 @@ public struct LibraryView: View {
                     .padding(.bottom, 96)
                 }
                 .onGeometryChange(for: CGFloat.self, of: { $0.size.width }) { w in
-                    library.columns = max(1, Int((w - 28 + 12) / (170 + 12)))
+                    gridWidth = w
+                    updateColumns()
                 }
+                .onChange(of: library.layout) { _, _ in updateColumns() }
                 .onChange(of: library.selected) { _, new in
                     if let new { withAnimation(.none) { proxy.scrollTo(new, anchor: .center) } }
                 }
@@ -309,6 +369,7 @@ public struct LibraryView: View {
             VStack {
                 header
                 Spacer()
+                UndoToast(library: library)
                 if library.selected != nil, !library.items.isEmpty { selectionBar }
             }
             .padding(12)
@@ -341,16 +402,30 @@ public struct LibraryView: View {
         .onKeyPress(.rightArrow) { library.moveSelection(by: 1); return .handled }
         .onKeyPress(.upArrow) { library.moveSelection(by: -library.columns); return .handled }
         .onKeyPress(.downArrow) { library.moveSelection(by: library.columns); return .handled }
+        .onKeyPress(.delete) {
+            guard let sel = library.selected else { return .ignored }
+            library.delete(sel); return .handled
+        }
+        .onKeyPress(.deleteForward) {
+            guard let sel = library.selected else { return .ignored }
+            library.delete(sel); return .handled
+        }
         .onKeyPress(characters: CharacterSet(charactersIn: "012345xX")) { press in
             guard let sel = library.selected, let c = press.characters.first else { return .ignored }
             if c == "x" || c == "X" { library.toggleReject(sel) } else if let n = Int(String(c)) { if n == 3, Rig.canary("deadstar") { return .handled }; library.setRating(n, for: sel) }
             return .handled
         }
         .preferredColorScheme(.dark)
+        .librarySheets(library)
+        .animation(.snappy, value: library.lastDeleted)
         .fileImporter(isPresented: $choosing, allowedContentTypes: [.folder]) { result in
             if case .success(let url) = result { library.load(folder: url) }
         }
         .rig("library")
+    }
+
+    private func updateColumns() {
+        library.columns = library.layout == .list ? 1 : max(1, Int((gridWidth - 28 + 12) / (library.layout.tileWidth + 12)))
     }
 
     private var header: some View {
@@ -392,6 +467,7 @@ public struct LibraryView: View {
                     .help("Filter by what clients picked, or refresh them (\u{2325}\u{2318}R)")
                     .rig("client-picks-menu")
                 }
+                LibraryLayoutPicker(library: library)
                 Button { library.groupStacks.toggle() } label: { Label("Stacks", systemImage: "square.stack") }
                     .buttonStyle(FlatCapsuleStyle(on: library.groupStacks))
                     .rig("stacks-toggle")
@@ -458,18 +534,20 @@ private struct Cell: View {
     @Bindable var library: LibraryModel
     let item: LibraryItem
     let open: (String) -> Void
+    let compare: (String) -> Void
 
     var body: some View {
         let soft = (item.sharpness ?? 100) < library.softBelow
         VStack(spacing: 4) {
-            ZStack {
+            // the picture sits in an overlay so its fill size never widens the column (it made touch-width tiles overlap)
+            Color.clear.overlay {
                 if let t = item.thumb {
                     Image(decorative: t, scale: 1).resizable().scaledToFill()
                 } else {
                     Rectangle().fill(Color.white.opacity(0.06)).overlay(ProgressView().controlSize(.small))
                 }
             }
-            .frame(height: 140)
+            .frame(height: library.layout.tileHeight)
             .frame(maxWidth: .infinity)
             .clipShape(RoundedRectangle(cornerRadius: 14))
             .overlay {
@@ -482,7 +560,7 @@ private struct Cell: View {
                 }
             }
             .overlay(alignment: .topLeading) {
-                if let s = item.sharpness { badge { Circle().fill(dot(s)).frame(width: 7, height: 7); Text("\(Int(s))").font(.caption.monospacedDigit()) } }
+                if let s = item.sharpness { badge { Circle().fill(dot(s)).frame(width: 7, height: 7); if library.layout != .small { Text("\(Int(s))").font(.caption.monospacedDigit()) } } }
             }
             .overlay(alignment: .top) {
                 if let pick = library.clientPicks[item.path] {
@@ -513,6 +591,7 @@ private struct Cell: View {
         .id(item.path)
         .onTapGesture(count: 2) { open(item.path) }
         .simultaneousGesture(TapGesture().onEnded { library.selected = item.path })
+        .photoMenu(library: library, item: item, open: open, compare: compare)
         .accessibilityElement(children: .combine)
         .accessibilityLabel(library.clientPicks[item.path].map { "\(item.name), client \($0.choice.title.lowercased())" } ?? item.name)
         .rig("cell-\(item.name)")

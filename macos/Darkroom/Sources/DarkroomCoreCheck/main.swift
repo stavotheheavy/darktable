@@ -3462,5 +3462,41 @@ do {
     check("MRG-CB colour contrast, velvia and colour correction are colour balance and colisa steps", steps)
 }
 
+// recently deleted: a photo leaves the library with its edits, comes back whole, and is purged after 30 days
+do {
+    let fm = FileManager.default
+    let dir = fm.temporaryDirectory.appendingPathComponent("rd-check-\(UUID().uuidString)")
+    try? fm.createDirectory(at: dir, withIntermediateDirectories: true)
+    defer { try? fm.removeItem(at: dir) }
+    let photo = dir.appendingPathComponent("IMG_1.NEF").path
+    fm.createFile(atPath: photo, contents: Data([1, 2, 3]))
+    fm.createFile(atPath: photo + RecentlyDeleted.sidecarSuffix, contents: Data([9]))
+    let t0 = Date(timeIntervalSince1970: 1_800_000_000)
+    let gone = try? RecentlyDeleted.remove(photo, libraryFolder: dir, now: t0, useSystemTrash: false)
+    check("RD1 deleting moves the photo and its edits out of the library",
+          gone != nil && !fm.fileExists(atPath: photo) && !fm.fileExists(atPath: photo + RecentlyDeleted.sidecarSuffix)
+          && fm.fileExists(atPath: gone!.storedPath) && fm.fileExists(atPath: gone!.storedPath + RecentlyDeleted.sidecarSuffix))
+    check("RD2 the deleted photo is listed", RecentlyDeleted.list(in: dir).map(\.originalPath) == [photo])
+    if let gone {
+        fm.createFile(atPath: photo, contents: Data([7]))
+        var refused = false
+        do { try RecentlyDeleted.restore(gone, libraryFolder: dir) } catch { refused = true }
+        check("RD3 restore refuses when another file took the name", refused && fm.contents(atPath: photo) == Data([7]))
+        try? fm.removeItem(atPath: photo)
+        try? RecentlyDeleted.restore(gone, libraryFolder: dir)
+        check("RD4 restore brings back the photo, its edits, and empties the list",
+              fm.contents(atPath: photo) == Data([1, 2, 3]) && fm.contents(atPath: photo + RecentlyDeleted.sidecarSuffix) == Data([9])
+              && RecentlyDeleted.list(in: dir).isEmpty)
+    }
+    let second = try? RecentlyDeleted.remove(photo, libraryFolder: dir, now: t0, useSystemTrash: false)
+    check("RD5 nothing is purged before 30 days", RecentlyDeleted.purge(in: dir, now: t0.addingTimeInterval(29 * 86_400)) == 0
+          && second.map { fm.fileExists(atPath: $0.storedPath) } == true)
+    check("RD6 a photo older than 30 days is erased for good", RecentlyDeleted.purge(in: dir, now: t0.addingTimeInterval(31 * 86_400)) == 1
+          && second.map { !fm.fileExists(atPath: $0.storedPath) } == true && RecentlyDeleted.list(in: dir).isEmpty)
+    var missing = false
+    do { _ = try RecentlyDeleted.remove(dir.appendingPathComponent("nope.NEF").path, libraryFolder: dir, useSystemTrash: false) } catch { missing = true }
+    check("RD7 deleting a file that is not there fails instead of pretending", missing)
+}
+
 print(failures == 0 ? "\nall checks passed" : "\n\(failures) failed")
 exit(failures == 0 ? 0 : 1)
