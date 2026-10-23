@@ -488,6 +488,7 @@ public struct LibraryView: View {
                     Text("\(Int(library.softBelow))").font(.caption.monospacedDigit()).frame(width: 24)
                 }
             }
+            .modifier(PhoneToolsScroll())
             .padding(8)
             .glassEffect(.regular, in: .capsule)
         }
